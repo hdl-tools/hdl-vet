@@ -16,6 +16,9 @@ dependencies = [
     "pyslang==12.1.0",
 ]
 
+[project.scripts]
+vet = "hdl_vet.cli:main"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
