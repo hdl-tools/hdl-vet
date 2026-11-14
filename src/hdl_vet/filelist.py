@@ -38,10 +38,12 @@ class _State:
     defines: dict[str, str | None] = field(default_factory=dict)
 
 
-def read_filelist(path: Path) -> Filelist:
+def read_filelist(path: Path, base: Path | None = None) -> Filelist:
+    """Read `path`; relative entries resolve against `base` (default: its directory)."""
     top = Path(path).resolve()
-    state = _State(root=top.parent)
-    _read(top, top.parent, state, (top,))
+    root = top.parent if base is None else Path(base).resolve()
+    state = _State(root=root)
+    _read(top, root, state, (top,))
     return Filelist(state.files, state.incdirs, state.defines, state.root)
 
 
