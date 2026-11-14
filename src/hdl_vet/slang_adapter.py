@@ -89,6 +89,8 @@ class PortInfo:
     direction: str
     start: int
     end: int
+    type_text: str = ""  # ANSI: the data type as `logic ...` with packed dimensions ("" if unknown)
+    unpacked: bool = False  # ANSI: the port has unpacked dimensions
 
 
 @dataclass(frozen=True)
@@ -236,6 +238,7 @@ class InstanceSnap:
 @dataclass(frozen=True)
 class Driver:
     is_input_port: bool
+    instance: str | None = None  # the instance whose output port connection drives it, else None
 
 
 @dataclass(frozen=True)
@@ -699,7 +702,8 @@ class Design:
                 raise AdapterError(f"{module}.{name}: not a net or variable, so it has no drivers") from e
             for d in drivers:
                 if d.isInputPort or d.containingSymbol.kind != pyslang.ast.SymbolKind.InstanceBody:
-                    out.append(Driver(bool(d.isInputPort)))
+                    via = d.containingSymbol if d.containingSymbol.kind == pyslang.ast.SymbolKind.Instance else None
+                    out.append(Driver(bool(d.isInputPort), None if via is None else str(via.name)))
             if getattr(sym, "initializer", None) is not None:
                 out.append(Driver(False))
         return out
@@ -940,9 +944,18 @@ class Design:
             return ports, None
         if plist.kind == sk.AnsiPortList:
             last = "input"
+            last_type = ""
             for p in _items(plist.ports):
                 header = getattr(p, "header", None)
                 tok = getattr(header if header is not None else p, "direction", None)
+                if header is not None and header.kind != sk.InterfacePortHeader:
+                    dtype = _clean_text(header.dataType)
+                    if (tok is not None and tok.kind in dirs) or dtype or getattr(header, "netType", None):
+                        last_type = _port_type_text(dtype)
+                    own_type = last_type
+                else:
+                    own_type = ""
+                dims = getattr(getattr(p, "declarator", None), "dimensions", None)
                 if header is not None and header.kind == sk.InterfacePortHeader:
                     direction = "interface"
                 elif tok is not None and tok.kind in dirs:
@@ -959,6 +972,8 @@ class Design:
                         direction,
                         start.location.offset,
                         p.getLastToken().range.end.offset,
+                        own_type,
+                        dims is not None and len(dims) > 0,
                     )
                 )
             check(plist.closeParen, "the port list")
@@ -1199,6 +1214,14 @@ def _header_has_macros(hdr: Any, sm: Any) -> bool:
             for item in part:
                 item.visit(scan)
     return found
+
+
+def _port_type_text(dtype: str) -> str:
+    """`logic` plus the packed dimensions for an implicit or net-typed ANSI port header."""
+    toks = tokens(dtype)
+    if not toks or toks[0] in ("[", "signed", "unsigned"):
+        return ("logic " + dtype).strip()
+    return dtype
 
 
 def _param_type_text(decl: Any) -> str:

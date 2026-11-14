@@ -22,7 +22,7 @@ from __future__ import annotations
 import difflib
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,11 @@ __all__ = ["DriftError", "Instance", "Module", "OpRecord", "Vet", "VetError"]
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 _DIRECTIONS = ("input", "output", "inout")
+_BASED = re.compile(r"'[sS]?[bBoOdDhH]")
+_DIGITS = re.compile(r"[0-9a-fA-FxXzZ?_]+")
+_NET_KEYWORDS = frozenset(
+    "wire tri tri0 tri1 triand trior trireg wand wor uwire supply0 supply1 interconnect".split()
+)
 
 
 class VetError(Exception):
@@ -154,6 +159,70 @@ def _name_width(items: Iterable[ConnInfo | ParamOverride]) -> int:
         name = c.port if isinstance(c, ConnInfo) else c.name
         widths.append(c.open - c.start - 1 if c.open is not None else len(name or ""))
     return widths[0] if widths and len(set(widths)) == 1 else 0
+
+
+def _bare_name(text: object) -> str | None:
+    """The first token of `text` that would not mean the same in every module, or None.
+
+    Allowed: keywords, system functions, literals (also based ones, whose digits lex as
+    identifier-looking tokens) and package-scoped names `pkg::NAME`. Anything else that
+    looks like an identifier is a bare name; `.` (a hierarchical name) and macro uses
+    are refused too.
+    """
+    toks = tokens(text)
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if _BASED.fullmatch(t):
+            i += 1
+            while i < len(toks) and _DIGITS.fullmatch(toks[i]):
+                i += 1
+            continue
+        if t.startswith("$"):
+            i += 1
+            continue
+        if t == "." or t.startswith("`"):
+            return t
+        if _IDENT.fullmatch(t) and is_simple_identifier(t):
+            if i + 1 < len(toks) and toks[i + 1] == "::":
+                i += 3
+                continue
+            return t
+        i += 1
+    return None
+
+
+def _logic_type(text: str) -> str:
+    """A net keyword or an implicit type becomes `logic` with the same dimensions."""
+    toks = tokens(text)
+    if toks and toks[0] in _NET_KEYWORDS:
+        text = text.strip()[len(toks[0]) :].strip()
+        toks = toks[1:]
+    if not toks or toks[0] in ("[", "signed", "unsigned"):
+        return ("logic " + text).strip()
+    return text.strip()
+
+
+def _param_decl(type: str, name: str, default: object) -> str:
+    t = str(type).strip()
+    return f"parameter {t + ' ' if t else ''}{name} = {default}"
+
+
+@dataclass
+class _Plan:
+    """What one underlying operation will do; `_commit` queues it and registers the rest."""
+
+    op: str
+    target: str
+    skip: bool = False
+    path: Path | None = None
+    splices: list[tuple[int, int, bytes]] = field(default_factory=list)
+    mark: tuple[str, ...] | None = None
+    added: tuple[str, str, tuple[str, str]] | None = None  # (module, name, (kind, text))
+    expects: list[tuple[str, str, str]] = field(default_factory=list)
+    permits: list[tuple[str, str, str]] = field(default_factory=list)
+    check_key: tuple[str, ...] | None = None
+    check: Callable[[Design], str | None] | None = None
 
 
 # --- Vet ---------------------------------------------------------------------------
@@ -277,6 +346,38 @@ class Vet:
         for start, end, text in splices:
             self.session.splice(path, start, end, text, old=data[start:end])
 
+    def _commit_all(self, op: str, plans: list[_Plan]) -> None:
+        """Commit validated plans; nothing is queued unless every file to edit is editable."""
+        bad = sorted(
+            {
+                str(p.path)
+                for p in plans
+                if not p.skip and p.path is not None and not self.session.is_editable(p.path)
+            }
+        )
+        if bad:
+            raise VetError(f"{op}: cannot edit {', '.join(bad)}: not editable in this session")
+        for plan in plans:
+            self._commit(plan)
+
+    def _refuse_generate_copies(self, op: str, mods: list[str]) -> None:
+        """Refuse an instance of one of `mods` written in a generate block or array, in any module."""
+        wanted = set(mods)
+        design = self.session.loaded
+        for host in design.modules():
+            try:
+                info = design.module(host)
+            except AdapterError:
+                continue
+            for inst in info.instances:
+                if inst.module in wanted and (inst.in_generate or inst.is_array):
+                    what = "inside a generate block" if inst.in_generate else "an instance array"
+                    raise VetError(
+                        f"{op}: instance {inst.name!r} of module {inst.module!r} in module {host!r} is "
+                        f"{what} (generate blocks and instance arrays are not supported): a new port could "
+                        f"stay unconnected under another parameterisation"
+                    )
+
     def _record(self, op: str, target: str, status: str) -> None:
         self.log.append(OpRecord(op, target, status))
 
@@ -296,6 +397,507 @@ class Vet:
         if added is not None and added[0] != own:
             return f"a {added[0]} added earlier by this script"
         return None
+
+    # --- plans: what one underlying operation will do ------------------------------
+
+    def _commit(self, plan: _Plan) -> None:
+        """Queue a plan, mark what it edited, register its expectations and post-condition, log it."""
+        if plan.skip:
+            self._record(plan.op, plan.target, "skipped")
+            return
+        assert plan.path is not None
+        self._queue(plan.path, plan.splices)
+        if plan.mark is not None:
+            self._mark(*plan.mark)
+        if plan.added is not None:
+            mod, name, value = plan.added
+            self._added.setdefault(mod, {})[name] = value
+        for kind, path, name in plan.expects:
+            self.session.expect(kind, path, name, exact=True)
+        for kind, path, name in plan.permits:
+            self.session.permit(kind, path, name, exact=True)
+        if plan.check_key is not None and plan.check is not None:
+            self._set_check(plan.check_key, plan.check)
+        self._record(plan.op, plan.target, "applied")
+
+    def _plan_add_port(self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str]) -> _Plan:
+        if info.port_list_kind != "ansi":
+            what = "a non-ANSI" if info.port_list_kind == "nonansi" else "no"
+            raise VetError(f"add_port {mod}: the module has {what} port list; only ANSI port lists can be extended")
+        if info.header_has_macros:
+            raise VetError(f"add_port {mod}: the module header contains macros, so it cannot be edited safely")
+        data = self.session.text(info.path)
+        existing = next((p for p in info.ports if p.name == name), None)
+        if existing is not None:
+            found = data[existing.start : existing.end].decode("utf-8", errors="replace")
+            if _same(found, decl):
+                return _Plan("add_port", mod, skip=True)
+            raise DriftError(f"add_port {mod}: port {name!r} exists as {found!r}, not {decl!r}")
+        other = self._other_use(info, name, "port")
+        if other is not None:
+            raise DriftError(f"add_port {mod}: the name {name!r} is already used by {other}")
+        added = self._added.get(mod, {}).get(name)
+        if added is not None:
+            if added == ("port", _norm(decl)):
+                return _Plan("add_port", mod, skip=True)
+            raise DriftError(f"add_port {mod}: port {name!r} was already added with a different declaration")
+        _refuse_directive(f"add_port {mod}", "port", info.ports_directive)
+        if info.ports_close is None:
+            raise VetError(f"add_port {mod}: cannot find the end of the port list")
+        eol = _eol(data)
+        item = decl.encode()
+        if not info.ports:
+            splices = [(info.ports_close, info.ports_close, item)]
+        else:
+            last = info.ports[-1]
+            splices = _append_to_list(data, last.start, last.end, info.ports_close, item, eol)
+
+        def check(design: Design) -> str | None:
+            try:
+                m = design.module(mod)
+            except AdapterError:
+                return f"add_port {mod} {name}: module not found in the final design"
+            port = next((p for p in m.ports if p.name == name), None)
+            if port is None:
+                return f"add_port {mod} {name}: port not found in the final design"
+            text = self.session.text(m.path)[port.start : port.end].decode("utf-8", errors="replace")
+            if not _same(text, decl):
+                return f"add_port {mod} {name}: expected {decl!r}, found {text!r}"
+            return None
+
+        return _Plan(
+            "add_port",
+            mod,
+            path=info.path,
+            splices=splices,
+            mark=("ports", mod),
+            added=(mod, name, ("port", _norm(decl))),
+            expects=[("port-added", p, name) for p in paths],
+            permits=[("connection-changed", p, name) for p in paths],
+            check_key=("add_port", mod, name),
+            check=check,
+        )
+
+    def _plan_add_param(
+        self, mod: str, name: str, type: str, default: object, info: ModuleInfo, paths: list[str]
+    ) -> _Plan:
+        decl = _param_decl(type, name, default)
+        if info.header_has_macros:
+            raise VetError(f"add_param {mod}: the module header contains macros, so it cannot be edited safely")
+        existing = next((p for p in info.params if p.name == name), None)
+        if existing is not None:
+            if (
+                info.param_kinds.get(name) == "value"
+                and _same(existing.type_text, type)
+                and _same(existing.default or "", default)
+            ):
+                return _Plan("add_param", mod, skip=True)
+            raise DriftError(
+                f"add_param {mod}: parameter {name!r} exists as type {existing.type_text!r} with default "
+                f"{existing.default!r}, not {type!r} with default {str(default)!r}"
+            )
+        if name in info.param_kinds:
+            raise DriftError(f"add_param {mod}: the name {name!r} is already used by a parameter in the module body")
+        other = self._other_use(info, name, "param")
+        if other is not None:
+            raise DriftError(f"add_param {mod}: the name {name!r} is already used by {other}")
+        added = self._added.get(mod, {}).get(name)
+        if added is not None:
+            if added == ("param", _norm(decl)):
+                return _Plan("add_param", mod, skip=True)
+            raise DriftError(f"add_param {mod}: parameter {name!r} was already added with a different default")
+        _refuse_directive(f"add_param {mod}", "parameter", info.params_directive)
+        data = self.session.text(info.path)
+        item = decl.encode()
+        if info.params_close is None:
+            at = info.name_end if info.imports_end is None else info.imports_end
+            splices = [(at, at, b" #(" + item + b")")]
+        elif not info.params:
+            splices = [(info.params_close, info.params_close, item)]
+        else:
+            last = info.params[-1]
+            splices = _append_to_list(data, last.start, last.end, info.params_close, item, _eol(data))
+
+        def check(design: Design) -> str | None:
+            try:
+                m = design.module(mod)
+            except AdapterError:
+                return f"add_param {mod} {name}: module not found in the final design"
+            p = next((p for p in m.params if p.name == name), None)
+            if p is None or m.param_kinds.get(name) != "value":
+                return f"add_param {mod} {name}: parameter not found in the final design"
+            if not _same(p.default or "", default):
+                return f"add_param {mod} {name}: expected default {str(default)!r}, found {p.default!r}"
+            if not _same(p.type_text, type):
+                return f"add_param {mod} {name}: expected type {type!r}, found {p.type_text!r}"
+            return None
+
+        return _Plan(
+            "add_param",
+            mod,
+            path=info.path,
+            splices=splices,
+            mark=("params", mod),
+            added=(mod, name, ("param", _norm(decl))),
+            expects=[("param-changed", p, name) for p in paths],
+            check_key=("add_param", mod, name),
+            check=check,
+        )
+
+    def _plan_assign(
+        self, mod: str, info: ModuleInfo, target: str, expr: object, planned_port: bool = False
+    ) -> _Plan:
+        """`planned_port`: `target` is an output port this operation adds, so it is undriven."""
+        if not planned_port:
+            ports = {p.name: p for p in info.ports}
+            names = set(ports) | {d.name for d in info.decls}
+            if target not in names:
+                raise VetError(
+                    f"add_assign {mod}: no net, variable or port {target!r}{_did_you_mean(target, names)}"
+                )
+            if any(a.left == target and _same(a.right, expr) for a in info.assigns):
+                return _Plan("add_assign", mod, skip=True)
+            if target in ports and ports[target].direction == "input":
+                raise VetError(f"add_assign {mod}: {target!r} is an input port and cannot be assigned")
+            try:
+                drivers = self.session.loaded.drivers_in(mod, target)
+            except AdapterError as e:
+                raise VetError(f"add_assign {mod}: cannot analyse {target!r}: {e}") from e
+            if drivers:
+                what = "an input port" if any(d.is_input_port for d in drivers) else "already driven"
+                raise VetError(f"add_assign {mod}: {target!r} is {what} and cannot be assigned")
+        data = self.session.text(info.path)
+        ls = _line_start(data, info.body_end)
+        if data[ls : info.body_end].strip() != b"":
+            raise VetError(f"add_assign {mod}: endmodule does not start its line")
+        text = info.body_indent.encode() + f"assign {target} = {expr};".encode() + _eol(data)
+
+        def check(design: Design) -> str | None:
+            try:
+                m = design.module(mod)
+            except AdapterError:
+                return f"add_assign {mod} {target}: module not found in the final design"
+            if not any(a.left == target and _same(a.right, expr) for a in m.assigns):
+                return f"add_assign {mod} {target}: the assignment 'assign {target} = {expr};' is missing"
+            return None
+
+        return _Plan(
+            "add_assign",
+            mod,
+            path=info.path,
+            splices=[(ls, ls, text)],
+            mark=("decls", mod),
+            check_key=("add_assign", mod, target, _norm(expr)),
+            check=check,
+        )
+
+    # --- hierarchical operations ----------------------------------------------------
+
+    def _walk_path(self, op: str, to: str) -> tuple[list[str], list[str], list[str]]:
+        """Validate `to`; return the modules and paths M0..Mn and the instance names between them."""
+        snap = self._snap()
+        segs = str(to).split(".")
+        tops = sorted(p for p in snap if "." not in p)
+        if len(segs) == 1 and segs[0] in tops:
+            raise VetError(f"{op}: {to!r} is the top module; the path must name an instance below the top")
+        if segs[0] not in tops:
+            raise VetError(
+                f"{op}: the path {to!r} starts at {segs[0]!r}, not at the top module "
+                f"({', '.join(repr(t) for t in tops)})"
+            )
+        path = segs[0]
+        mods = [snap[path].module]
+        paths = [path]
+        names: list[str] = []
+        for seg in segs[1:]:
+            if "[" in seg or "]" in seg:
+                raise VetError(
+                    f"{op}: {seg!r} in {to!r}: generate blocks and instance arrays are not supported"
+                )
+            nxt = f"{path}.{seg}"
+            if nxt not in snap:
+                try:
+                    info = self.session.loaded.module(mods[-1])
+                except AdapterError as e:
+                    raise VetError(str(e)) from e
+                hit = next((i for i in info.instances if i.name == seg), None)
+                if hit is not None and hit.is_array:
+                    raise VetError(f"{op}: {seg!r} in module {mods[-1]!r} is an instance array, which is not supported")
+                if hit is not None and hit.in_generate:
+                    raise VetError(
+                        f"{op}: {seg!r} in module {mods[-1]!r} is inside a generate block, which is not supported"
+                    )
+                if hit is not None:
+                    raise VetError(f"{op}: instance {seg!r} of module {mods[-1]!r} is not elaborated under the top")
+                raise VetError(
+                    f"{op}: module {mods[-1]!r} has no instance {seg!r}"
+                    f"{_did_you_mean(seg, [i.name for i in info.instances])}"
+                )
+            names.append(seg)
+            path = nxt
+            paths.append(path)
+            mods.append(snap[path].module)
+        if len(set(mods)) != len(mods):
+            raise VetError(f"{op}: a module appears twice on the path {to!r}")
+        return mods, paths, names
+
+    def _refresh_for(self, mods: Iterable[str]) -> None:
+        """Re-load once if a list of one of `mods` was edited since the last load."""
+        self._sync()
+        wanted = set(mods)
+        self._refresh_if([k for k in self._dirty if k[1] in wanted])
+
+    def _is_interface(self, mod: str, port: str) -> bool:
+        snap = self._snap()
+        return any(snap[p].ports.get(port, ("",))[0] == "interface" for p in self.module_paths(mod))
+
+    def _signal_type(self, op: str, mod: str, info: ModuleInfo, signal: str) -> str:
+        """Validate `signal` in `mod` and return its data type as written."""
+        port = next((p for p in info.ports if p.name == signal), None)
+        decl = next((d for d in info.decls if d.name == signal), None)
+        if port is None and decl is None:
+            names = [p.name for p in info.ports] + [d.name for d in info.decls]
+            raise VetError(f"{op}: module {mod!r} has no net, variable or port {signal!r}{_did_you_mean(signal, names)}")
+        if port is not None and self._is_interface(mod, signal):
+            raise VetError(f"{op}: {signal!r} in module {mod!r} is an interface port, which cannot be punched")
+        if port is not None:
+            if port.unpacked:
+                raise VetError(f"{op}: port {signal!r} of module {mod!r} has unpacked dimensions")
+            if not port.type_text:
+                raise VetError(f"{op}: cannot tell the type of port {signal!r} of module {mod!r}; pass type= or width=")
+            return port.type_text
+        assert decl is not None
+        toks = tokens(self.session.text(info.path)[decl.start : decl.end].decode("utf-8", errors="replace"))
+        if "interconnect" in (tokens(decl.type_text)[:1] or toks[:1]):
+            raise VetError(f"{op}: {signal!r} in module {mod!r} is declared interconnect, which cannot be punched")
+        if len(toks) > 1 and toks[1] == "[":
+            raise VetError(f"{op}: {signal!r} in module {mod!r} has unpacked dimensions")
+        return _logic_type(decl.type_text)
+
+    def punch_port(
+        self,
+        name: str,
+        direction: str,
+        to: str,
+        *,
+        signal: str | None = None,
+        width: int | str | None = None,
+        type: str | None = None,
+        all_instances: bool = False,
+    ) -> None:
+        op = "punch_port"
+        if direction not in ("input", "output"):
+            raise VetError(f"{op}: direction must be 'input' or 'output', not {direction!r}")
+        if not is_simple_identifier(name):
+            raise VetError(f"{op}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+        if signal is not None and not _IDENT.fullmatch(signal):
+            raise VetError(f"{op}: the signal must be a plain identifier, not {signal!r}")
+        out = direction == "output"
+        snap = self._snap()
+        mods, paths, inames = self._walk_path(op, to)
+        n = len(mods) - 1
+        for m in mods[1:]:
+            where = self.module_paths(m)
+            if len(where) > 1 and out:
+                raise VetError(
+                    f"{op} {name}: module {m!r} is elaborated {len(where)} times ({', '.join(where)}); "
+                    f"an output cannot go through a shared module, several copies would drive one net"
+                )
+            if len(where) > 1 and not all_instances:
+                raise VetError(
+                    f"{op} {name}: module {m!r} is elaborated {len(where)} times ({', '.join(where)}) and a new port "
+                    f"changes every instance; pass all_instances=True to connect them all"
+                )
+        targets: dict[tuple[str, str], str] = {}
+        for m in mods[1:]:
+            for p in self.module_paths(m):
+                parent, _, iname = p.rpartition(".")
+                if parent not in snap or "[" in iname:
+                    raise VetError(
+                        f"{op}: {p} is inside a generate block or an instance array, which is not supported"
+                    )
+                if snap[parent].module not in mods:
+                    raise VetError(
+                        f"{op}: {p} is an instance of {m!r} in module {snap[parent].module!r}, "
+                        f"which is not on the path to {to!r}, so it would have no {name!r} to connect"
+                    )
+                targets[(snap[parent].module, iname)] = m
+        self._refuse_generate_copies(op, mods[1:])
+        sig = signal if signal is not None else (name if out else None)
+        self._refresh_for(mods)
+        if out and sig != name:
+            if any(p.name == name for p in self._info(mods[-1]).ports):
+                # an assign to an existing port needs its drivers: they depend on everything queued
+                self.session.refresh()
+                self._sync()
+        infos = {m: self._info(m) for m in mods}
+        if out:
+            existing = [
+                i for i in range(n) if any(p.name == name and p.direction == "output" for p in infos[mods[i]].ports)
+            ]
+            if existing:
+                # the drivers depend on everything queued
+                if self.session.refresh():
+                    self._sync()
+                    infos = {m: self._info(m) for m in mods}
+                for i in existing:
+                    try:
+                        drivers = self.session.loaded.drivers_in(mods[i], name)
+                    except AdapterError as e:
+                        raise VetError(f"{op} {name}: cannot analyse {name!r} in module {mods[i]!r}: {e}") from e
+                    if any(d.instance != inames[i] for d in drivers):
+                        raise VetError(
+                            f"{op} {name}: module {mods[i]!r} already has output port {name!r}, which is driven "
+                            f"by something other than the connection from {inames[i]!r}, so it cannot carry "
+                            f"another signal"
+                        )
+
+        # the data type of the new ports
+        if type is not None or width is not None:
+            base, pwidth = (type if type is not None else "logic"), width
+            if sig is not None:
+                self._signal_type(op, mods[-1] if out else mods[0], infos[mods[-1] if out else mods[0]], sig)
+        elif sig is not None:
+            base, pwidth = self._signal_type(op, mods[-1] if out else mods[0], infos[mods[-1] if out else mods[0]], sig), None
+        else:
+            base, pwidth = "logic", None
+        text = f"{base}{_range(pwidth)}"
+        bare = _bare_name(text)
+        if bare is not None:
+            raise VetError(
+                f"{op} {name}: the type {text!r} uses {bare!r}, which is not package-scoped and may not mean the "
+                f"same in every module on the path; pass an explicit width= (or type=) that does"
+            )
+        decl = f"{direction:<6} {text} {name}"
+
+        plans: list[_Plan] = []
+        special = out and sig == name and any(
+            p.name == name and p.direction == "output" for p in infos[mods[-1]].ports
+        )
+        for i, m in enumerate(mods):
+            if i == 0 and not out and signal is not None:
+                continue
+            if special and i == n:
+                continue
+            port_plan = self._plan_add_port(m, name, decl, infos[m], self.module_paths(m))
+            plans.append(port_plan)
+            if out and i == n:
+                assert sig is not None
+                plans.append(self._plan_assign(m, infos[m], name, sig, planned_port=not port_plan.skip))
+        for (host, iname), child in sorted(targets.items()):
+            handle = Instance(self, host, iname)
+            inst = self._instance_info(host, iname)
+            handle._refuse_connection_list("connect", inst)
+            where = handle.paths
+            if not where:
+                raise VetError(f"{op}: {host}.{iname} is not elaborated under the top at a known path")
+            expr = signal if (host == mods[0] and not out and signal is not None) else name
+            plans.append(handle._plan_connect(inst, infos[child], where, name, expr, None))
+        self._commit_all(op, plans)
+
+    def propagate_param(self, name: str, to: str, *, default: object | None = None) -> None:
+        op = "propagate_param"
+        mods, paths, inames = self._walk_path(op, to)
+        n = len(mods) - 1
+        for m in mods[:-1]:
+            where = self.module_paths(m)
+            if len(where) != 1:
+                raise VetError(
+                    f"{op} {name}: module {m!r} is elaborated {len(where)} times ({', '.join(where)}) "
+                    f"and the parameter would be added to every copy"
+                )
+        self._refresh_for(mods)
+        infos = {m: self._info(m) for m in mods}
+        dest = infos[mods[-1]]
+        kind = dest.param_kinds.get(name)
+        if kind is None:
+            values = [k for k, v in dest.param_kinds.items() if v == "value"]
+            raise VetError(
+                f"{op}: module {mods[-1]!r} has no parameter {name!r}{_did_you_mean(name, values)}"
+            )
+        if kind != "value":
+            what = "a localparam" if kind == "local" else "a type parameter"
+            raise VetError(
+                f"{op}: parameter {name!r} of module {mods[-1]!r} is {what}, not an overridable value"
+            )
+        pinfo = next((p for p in dest.params if p.name == name), None)
+        if pinfo is None:
+            raise VetError(
+                f"{op}: parameter {name!r} of module {mods[-1]!r} is declared in the module body, "
+                f"not in its parameter port list, so its type is unknown"
+            )
+        def passes_on(j: int) -> bool:
+            if infos[mods[j]].param_kinds.get(name) != "value":
+                return False
+            ov = next((o for o in self._instance_info(mods[j], inames[j]).param_overrides if o.name == name), None)
+            return ov is not None and tokens(ov.value) == [name]
+
+        # M(k)..M(n-1) already carry the parameter down; the rest of the path needs it
+        k = n
+        while k > 0 and passes_on(k - 1):
+            k -= 1
+        plans: list[_Plan] = []
+        if k > 0:
+            for m in mods[:k]:
+                if name in infos[m].param_kinds:
+                    raise VetError(
+                        f"{op} {name}: module {m!r} already has a parameter {name!r} that is not passed down to "
+                        f"{to!r}; tying it in would join two unrelated parameters"
+                    )
+            handles: list[tuple[Instance, InstanceInfo]] = []
+            for i in range(k):
+                handle = Instance(self, mods[i], inames[i])
+                inst = self._instance_info(mods[i], inames[i])
+                handle._guard_overrides(op, inst)
+                handles.append((handle, inst))
+            cur = next((o for o in handles[-1][1].param_overrides if o.name == name), None)
+            declared = next((p for p in infos[mods[k]].params if p.name == name), None)
+            if default is not None:
+                dtext = str(default)
+            elif cur is not None and tokens(cur.value):
+                dtext = cur.value
+            elif declared is not None and declared.default is not None:
+                dtext = declared.default
+            else:
+                raise VetError(f"{op} {name}: the parameter has no default and no override; pass an explicit default=")
+            if "//" in dtext:
+                raise VetError(f"{op} {name}: the value {dtext!r} contains a comment; pass an explicit default=")
+            dtext = re.sub(r"\s+", " ", dtext).strip()
+            for what, value in (("type", pinfo.type_text), ("value", dtext)):
+                bare = _bare_name(value)
+                if bare is not None:
+                    raise VetError(
+                        f"{op} {name}: the {what} {value!r} uses {bare!r}, which is not package-scoped and may not "
+                        f"mean the same in every module on the path; pass an explicit default= that does"
+                    )
+        for i in range(n):
+            if i < k:
+                handle, inst = handles[i]
+                plans.append(
+                    self._plan_add_param(
+                        mods[i], name, pinfo.type_text, dtext, infos[mods[i]], self.module_paths(mods[i])
+                    )
+                )
+                plans.append(handle._plan_set_param(inst, [paths[i + 1]], name, name, None, force=True, permit=False))
+            else:
+                plans.append(_Plan("add_param", mods[i], skip=True))
+                plans.append(_Plan("set_param", f"{mods[i]}.{inames[i]}", skip=True))
+        if self.session.reloads == 0:
+            before = self._snap()[to].params.get(name)
+        else:
+            found = self.session.loaded.snapshot().get(to)
+            before = None if found is None else found.params.get(name)
+        self._commit_all(op, plans)
+        if any(not p.skip for p in plans):
+
+            def check(design: Design) -> str | None:
+                found = design.snapshot().get(to)
+                after = None if found is None else found.params.get(name)
+                if after != before:
+                    return f"{op} {name} {to}: the value in use changed from {before!r} to {after!r}"
+                return None
+
+            self._set_check((op, name, to), check)
 
 
 # --- Module handle -----------------------------------------------------------------
@@ -366,124 +968,13 @@ class Module:
         paths = self._check_scope("add_port")
         decl = f"{direction:<6} {type}{_range(width)} {name}"
         info = v._info(mod, [("ports", mod)])
-        if info.port_list_kind != "ansi":
-            what = "a non-ANSI" if info.port_list_kind == "nonansi" else "no"
-            raise VetError(f"add_port {mod}: the module has {what} port list; only ANSI port lists can be extended")
-        if info.header_has_macros:
-            raise VetError(f"add_port {mod}: the module header contains macros, so it cannot be edited safely")
-        data = v.session.text(info.path)
-        existing = next((p for p in info.ports if p.name == name), None)
-        if existing is not None:
-            found = data[existing.start : existing.end].decode("utf-8", errors="replace")
-            if _same(found, decl):
-                v._record("add_port", mod, "skipped")
-                return
-            raise DriftError(f"add_port {mod}: port {name!r} exists as {found!r}, not {decl!r}")
-        other = v._other_use(info, name, "port")
-        if other is not None:
-            raise DriftError(f"add_port {mod}: the name {name!r} is already used by {other}")
-        added = v._added.get(mod, {}).get(name)
-        if added is not None:
-            if added == ("port", _norm(decl)):
-                v._record("add_port", mod, "skipped")
-                return
-            raise DriftError(f"add_port {mod}: port {name!r} was already added with a different declaration")
-        _refuse_directive(f"add_port {mod}", "port", info.ports_directive)
-        if info.ports_close is None:
-            raise VetError(f"add_port {mod}: cannot find the end of the port list")
-        eol = _eol(data)
-        item = decl.encode()
-        if not info.ports:
-            splices = [(info.ports_close, info.ports_close, item)]
-        else:
-            last = info.ports[-1]
-            splices = _append_to_list(data, last.start, last.end, info.ports_close, item, eol)
-        v._queue(info.path, splices)
-        v._mark("ports", mod)
-        v._added.setdefault(mod, {})[name] = ("port", _norm(decl))
-        for p in paths:
-            v.session.expect("port-added", p, name, exact=True)
-            v.session.permit("connection-changed", p, name, exact=True)
-
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_port {mod} {name}: module not found in the final design"
-            port = next((p for p in m.ports if p.name == name), None)
-            if port is None:
-                return f"add_port {mod} {name}: port not found in the final design"
-            text = v.session.text(m.path)[port.start : port.end].decode("utf-8", errors="replace")
-            if not _same(text, decl):
-                return f"add_port {mod} {name}: expected {decl!r}, found {text!r}"
-            return None
-
-        v._set_check(("add_port", mod, name), check)
-        v._record("add_port", mod, "applied")
+        v._commit(v._plan_add_port(mod, name, decl, info, paths))
 
     def add_param(self, name: str, default: object, type: str = "int") -> None:
         v, mod = self.vet, self._name
         paths = self._check_scope("add_param")
-        decl = f"parameter {type} {name} = {default}"
         info = v._info(mod, [("params", mod)])
-        if info.header_has_macros:
-            raise VetError(f"add_param {mod}: the module header contains macros, so it cannot be edited safely")
-        existing = next((p for p in info.params if p.name == name), None)
-        if existing is not None:
-            if (
-                info.param_kinds.get(name) == "value"
-                and _same(existing.type_text, type)
-                and _same(existing.default or "", default)
-            ):
-                v._record("add_param", mod, "skipped")
-                return
-            raise DriftError(
-                f"add_param {mod}: parameter {name!r} exists as type {existing.type_text!r} with default "
-                f"{existing.default!r}, not {type!r} with default {str(default)!r}"
-            )
-        if name in info.param_kinds:
-            raise DriftError(f"add_param {mod}: the name {name!r} is already used by a parameter in the module body")
-        other = v._other_use(info, name, "param")
-        if other is not None:
-            raise DriftError(f"add_param {mod}: the name {name!r} is already used by {other}")
-        added = v._added.get(mod, {}).get(name)
-        if added is not None:
-            if added == ("param", _norm(decl)):
-                v._record("add_param", mod, "skipped")
-                return
-            raise DriftError(f"add_param {mod}: parameter {name!r} was already added with a different default")
-        _refuse_directive(f"add_param {mod}", "parameter", info.params_directive)
-        data = v.session.text(info.path)
-        item = decl.encode()
-        if info.params_close is None:
-            at = info.name_end if info.imports_end is None else info.imports_end
-            splices = [(at, at, b" #(" + item + b")")]
-        elif not info.params:
-            splices = [(info.params_close, info.params_close, item)]
-        else:
-            last = info.params[-1]
-            splices = _append_to_list(data, last.start, last.end, info.params_close, item, _eol(data))
-        v._queue(info.path, splices)
-        v._mark("params", mod)
-        v._added.setdefault(mod, {})[name] = ("param", _norm(decl))
-        self._expect_param(name, paths)
-
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_param {mod} {name}: module not found in the final design"
-            p = next((p for p in m.params if p.name == name), None)
-            if p is None or m.param_kinds.get(name) != "value":
-                return f"add_param {mod} {name}: parameter not found in the final design"
-            if not _same(p.default or "", default):
-                return f"add_param {mod} {name}: expected default {str(default)!r}, found {p.default!r}"
-            if not _same(p.type_text, type):
-                return f"add_param {mod} {name}: expected type {type!r}, found {p.type_text!r}"
-            return None
-
-        v._set_check(("add_param", mod, name), check)
-        v._record("add_param", mod, "applied")
+        v._commit(v._plan_add_param(mod, name, type, default, info, paths))
 
     def add_wire(self, name: str, width: int | str | None = None, type: str = "logic") -> None:
         v, mod = self.vet, self._name
@@ -542,43 +1033,7 @@ class Module:
         v.session.refresh()  # drivers depend on everything queued
         v._sync()
         info = v._info(mod)
-        ports = {p.name: p for p in info.ports}
-        names = set(ports) | {d.name for d in info.decls}
-        if target not in names:
-            raise VetError(
-                f"add_assign {mod}: no net, variable or port {target!r}{_did_you_mean(target, names)}"
-            )
-        if any(a.left == target and _same(a.right, expr) for a in info.assigns):
-            v._record("add_assign", mod, "skipped")
-            return
-        if target in ports and ports[target].direction == "input":
-            raise VetError(f"add_assign {mod}: {target!r} is an input port and cannot be assigned")
-        try:
-            drivers = v.session.loaded.drivers_in(mod, target)
-        except AdapterError as e:
-            raise VetError(f"add_assign {mod}: cannot analyse {target!r}: {e}") from e
-        if drivers:
-            what = "an input port" if any(d.is_input_port for d in drivers) else "already driven"
-            raise VetError(f"add_assign {mod}: {target!r} is {what} and cannot be assigned")
-        data = v.session.text(info.path)
-        ls = _line_start(data, info.body_end)
-        if data[ls : info.body_end].strip() != b"":
-            raise VetError(f"add_assign {mod}: endmodule does not start its line")
-        text = info.body_indent.encode() + f"assign {target} = {expr};".encode() + _eol(data)
-        v._queue(info.path, [(ls, ls, text)])
-        v._mark("decls", mod)
-
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_assign {mod} {target}: module not found in the final design"
-            if not any(a.left == target and _same(a.right, expr) for a in m.assigns):
-                return f"add_assign {mod} {target}: the assignment 'assign {target} = {expr};' is missing"
-            return None
-
-        v._set_check(("add_assign", mod, target, _norm(expr)), check)
-        v._record("add_assign", mod, "applied")
+        v._commit(v._plan_assign(mod, info, target, expr))
 
 
 # --- Instance handle ---------------------------------------------------------------
@@ -716,6 +1171,12 @@ class Instance:
         self._refuse_connection_list("connect", inst)
         paths = self._paths("connect")
         self._port_check("connect", inst, im, port)
+        v._commit(self._plan_connect(inst, im, paths, port, expr, was))
+
+    def _plan_connect(
+        self, inst: InstanceInfo, im: ModuleInfo, paths: list[str], port: str, expr: object, was: object | None
+    ) -> _Plan:
+        v = self.vet
         data = v.session.text(inst.path)
         cur = self._conn(inst, port)
         text = str(expr)
@@ -728,8 +1189,7 @@ class Instance:
             )
         if cur is not None and tokens(cur.expr):
             if _same(cur.expr, text):
-                v._record("connect", self.target, "skipped")
-                return
+                return _Plan("connect", self.target, skip=True)
             if was is None or not _same(was, cur.expr):
                 note = "" if was is None else f" (was={str(was)!r} does not match)"
                 raise DriftError(
@@ -747,15 +1207,16 @@ class Instance:
                 splices = _append_to_list(data, last.start, last.end, inst.ports_close, item, _eol(data))
             else:
                 splices = [(inst.ports_open + 1, inst.ports_open + 1, item)]
-        v._queue(inst.path, splices)
-        v._mark("conns", self._mod, self._name)
-        for p in paths:
-            v.session.expect("connection-changed", p, port, exact=True)
-        v._set_check(
-            ("conn", self._mod, self._name, port),
-            self._conn_check("connect", port, lambda f: f is not None and _same(f, text), repr(text)),
+        return _Plan(
+            "connect",
+            self.target,
+            path=inst.path,
+            splices=splices,
+            mark=("conns", self._mod, self._name),
+            expects=[("connection-changed", p, port) for p in paths],
+            check_key=("conn", self._mod, self._name, port),
+            check=self._conn_check("connect", port, lambda f: f is not None and _same(f, text), repr(text)),
         )
-        v._record("connect", self.target, "applied")
 
     def disconnect(self, port: str, was: object | None = None) -> None:
         v = self.vet
@@ -796,13 +1257,7 @@ class Instance:
     def set_param(self, name: str, value: object, was: object | None = None) -> None:
         v = self.vet
         inst, im = self._lookup(("overrides",), ("params",))
-        self._refuse_macro("set_param", inst)
-        mi = v._info(self._mod)
-        if any(o.name is None for o in inst.param_overrides):
-            raise VetError(f"set_param {self.target}: the instance uses positional parameter overrides")
-        _refuse_directive(f"set_param {self.target}", "parameter override", inst.override_directive)
-        if sum(1 for i in mi.instances if i.path == inst.path and i.stmt_start == inst.stmt_start) > 1:
-            raise VetError(f"set_param {self.target}: the instance shares its parameter list with others")
+        self._guard_overrides("set_param", inst)
         paths = self._paths("set_param")
         kind = im.param_kinds.get(name)
         if kind is None:
@@ -816,14 +1271,38 @@ class Instance:
             raise VetError(
                 f"set_param {self.target}: parameter {name!r} of module {inst.module!r} is {what}, not an overridable value"
             )
+        v._commit(self._plan_set_param(inst, paths, name, value, was))
+
+    def _guard_overrides(self, op: str, inst: InstanceInfo) -> None:
+        v = self.vet
+        self._refuse_macro(op, inst)
+        mi = v._info(self._mod)
+        if any(o.name is None for o in inst.param_overrides):
+            raise VetError(f"{op} {self.target}: the instance uses positional parameter overrides")
+        _refuse_directive(f"{op} {self.target}", "parameter override", inst.override_directive)
+        if sum(1 for i in mi.instances if i.path == inst.path and i.stmt_start == inst.stmt_start) > 1:
+            raise VetError(f"{op} {self.target}: the instance shares its parameter list with others")
+
+    def _plan_set_param(
+        self,
+        inst: InstanceInfo,
+        paths: list[str],
+        name: str,
+        value: object,
+        was: object | None,
+        *,
+        force: bool = False,
+        permit: bool = True,
+    ) -> _Plan:
+        """`force`: replace a different existing override without `was`; `permit`: allow the value change."""
+        v = self.vet
         data = v.session.text(inst.path)
         text = str(value)
         cur = next((o for o in inst.param_overrides if o.name == name), None)
         if cur is not None:
             if _same(cur.value, text):
-                v._record("set_param", self.target, "skipped")
-                return
-            if was is None or not _same(was, cur.value):
+                return _Plan("set_param", self.target, skip=True)
+            if not force and (was is None or not _same(was, cur.value)):
                 note = "" if was is None else f" (was={str(was)!r} does not match)"
                 raise DriftError(
                     f"set_param {self.target} {name}: currently {cur.value!r}, not {text!r}{note}"
@@ -841,10 +1320,6 @@ class Instance:
                 splices = _append_to_list(data, last.start, last.end, inst.params_close, item, _eol(data))
             else:
                 splices = [(inst.params_close, inst.params_close, item)]
-        v._queue(inst.path, splices)
-        v._mark("overrides", self._mod, self._name)
-        for p in paths:
-            v.session.permit("param-changed", p, name, exact=True)
         mod, iname = self._mod, self._name
 
         def check(design: Design) -> str | None:
@@ -856,5 +1331,13 @@ class Instance:
                 return f"set_param {mod}.{iname} {name}: expected {text!r}, found {found!r}"
             return None
 
-        v._set_check(("param", self._mod, self._name, name), check)
-        v._record("set_param", self.target, "applied")
+        return _Plan(
+            "set_param",
+            self.target,
+            path=inst.path,
+            splices=splices,
+            mark=("overrides", self._mod, self._name),
+            permits=[("param-changed", p, name) for p in paths] if permit else [],
+            check_key=("param", self._mod, self._name, name),
+            check=check,
+        )

@@ -234,6 +234,11 @@ class Session:
             queue = self._queue[key] = SpliceQueue(len(current))
         queue.add(Splice(key, start, end, bytes(text)))
 
+    def is_editable(self, path: Path) -> bool:
+        """True when `splice` would accept `path`: a source or included file that is editable."""
+        key = Path(path).resolve()
+        return key in self._text and (self._editable is None or key in self._editable)
+
     def expect(
         self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False
     ) -> None:
