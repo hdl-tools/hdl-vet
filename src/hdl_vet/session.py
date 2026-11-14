@@ -19,13 +19,13 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from hdl_vet.filelist import Filelist, read_filelist
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
-from hdl_vet.slang_adapter import AdapterError, Design, Diag, ModuleInfo, load
+from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, ModuleInfo, load
 from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
 
 __all__ = ["HEADER_MARK", "Result", "Session", "SessionError"]
@@ -54,6 +54,7 @@ class Result:
     layout_root: Path | None = field(default=None, repr=False)
     new_files: list[Path] = field(default_factory=list)
     load_error: str | None = None
+    failed_checks: list[str] = field(default_factory=list)
 
     def _rel(self, path: Path | None) -> str:
         if path is None:
@@ -79,6 +80,8 @@ class Result:
             lines.append(f"  unexpected change: {c.kind} {c.path}{name}: {c.before!r} -> {c.after!r}")
         for e in self.unmatched_expects:
             lines.append(f"  expected change not seen: {e.kind} path={e.path} name={e.name}")
+        for msg in self.failed_checks:
+            lines.append(f"  failed check: {msg}")
         return "\n".join(lines) + "\n"
 
 
@@ -231,8 +234,10 @@ class Session:
             queue = self._queue[key] = SpliceQueue(len(current))
         queue.add(Splice(key, start, end, bytes(text)))
 
-    def expect(self, kind: str, path: str = "*", name: str = "*") -> None:
-        self._expects.append(Expect(kind, path, name))
+    def expect(
+        self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False
+    ) -> None:
+        self._expects.append(Expect(kind, path, name, exact=exact, below=below))
 
     def _apply_queue(self) -> None:
         """Apply the queued splices to the text and record the stage."""
@@ -243,6 +248,27 @@ class Session:
             self._text[key] = apply_splices(self._text[key], splices)
             self._maps.setdefault(key, []).append(OffsetMap(splices))
         self._queue = {}
+
+    def permit(
+        self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False
+    ) -> None:
+        """Allow a change without requiring it."""
+        self._expects.append(Expect(kind, path, name, required=False, exact=exact, below=below))
+
+    @property
+    def loaded(self) -> Design:
+        """The last loaded design; never re-loads."""
+        return self._design
+
+    def refresh(self) -> bool:
+        """Apply the queue and re-load when anything is queued; True if it re-loaded."""
+        before = self.reloads
+        self._refresh()
+        return self.reloads != before
+
+    def baseline_snapshot(self) -> dict[str, InstanceSnap]:
+        """The structural snapshot of the baseline design (cached; sign-off needs it too)."""
+        return self._baseline.snapshot()
 
     def _reload(self) -> None:
         self._design = load(self._fl, top=self._top, overrides=dict(self._text), check_overrides=False)
@@ -279,11 +305,16 @@ class Session:
 
     # --- sign-off ------------------------------------------------------------
 
-    def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
+    def finish(
+        self,
+        scripts: Iterable[tuple[str, str]] = (),
+        checks: Iterable[Callable[[Design], str | None]] = (),
+    ) -> Result:
         if self._finished:
             raise SessionError("the session is already finished")
         self._finished = True
         scripts = list(scripts)
+        checks = list(checks)
         self._apply_queue()
         changed = sorted((p for p in self._text if self._text[p] != self._orig[p]), key=lambda p: p.as_posix())
         for p in changed:
@@ -292,7 +323,11 @@ class Session:
             self._maps.setdefault(p, []).append(OffsetMap([hs]))
         if not changed:
             unexpected, unmatched = check_changes([], self._expects)
-            return Result(not unmatched, [], [], unexpected, unmatched, {}, "", self.layout_root)
+            failed = self._run_checks(checks, self._baseline)
+            return Result(
+                not unmatched and not failed, [], [], unexpected, unmatched, {}, "", self.layout_root,
+                failed_checks=failed,
+            )
 
         files = {p: self._text[p] for p in changed}
         diff = "".join(
@@ -307,5 +342,20 @@ class Session:
         new = new_diagnostics(self._baseline.diagnostics(), self._design.diagnostics(), self._maps)
         changes = diff_snapshots(self._baseline.snapshot(), self._design.snapshot())
         unexpected, unmatched = check_changes(changes, self._expects)
-        ok = not new and not unexpected and not unmatched and not new_files
-        return Result(ok, new, changes, unexpected, unmatched, files, diff, self.layout_root, new_files)
+        failed = self._run_checks(checks, self._design)
+        ok = not new and not unexpected and not unmatched and not new_files and not failed
+        return Result(
+            ok, new, changes, unexpected, unmatched, files, diff, self.layout_root, new_files,
+            failed_checks=failed,
+        )
+
+    def _run_checks(self, checks: Sequence[Callable[[Design], str | None]], design: Design) -> list[str]:
+        out: list[str] = []
+        for check in checks:
+            try:
+                msg = check(design)
+            except Exception as e:
+                msg = f"check raised {type(e).__name__}: {e}"
+            if msg is not None:
+                out.append(msg)
+        return out

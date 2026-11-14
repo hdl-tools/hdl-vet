@@ -370,6 +370,85 @@ def test_snapshot_covers_generate_and_arrays(tmp_path: Path):
     assert {"t.u_arr[0]", "t.u_arr[1]"} <= set(snap)
 
 
+def test_pruned_instance_walk_finds_what_the_exhaustive_visit_finds(tmp_path: Path):
+    # Every construct that can hold an instance: nested generate (if, for, case),
+    # instance arrays, interfaces with their own instances, a program, a bind.
+    (tmp_path / "t.sv").write_text(
+        "module leaf(input logic d);\nendmodule\n"
+        "module tiny(input logic d);\nendmodule\n"
+        "module probe(input logic d);\n  tiny u_in_bound (.d(d));\nendmodule\n"
+        "interface inner_if(input logic c);\nendinterface\n"
+        "interface bus_if(input logic c);\n  logic v;\n  inner_if u_in_if (.c(c));\nendinterface\n"
+        "program prog(input logic d);\nendprogram\n"
+        "module mid #(parameter int N = 2, parameter bit E = 1) (input logic d);\n"
+        "  leaf u_arr [1:0][2:0] (.d(d));\n"
+        "  for (genvar i = 0; i < N; i++) begin : g_for\n"
+        "    if (E) begin : g_if\n      leaf u (.d(d));\n    end else begin : g_else\n      leaf u (.d(~d));\n    end\n"
+        "    case (i)\n      0: begin : g_c0\n        leaf u0 (.d(d));\n      end\n"
+        "      default: begin : g_cd\n        leaf ud (.d(d));\n      end\n    endcase\n"
+        "  end\n"
+        "  always_comb begin : blk\n    automatic logic x = d;\n  end\n"
+        "endmodule\n"
+        "module t(input logic d);\n"
+        "  bus_if u_if (.c(d));\n  mid u_m (.d(d));\n  mid #(.N(1), .E(0)) u_m2 [1:0] (.d(d));\n"
+        "  prog u_prog (.d(d));\n"
+        "  bind leaf probe u_probe (.d(d));\n"
+        "endmodule\n"
+    )
+    (tmp_path / "t.f").write_text("t.sv\n")
+    design = load(tmp_path / "t.f", top="t")
+    assert [d for d in design.diagnostics() if d.severity == "error"] == []
+    paths = design.elaborated_instance_paths()
+    assert paths == design.elaborated_instance_paths(exhaustive=True)
+    assert paths == sorted(design.snapshot())
+    assert len(paths) == design.elaborated_instance_count() > 30
+    assert "t.u_m.g_for[1].g_cd.ud" in paths and "t.u_if.u_in_if" in paths
+    assert "t.u_m2[1].g_for[0].g_else.u" in paths
+    assert any(p.endswith(".u_probe.u_in_bound") for p in paths)
+
+
+def test_instance_walk_sees_a_module_inside_a_checker(tmp_path: Path):
+    # Illegal, but slang still builds the instance, under a parent kind that a
+    # walk restricted to "hierarchy" nodes would never enter.
+    # (Do not add a `bind` to this design: slang 12.1.0 then dies with an access
+    # violation while computing diagnostics, whatever walk is used.)
+    (tmp_path / "t.sv").write_text(
+        "module leaf(input logic d);\nendmodule\n"
+        "checker chk(logic a);\n  leaf u_illegal (.d(a));\nendchecker\n"
+        "module t(input logic d);\n  chk u_chk (d);\nendmodule\n"
+    )
+    (tmp_path / "t.f").write_text("t.sv\n")
+    design = load(tmp_path / "t.f", top="t")
+    assert "InvalidInstanceForParent" in [d.code for d in design.diagnostics()]
+    assert design.elaborated_instance_paths() == ["t", "t.u_chk.u_illegal"]
+    assert design.elaborated_instance_paths(exhaustive=True) == ["t", "t.u_chk.u_illegal"]
+
+
+def test_instance_walk_agrees_with_the_exhaustive_visit_in_odd_places(tmp_path: Path):
+    # Unnamed and begin-less generates, an interface array whose body has a
+    # generate, and a bind by hierarchical path into a generate block.
+    (tmp_path / "t.sv").write_text(
+        "module leaf(input logic d);\nendmodule\n"
+        "module probe(input logic d);\nendmodule\n"
+        "interface bus_if(input logic c);\n"
+        "  for (genvar j = 0; j < 2; j++) begin : g\n    logic v;\n  end\nendinterface\n"
+        "module t(input logic d);\n"
+        "  bus_if u_ifs [1:0] (.c(d));\n"
+        "  if (1) leaf u_nobegin (.d(d));\n"
+        "  for (genvar i = 0; i < 2; i++) leaf u_loop (.d(d));\n"
+        "  for (genvar i = 0; i < 2; i++) begin : g\n    leaf u_m (.d(d));\n  end\n"
+        "  bind t.g[1].u_m probe u_probe (.d(d));\n"
+        "endmodule\n"
+    )
+    (tmp_path / "t.f").write_text("t.sv\n")
+    design = load(tmp_path / "t.f", top="t")
+    fast, slow = design.elaborated_instance_paths(), design.elaborated_instance_paths(exhaustive=True)
+    assert fast == slow
+    assert [d for d in design.diagnostics() if d.severity == "error"] == []
+    assert "t.g[1].u_m.u_probe" in fast and "t.u_ifs[1]" in fast and "t.genblk1.u_nobegin" in fast
+    assert len(fast) == len(set(fast)) == design.elaborated_instance_count()
+
+
 def test_instance_count_excludes_uninstantiated_definitions(kit):
     design = load(kit.filelist, top="top")
     assert design.elaborated_instance_count() == 5  # alt_leaf is never instantiated
