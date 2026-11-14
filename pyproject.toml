@@ -1,0 +1,33 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hdl-vet"
+version = "0.0.1"
+description = "hdl-vet - scripted, verified, repeatable edits for generated RTL"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = [
+    # Pinned on purpose: the Python API moves between majors (submodules in 11,
+    # nanobind in 12). Only hdl_vet.slang_adapter may import pyslang.
+    "pyslang==12.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hdl_vet"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "corpus: needs the hdl-bag CLI (`bag`) to generate designs; skipped when it is absent",
+]

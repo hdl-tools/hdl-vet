@@ -1,0 +1,12 @@
+# AI-related
+CLAUDE.md
+
+# Repo plans
+plan
+# Local environment and generated corpus
+.venv/
+.corpus/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.hdl-bag/
