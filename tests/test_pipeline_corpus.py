@@ -70,6 +70,11 @@ def test_no_op_pipeline_gives_an_identical_tree(built, tmp_path: Path):
 def test_snapshot_covers_every_elaborated_instance(built):
     design = load(built.filelist, top=built.top)
     snap = design.snapshot()
+    # The adapter enumerates instances with a walk that skips statements and
+    # expressions. A scope kind it failed to descend into would hide instances
+    # from sign-off, so compare it with the plain, exhaustive visit.
+    assert design.elaborated_instance_paths() == design.elaborated_instance_paths(exhaustive=True)
+    assert sorted(snap) == design.elaborated_instance_paths()
     assert len(snap) == design.elaborated_instance_count()
     assert snap[built.top].module == built.top and snap[built.top].connections == {}
 

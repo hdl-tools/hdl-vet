@@ -8,9 +8,10 @@ drivers of a hierarchical name, and syntax equivalence.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,8 @@ from hdl_vet.filelist import Filelist, read_filelist
 __all__ = [
     "AdapterError",
     "ConnInfo",
+    "DeclInfo",
+    "AssignInfo",
     "Design",
     "Diag",
     "Driver",
@@ -34,12 +37,14 @@ __all__ = [
     "PortInfo",
     "load",
     "syntax_equivalent",
+    "is_simple_identifier",
+    "tokens",
 ]
 
 # Warnings slang leaves off by default but that a port-level edit can trigger:
 # an undeclared name in a port connection becomes an implicit net, and a wrong
 # width is only truncated or extended. Deliberately not -Wextra / -Wconversion.
-_ALWAYS_WARN = ("ImplicitNet", "PortWidthTruncate", "PortWidthExpand")
+_ALWAYS_WARN = ("ImplicitNet", "PortWidthTruncate", "PortWidthExpand", "WidthTruncate")
 _DIRECTIONS = {
     "In": "input",
     "Out": "output",
@@ -92,6 +97,7 @@ class ParamInfo:
     default: str | None
     start: int
     end: int
+    type_text: str = ""  # the declared data type as written ("" when implicit)
 
 
 @dataclass(frozen=True)
@@ -100,12 +106,35 @@ class ConnInfo:
     expr: str
     start: int
     end: int
+    open: int | None = None  # offset of the "(" of a `.name(...)` connection
 
 
 @dataclass(frozen=True)
 class ParamOverride:
     name: str | None
     value: str
+    start: int
+    end: int
+    open: int | None = None  # offset of the "(" of a `.name(...)` override
+
+
+@dataclass(frozen=True)
+class DeclInfo:
+    """A module-level net or variable declaration."""
+
+    name: str
+    kind: str  # "net" | "var"
+    type_text: str  # data type (with the net type for a net) and unpacked dimensions
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class AssignInfo:
+    """One continuous assignment `left = right`."""
+
+    left: str
+    right: str
     start: int
     end: int
 
@@ -126,6 +155,12 @@ class InstanceInfo:
     ports_close: int
     connections: list[ConnInfo]
     param_overrides: list[ParamOverride]
+    ports_open: int = -1
+    params_open: int | None = None
+    in_generate: bool = False  # inside a generate block, loop or conditional
+    is_array: bool = False  # an instance array `u [3:0] (...)`
+    conn_directive: str | None = None  # a conditional directive inside the connection list
+    override_directive: str | None = None  # ... inside the parameter value list
 
     def connection(self, port: str) -> ConnInfo:
         for c in self.connections:
@@ -152,6 +187,21 @@ class ModuleInfo:
     params: list[ParamInfo]
     instances: list[InstanceInfo]
     has_macros: bool
+    name_end: int = 0
+    ports_open: int | None = None
+    params_open: int | None = None
+    params_close: int | None = None
+    port_list_kind: str = "none"  # "ansi" | "nonansi" | "none"
+    header_end: int = 0
+    body_indent: str = "  "
+    decls: list[DeclInfo] = field(default_factory=list)
+    assigns: list[AssignInfo] = field(default_factory=list)
+    header_has_macros: bool = False
+    param_kinds: dict[str, str] = field(default_factory=dict)  # "value" | "local" | "type"
+    other_names: frozenset[str] = frozenset()  # typedefs, subroutines, genvars, named blocks
+    imports_end: int | None = None  # end of the last package import in the header
+    ports_directive: str | None = None  # a conditional directive inside the port list
+    params_directive: str | None = None  # ... inside the parameter port list
 
     def port(self, name: str) -> PortInfo:
         for p in self.ports:
@@ -196,6 +246,36 @@ class InstanceSite:
     start: int
     end: int
     from_macro: bool
+
+
+@functools.lru_cache(maxsize=4096)
+def _tokens(text: str) -> tuple[str, ...]:
+    sm = pyslang.SourceManager()
+    buf = sm.assignText(text)
+    lexer = pyslang.parsing.Lexer(buf, pyslang.BumpAllocator(), pyslang.Diagnostics(), sm)
+    eof = pyslang.parsing.TokenKind.EndOfFile
+    out: list[str] = []
+    while True:
+        tok = lexer.lex()
+        if tok.kind == eof:
+            return tuple(out)
+        out.append(tok.rawText)
+
+
+def tokens(text: object) -> list[str]:
+    """The raw texts of the tokens of `text`; whitespace and comments are not tokens."""
+    return list(_tokens(str(text)))
+
+
+def is_simple_identifier(name: str) -> bool:
+    """True for one plain identifier that is not a SystemVerilog keyword."""
+    sm = pyslang.SourceManager()
+    buf = sm.assignText(name)
+    lexer = pyslang.parsing.Lexer(buf, pyslang.BumpAllocator(), pyslang.Diagnostics(), sm)
+    tok = lexer.lex()
+    if tok.kind != pyslang.parsing.TokenKind.Identifier or tok.rawText != name:
+        return False
+    return lexer.lex().kind == pyslang.parsing.TokenKind.EndOfFile
 
 
 def _key(path: Path) -> str:
@@ -394,6 +474,7 @@ class Design:
         self._diags: list[Diag] | None = None
         self._analysis: Any = None
         self._snap: dict[str, InstanceSnap] | None = None
+        self._instance_cache: tuple[Any, ...] | None = None
         self._modules: dict[str, ModuleInfo] = {}
 
     @property
@@ -488,24 +569,46 @@ class Design:
         Visiting the whole root would also reach the "$unit" instances slang makes
         for definitions nobody instantiates; those are not part of the design.
         """
-        kind = pyslang.ast.SymbolKind.Instance
+        for sym in self._instances():
+            fn(sym)
 
-        def visit(node: Any) -> None:
-            if node.kind == kind:
-                fn(node)
+    def _instances(self, exhaustive: bool = False) -> tuple[Any, ...]:
+        """Every instance symbol under the top instance(s), in visit order.
+
+        The whole tree is traversed either way; the difference is who filters.
+        By default slang filters by node kind in C++ (`lookup_table`) and calls
+        back only for instances. Filtering in a Python callback instead means
+        2.1 million calls for 4,836 instances on the demo_ss sample, about fifteen
+        times slower; that is what `exhaustive=True` does, uncached, so tests can
+        cross-check the fast path. Nothing is pruned, so there is no list of
+        "kinds that can contain instances" to keep right.
+        The result is cached (as a tuple): a Design never changes.
+        """
+        if not exhaustive and self._instance_cache is not None:
+            return self._instance_cache
+        instance = pyslang.ast.SymbolKind.Instance
+        out: list[Any] = []
+
+        def plain(node: Any) -> None:
+            if node.kind == instance:
+                out.append(node)
 
         for top in self._comp.getRoot().topInstances:
-            top.visit(visit)
+            if exhaustive:
+                top.visit(plain)
+            else:
+                top.visit(lookup_table={instance: out.append})
+        result = tuple(out)
+        if not exhaustive:
+            self._instance_cache = result
+        return result
+
+    def elaborated_instance_paths(self, exhaustive: bool = False) -> list[str]:
+        """Hierarchical paths of all instances under the top(s), sorted."""
+        return sorted(str(s.hierarchicalPath) for s in self._instances(exhaustive))
 
     def elaborated_instance_count(self) -> int:
-        count = 0
-
-        def one(_: Any) -> None:
-            nonlocal count
-            count += 1
-
-        self._visit_instances(one)
-        return count
+        return len(self._instances())
 
     def snapshot(self) -> dict[str, InstanceSnap]:
         if self._snap is None:
@@ -566,6 +669,40 @@ class Design:
             symbol = getattr(e, "symbol", None)
             return str(getattr(symbol, "name", None) or port.name)
         return _clean_text(e.syntax)
+
+    def drivers_in(self, module: str, name: str, hints: Sequence[str] = ()) -> list[Driver]:
+        """Drivers of module-level `name` over every elaborated instance of `module`.
+
+        slang analyses one canonical body per distinct parameterisation, so every
+        instance is visited and each canonical body is looked at once. A declaration
+        initialiser counts as a driver. The implicit driver an inout port has from
+        its own port connection is not reported.
+        """
+        bodies: dict[str, Any] = {}
+
+        def one(sym: Any) -> None:
+            if sym.body.definition.name == module:
+                body = sym.canonicalBody or sym.body
+                bodies.setdefault(str(body.hierarchicalPath), body)
+
+        self._visit_instances(one)
+        if not bodies:
+            raise AdapterError(f"module {module!r} is not elaborated under the top")
+        out: list[Driver] = []
+        for body in bodies.values():
+            sym = body.find(name)
+            if sym is None:
+                raise AdapterError(f"module {module!r} has no member {name!r}")
+            try:
+                drivers = self._analyze().getDrivers(sym)
+            except TypeError as e:
+                raise AdapterError(f"{module}.{name}: not a net or variable, so it has no drivers") from e
+            for d in drivers:
+                if d.isInputPort or d.containingSymbol.kind != pyslang.ast.SymbolKind.InstanceBody:
+                    out.append(Driver(bool(d.isInputPort)))
+            if getattr(sym, "initializer", None) is not None:
+                out.append(Driver(False))
+        return out
 
     def drivers_of(self, hier_path: str) -> list[Driver]:
         symbol = self._comp.getRoot().lookupName(hier_path)
@@ -669,9 +806,12 @@ class Design:
         hdr = syn.header
         ports, ports_close = self._ports_of(syn, hdr, check)
         params: list[ParamInfo] = []
+        param_kinds: dict[str, str] = {}
         if hdr.parameters is not None:
             for decl in _items(hdr.parameters.declarations):
+                kind = _param_kind(decl)
                 for d in _items(decl.declarators):
+                    param_kinds[d.name.valueText] = kind
                     check(d.getFirstToken(), f"parameter {d.name.valueText!r}")
                     init = getattr(d, "initializer", None) or getattr(d, "assignment", None)
                     value = getattr(init, "expr", None) or getattr(init, "type", None)
@@ -681,6 +821,7 @@ class Design:
                             default=None if value is None else _text(value),
                             start=d.getFirstToken().location.offset,
                             end=d.getLastToken().range.end.offset,
+                            type_text=_param_type_text(decl),
                         )
                     )
         instances: list[InstanceInfo] = []
@@ -692,6 +833,7 @@ class Design:
                 instances.extend(self._instances_of(node, path))
 
         syn.visit(visit)
+        decls, assigns = self._body_items(syn, param_kinds, hdr.parameters is None)
         return ModuleInfo(
             name=name,
             path=path,
@@ -703,7 +845,84 @@ class Design:
             params=params,
             instances=instances,
             has_macros=has_macros,
+            name_end=hdr.name.range.end.offset,
+            ports_open=None
+            if hdr.ports is None or hdr.ports.kind != sk.AnsiPortList
+            else hdr.ports.openParen.location.offset,
+            params_open=None if hdr.parameters is None else hdr.parameters.hash.location.offset,
+            params_close=None if hdr.parameters is None else hdr.parameters.closeParen.location.offset,
+            port_list_kind="none"
+            if hdr.ports is None
+            else "ansi"
+            if hdr.ports.kind == sk.AnsiPortList
+            else "nonansi",
+            header_end=hdr.semi.range.end.offset,
+            body_indent=self._body_indent(syn),
+            decls=decls,
+            assigns=assigns,
+            header_has_macros=_header_has_macros(hdr, self._sm),
+            param_kinds=param_kinds,
+            other_names=_other_names(syn),
+            imports_end=hdr.imports[-1].getLastToken().range.end.offset if len(hdr.imports) else None,
+            ports_directive=None if hdr.ports is None else _conditional_directive(hdr.ports),
+            params_directive=None if hdr.parameters is None else _conditional_directive(hdr.parameters),
         )
+
+    def _body_indent(self, syn: Any) -> str:
+        """Indent of the line of the first body item (two spaces for an empty body)."""
+        members = list(syn.members)
+        if not members:
+            return "  "
+        loc = self._original(members[0].getFirstToken().location)
+        text = str(self._sm.getSourceText(loc.buffer)).encode()
+        off = loc.offset
+        start = max(text.rfind(b"\n", 0, off), text.rfind(b"\r", 0, off)) + 1
+        line = text[start:off]
+        return line[: len(line) - len(line.lstrip(b" \t"))].decode()
+
+    def _body_items(
+        self, syn: Any, param_kinds: dict[str, str], body_params_overridable: bool
+    ) -> tuple[list[DeclInfo], list[AssignInfo]]:
+        sk = pyslang.syntax.SyntaxKind
+        decls: list[DeclInfo] = []
+        assigns: list[AssignInfo] = []
+        for mem in syn.members:
+            if mem.kind in (sk.DataDeclaration, sk.NetDeclaration):
+                is_net = mem.kind == sk.NetDeclaration
+                base = _clean_text(mem.type)
+                if is_net:
+                    base = (mem.netType.valueText + " " + base).strip()
+                for d in _items(mem.declarators):
+                    dims = " ".join(_clean_text(x) for x in d.dimensions)
+                    decls.append(
+                        DeclInfo(
+                            d.name.valueText,
+                            "net" if is_net else "var",
+                            (base + " " + dims).strip(),
+                            d.getFirstToken().location.offset,
+                            d.getLastToken().range.end.offset,
+                        )
+                    )
+            elif mem.kind == sk.ContinuousAssign:
+                for a in _items(mem.assignments):
+                    if a.kind != sk.AssignmentExpression:
+                        continue
+                    assigns.append(
+                        AssignInfo(
+                            _clean_text(a.left),
+                            _clean_text(a.right),
+                            a.getFirstToken().location.offset,
+                            a.getLastToken().range.end.offset,
+                        )
+                    )
+            elif mem.kind == sk.ParameterDeclarationStatement:
+                decl = mem.parameter
+                kind = _param_kind(decl)
+                if kind != "local" and not body_params_overridable:
+                    kind = "local"
+                for d in _items(decl.declarators):
+                    param_kinds.setdefault(d.name.valueText, kind)
+        return decls, assigns
 
     @staticmethod
     def _ports_of(syn: Any, hdr: Any, check: Any) -> tuple[list[PortInfo], int | None]:
@@ -784,8 +1003,10 @@ class Design:
             sites = [None] * len(hier)
         overrides: list[ParamOverride] = []
         params_close: int | None = None
+        params_open: int | None = None
         if node.parameters is not None:
             params_close = node.parameters.closeParen.location.offset
+            params_open = node.parameters.hash.location.offset
             for a in _items(node.parameters.parameters):
                 expr = getattr(a, "expr", None)
                 overrides.append(
@@ -794,10 +1015,14 @@ class Design:
                         value="" if expr is None else _text(expr),
                         start=a.getFirstToken().location.offset,
                         end=a.getLastToken().range.end.offset,
+                        open=a.openParen.location.offset
+                        if a.kind == sk.NamedParamAssignment and a.openParen
+                        else None,
                     )
                 )
         out: list[InstanceInfo] = []
         first = _first_token(node)
+        in_generate = _in_generate(node)
         for hi, site in zip(hier, sites, strict=True):
             out.append(
                 InstanceInfo(
@@ -815,9 +1040,122 @@ class Design:
                     ports_close=hi.closeParen.location.offset,
                     connections=[_connection(c, sk) for c in _items(hi.connections)],
                     param_overrides=list(overrides),
+                    ports_open=hi.openParen.location.offset,
+                    params_open=params_open,
+                    in_generate=in_generate,
+                    is_array=len(hi.decl.dimensions) > 0,
+                    conn_directive=_conditional_directive(hi, skip_first=False),
+                    override_directive=None
+                    if node.parameters is None
+                    else _conditional_directive(node.parameters),
                 )
             )
         return out
+
+
+_DIRECTIVES = {
+    "IfDefDirective": "`ifdef",
+    "IfNDefDirective": "`ifndef",
+    "ElsIfDirective": "`elsif",
+    "ElseDirective": "`else",
+    "EndIfDirective": "`endif",
+}
+_GENERATE_KINDS = ("GenerateBlock", "IfGenerate", "LoopGenerate", "CaseGenerate")
+
+
+def _conditional_directive(node: Any, skip_first: bool = True) -> str | None:
+    """The first preprocessor conditional directive inside a parenthesised list.
+
+    The trivia of the opening token lies before the list, so it does not count
+    (`skip_first`); for an instance node the first token is the instance name.
+    """
+    found: list[str] = []
+    seen_first = not skip_first
+
+    def scan(n: Any) -> None:
+        nonlocal seen_first
+        if found or not isinstance(n, pyslang.parsing.Token):
+            return
+        if not seen_first:
+            seen_first = True
+            return
+        for t in n.trivia:
+            if t.kind == pyslang.parsing.TriviaKind.Directive:
+                syn = t.syntax()
+                name = _DIRECTIVES.get(str(syn.kind).rsplit(".", 1)[-1]) if syn is not None else None
+                if name is not None:
+                    found.append(name)
+                    return
+
+    node.visit(scan)
+    return found[0] if found else None
+
+
+def _in_generate(node: Any) -> bool:
+    p = node.parent
+    while p is not None:
+        kind = str(p.kind).rsplit(".", 1)[-1]
+        if kind in _GENERATE_KINDS:
+            return True
+        if kind in ("ModuleDeclaration", "InterfaceDeclaration", "ProgramDeclaration"):
+            return False
+        p = p.parent
+    return False
+
+
+def _other_names(syn: Any) -> frozenset[str]:
+    """Names in the module's own scope besides ports, parameters, nets and instances."""
+    sk = pyslang.syntax.SyntaxKind
+    tk = pyslang.parsing.TokenKind
+    names: set[str] = set()
+
+    def block_names(block: Any) -> None:
+        if block is None:
+            return
+        if block.kind == sk.IfGenerate:
+            block_names(block.block)
+            clause = block.elseClause
+            block_names(None if clause is None else clause.clause)
+        elif block.kind == sk.LoopGenerate:
+            block_names(block.block)
+        elif block.kind == sk.GenerateBlock:
+            if block.beginName is not None:
+                names.add(block.beginName.name.valueText)
+            elif block.label is not None:
+                names.add(block.label.name.valueText)
+
+    def members(items: Any) -> None:
+        for mem in items:
+            if mem.kind == sk.TypedefDeclaration:
+                names.add(mem.name.valueText)
+            elif mem.kind in (sk.FunctionDeclaration, sk.TaskDeclaration):
+                last = mem.prototype.name.getLastToken()
+                names.add(last.valueText)
+            elif mem.kind == sk.GenvarDeclaration:
+                names.update(
+                    t.valueText
+                    for ident in _items(mem.identifiers)
+                    for t in _tokens_of(ident)
+                    if t.kind == tk.Identifier
+                )
+            elif mem.kind in (sk.IfGenerate, sk.LoopGenerate):
+                block_names(mem)
+            elif mem.kind == sk.GenerateRegion:
+                members(mem.members)
+
+    members(syn.members)
+    return frozenset(names)
+
+
+def _tokens_of(node: Any) -> list[Any]:
+    out: list[Any] = []
+
+    def scan(n: Any) -> None:
+        if isinstance(n, pyslang.parsing.Token):
+            out.append(n)
+
+    node.visit(scan)
+    return out
 
 
 def _items(lst: Any) -> list[Any]:
@@ -839,6 +1177,39 @@ def _has_macro_tokens(node: Any, sm: Any) -> bool:
 
     node.visit(scan)
     return found
+
+
+def _header_has_macros(hdr: Any, sm: Any) -> bool:
+    """Macro tokens anywhere from the module name through the ";"."""
+    found = False
+
+    def scan(n: Any) -> None:
+        nonlocal found
+        if not found and isinstance(n, pyslang.parsing.Token) and sm.isMacroLoc(n.location):
+            found = True
+
+    for part in (hdr.name, hdr.imports, hdr.parameters, hdr.ports, hdr.semi):
+        if part is None:
+            continue
+        if isinstance(part, pyslang.parsing.Token):
+            scan(part)
+        elif hasattr(part, 'visit'):
+            part.visit(scan)
+        else:
+            for item in part:
+                item.visit(scan)
+    return found
+
+
+def _param_type_text(decl: Any) -> str:
+    typ = getattr(decl, "type", None)
+    return "" if typ is None else _clean_text(typ)
+
+
+def _param_kind(decl: Any) -> str:
+    if decl.keyword.kind == pyslang.parsing.TokenKind.LocalParamKeyword:
+        return "local"
+    return "type" if decl.kind == pyslang.syntax.SyntaxKind.TypeParameterDeclaration else "value"
 
 
 def _first_token(node: Any) -> Any:
@@ -869,6 +1240,13 @@ def _connection(c: Any, sk: Any) -> ConnInfo:
             expr = port
         else:
             expr = "" if c.expr is None else _text(c.expr)
+            return ConnInfo(
+                port,
+                expr,
+                _first_token(c).location.offset,
+                c.getLastToken().range.end.offset,
+                c.openParen.location.offset,
+            )
     elif c.kind == sk.WildcardPortConnection:
         port, expr = "*", ""
     else:  # OrderedPortConnection

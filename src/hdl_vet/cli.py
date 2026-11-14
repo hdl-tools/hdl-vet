@@ -12,6 +12,7 @@ from typing import Any
 
 from hdl_vet import __version__
 from hdl_vet.filelist import FilelistError
+from hdl_vet.ops import Vet, VetError
 from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import Session, SessionError
 from hdl_vet.slang_adapter import AdapterError
@@ -65,9 +66,12 @@ def _apply(args: argparse.Namespace) -> int:
         raise _InputError("-o/--outdir is required unless --dry-run is given")
     scripts = [_load_script(p) for p in args.script]
     session = Session(args.filelist, top=args.top, base=args.base)
+    vet = Vet(session)
     for name, _, func in scripts:
         try:
-            func(session)
+            func(vet)
+        except VetError as e:
+            raise _InputError(f"script {name}: {e}") from e
         except _OWN_ERRORS:
             raise
         except SystemExit as e:
@@ -77,16 +81,20 @@ def _apply(args: argparse.Namespace) -> int:
                 f"script {name} raised {type(e).__name__}: {e}\n{traceback.format_exc()}"
             ) from e
     ident = [(name, sha) for name, sha, _ in scripts]
-    result = session.finish(ident)
+    result = vet.finish(ident)
     if not result.ok:
         sys.stderr.write(result.report())
         return 1
+    applied = sum(1 for r in vet.log if r.status == "applied")
+    skipped = len(vet.log) - applied
+    summary = f"{applied} applied, {skipped} skipped"
     if args.dry_run:
         sys.stdout.write(result.diff)
+        sys.stderr.write(summary + "\n")
         return 0
     out = write_tree(session, result, args.outdir, scripts=ident, force=args.force)
     root = session.layout_root
-    lines = [f"wrote {out}"]
+    lines = [f"wrote {out}", summary]
     lines += [f"changed {p.relative_to(root).as_posix()}" for p in sorted(result.files, key=lambda p: p.as_posix())]
     sys.stdout.write("\n".join(lines) + "\n")
     return 0

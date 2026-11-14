@@ -5,6 +5,7 @@ Not part of the package. See the docstring of test_corpus.py for the interface.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -51,7 +52,10 @@ def _run_bag(*args: str) -> str:
     return proc.stdout
 
 
+@functools.lru_cache(maxsize=1)
 def _bag_version() -> str:
+    # One subprocess per test run, not per design: at about 0.65 s each this was
+    # over a minute of every run across the corpus files.
     return _run_bag("--version").strip()
 
 

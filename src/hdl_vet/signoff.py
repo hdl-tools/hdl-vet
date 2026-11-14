@@ -113,6 +113,10 @@ class Expect:
     kind: str
     path: str = "*"
     name: str = "*"
+    required: bool = True
+    exact: bool = False  # `path` is a hierarchical path, not a glob pattern
+    below: bool = False  # matches every path strictly below `path`
+
 
 
 def _port(p: tuple[str, int] | None) -> str | None:
@@ -153,7 +157,13 @@ def diff_snapshots(before: Mapping[str, InstanceSnap], after: Mapping[str, Insta
 
 
 def _matches(e: Expect, c: Change) -> bool:
-    return fnmatchcase(c.kind, e.kind) and fnmatchcase(c.path, e.path) and fnmatchcase(c.name, e.name)
+    if e.below:
+        where = c.path.startswith(e.path + ".")
+    elif e.exact:
+        where = c.path == e.path
+    else:
+        where = fnmatchcase(c.path, e.path)
+    return where and fnmatchcase(c.kind, e.kind) and fnmatchcase(c.name, e.name)
 
 
 def check_changes(
@@ -161,5 +171,5 @@ def check_changes(
 ) -> tuple[list[Change], list[Expect]]:
     """(changes no expectation covers, expectations that matched nothing)."""
     unexpected = [c for c in changes if not any(_matches(e, c) for e in expects)]
-    unmatched = [e for e in expects if not any(_matches(e, c) for c in changes)]
+    unmatched = [e for e in expects if e.required and not any(_matches(e, c) for c in changes)]
     return unexpected, unmatched
