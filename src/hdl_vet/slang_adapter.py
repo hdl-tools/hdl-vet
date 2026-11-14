@@ -30,6 +30,7 @@ __all__ = [
     "Driver",
     "InstanceInfo",
     "InstanceSite",
+    "LoadCache",
     "InstanceSnap",
     "ModuleInfo",
     "ParamInfo",
@@ -295,6 +296,40 @@ def _read(path: Path, overrides: Mapping[Path, bytes]) -> bytes:
     return data
 
 
+class LoadCache:
+    """File-system answers that stay valid across the loads of one session.
+
+    A session reads every file once and then re-loads from its own bytes, so
+    which real file an include name resolves to, and what a path resolves to,
+    cannot change between its loads. Without this, every re-load asked the file
+    system again for each include of each source (over a third of a re-load on
+    the demo_ss sample). Pass one instance to every `load` of a session; a load
+    without a cache behaves as before.
+    """
+
+    def __init__(self) -> None:
+        self.includes: dict[tuple[str, Path], Path | None] = {}
+        self.paths: dict[Path, Path] = {}
+        self.headers: dict[Path, bytes] = {}
+        self._filelist: Filelist | None = None
+
+    def bind(self, fl: Filelist) -> None:
+        """Tie the cache to one file list: its answers depend on the include directories."""
+        if self._filelist is None:
+            self._filelist = fl
+        elif self._filelist is not fl and self._filelist != fl:
+            raise AdapterError("a LoadCache belongs to one file list and cannot be shared with another")
+
+    def resolved(self, path: Path) -> Path:
+        # A relative path means something else after a change of directory.
+        if not path.is_absolute():
+            return path.resolve()
+        out = self.paths.get(path)
+        if out is None:
+            out = self.paths[path] = path.resolve()
+        return out
+
+
 class _Loader:
     """Builds syntax trees from bytes read in Python, on one shared SourceManager.
 
@@ -310,10 +345,15 @@ class _Loader:
     applying overrides.
     """
 
-    def __init__(self, fl: Filelist, overrides: Mapping[Path, bytes], sm: Any) -> None:
+    def __init__(
+        self, fl: Filelist, overrides: Mapping[Path, bytes], sm: Any, cache: LoadCache | None = None
+    ) -> None:
         self.fl = fl
         self.overrides = overrides
         self.sm = sm
+        # Even one load asks for the same header many times; a private cache
+        # covers that when the caller shares none.
+        self.cache = cache if cache is not None else LoadCache()
         self.real: dict[str, Path] = {}  # synthetic buffer path -> real path
         self.boms: dict[Path, bool] = {}
         self.bad: dict[Path, str] = {}  # headers that are not valid UTF-8
@@ -340,16 +380,29 @@ class _Loader:
         return out
 
     def _resolve(self, name: str, real_dir: Path) -> Path | None:
+        key = (name, real_dir)
+        known = self.cache.includes
+        if key in known:
+            return known[key]
+        found: Path | None = None
         for base in (real_dir, *self.fl.incdirs):
-            cand = (base / name).resolve()
+            cand = self.cache.resolved(base / name)
             if cand in self.overrides or cand.is_file():
-                return cand
-        return None
+                found = cand
+                break
+        known[key] = found
+        return found
 
     def _body(self, header: Path) -> str:
         body = self._bodies.get(header)
         if body is None:
-            raw = _read(header, self.overrides)
+            # A header the caller did not supply (one named only in an inactive
+            # `ifdef branch) is read from disk once per cache, not once per load.
+            raw = self.overrides.get(header)
+            if raw is None:
+                raw = self.cache.headers.get(header)
+            if raw is None:
+                raw = self.cache.headers[header] = _read(header, self.overrides)
             self.bytes[header] = raw
             try:
                 body = raw.decode("utf-8")
@@ -414,15 +467,21 @@ def load(
     base: Path | None = None,
     *,
     check_overrides: bool = True,
+    cache: LoadCache | None = None,
 ) -> Design:
     """Load a design.
 
     `filelist` is a path (read now) or an already parsed `Filelist`. With
     `check_overrides`, an override for a file that is neither a source nor an
-    included file is an error.
+    included file is an error. `cache` carries file-system answers from one load
+    of a session to the next (see LoadCache).
     """
     fl = filelist if isinstance(filelist, Filelist) else read_filelist(filelist, base=base)
-    ov = {Path(k).resolve(): bytes(v) for k, v in (overrides or {}).items()}
+    if cache is None:
+        ov = {Path(k).resolve(): bytes(v) for k, v in (overrides or {}).items()}
+    else:
+        cache.bind(fl)
+        ov = {cache.resolved(Path(k)): bytes(v) for k, v in (overrides or {}).items()}
 
     # A driver is used only for its configured diagnostic engine, option defaults
     # and SourceManager; "-" is a placeholder input that is never read.
@@ -435,7 +494,7 @@ def load(
     for name in _ALWAYS_WARN:
         driver.diagEngine.setSeverity(getattr(pyslang.Diags, name), pyslang.DiagnosticSeverity.Warning)
     bag = driver.createOptionBag()
-    loader = _Loader(fl, ov, driver.sourceManager)
+    loader = _Loader(fl, ov, driver.sourceManager, cache)
     pre = bag.preprocessorOptions
     pre.predefines = [n if v is None else f"{n}={v}" for n, v in fl.defines.items()]
     pre.additionalIncludePaths = [str(loader.mirror(d)) for d in fl.incdirs]
