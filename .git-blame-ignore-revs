@@ -1,0 +1,5 @@
+# Commits that only change layout. `git blame --ignore-revs-file .git-blame-ignore-revs`
+# skips them; GitHub reads this file by itself.
+
+# Reformat with ruff format
+814ae2f638bd5e35638e530c77d2b7309f347dcf
