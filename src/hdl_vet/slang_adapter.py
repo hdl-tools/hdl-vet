@@ -1334,6 +1334,11 @@ class Design:
         kinds = (dk.Module, dk.Interface, dk.Program)
         return sorted({d.name for d in self._comp.getDefinitions() if d.definitionKind in kinds})
 
+    def interfaces(self) -> frozenset[str]:
+        """Names of the interface definitions."""
+        dk = pyslang.ast.DefinitionKind
+        return frozenset(d.name for d in self._comp.getDefinitions() if d.definitionKind == dk.Interface)
+
     def module(self, name: str) -> ModuleInfo:
         info = self._modules.get(name)
         if info is None:

@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from hdl_vet import __version__
+from hdl_vet.paths import within
 from hdl_vet.session import Result, Session
 
 __all__ = ["OutputError", "write_tree"]
@@ -25,10 +26,6 @@ __all__ = ["OutputError", "write_tree"]
 
 class OutputError(Exception):
     """Raised when the output tree cannot or must not be written."""
-
-
-def _is_within(path: Path, parent: Path) -> bool:
-    return path == parent or parent in path.parents
 
 
 def _rel(path: Path, start: Path) -> str:
@@ -68,7 +65,7 @@ def write_tree(
     try:
         target = out.resolve()
         root = session.layout_root
-        if _is_within(target, root) or _is_within(root, target):
+        if within(target, root) or within(root, target):
             raise OutputError(f"{out}: output directory must be separate from the input tree {root}")
         if target.exists():
             if not target.is_dir():
@@ -97,9 +94,11 @@ def write_tree(
         for inc in session.filelist.incdirs:
             (tmp / inc.relative_to(root)).mkdir(parents=True, exist_ok=True)
         fl_path = session.filelist_path
-        fl_rel = fl_path.relative_to(root) if _is_within(fl_path, root) else Path(fl_path.name)
+        fl_rel = fl_path.relative_to(root) if within(fl_path, root) else Path(fl_path.name)
         (tmp / fl_rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp / fl_rel).write_bytes(_filelist_text(session, (root / fl_rel).parent, list(result.added)).encode())
+        # Every file of the tree but the manifest: what a later --force may replace without asking.
+        listed = sorted(p.relative_to(tmp).as_posix() for p in tmp.rglob("*") if p.is_file())
         manifest = {
             "tool": "hdl-vet",
             "version": __version__,
@@ -108,6 +107,7 @@ def write_tree(
             "scripts": [{"name": n, "sha256": h} for n, h in scripts],
             "changed": changed,
             "added": added,
+            "files": listed,
         }
         (tmp / "hdl-vet.json").write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
 
