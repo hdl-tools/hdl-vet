@@ -27,7 +27,7 @@ def _key_after(d: Diag, maps: Mapping[Path, Sequence[OffsetMap]]) -> tuple[_Loc,
     """Canonical location of an `after` diagnostic, and whether edited text holds it."""
     off = d.offset
     touched = False
-    if off is not None and d.path in maps:
+    if off is not None and d.path is not None and d.path in maps:
         for m in reversed(maps[d.path]):
             touched = touched or m.in_new_text(off)
             off = m.backward(off)
@@ -38,7 +38,7 @@ def _key_before(d: Diag, maps: Mapping[Path, Sequence[OffsetMap]]) -> tuple[_Loc
     """Canonical location of a baseline diagnostic, and whether an edit replaced it."""
     off = d.offset
     touched = False
-    if off is not None and d.path in maps:
+    if off is not None and d.path is not None and d.path in maps:
         stages = maps[d.path]
         for m in stages:
             touched = touched or m.replaces(off)
@@ -128,7 +128,7 @@ def diff_snapshots(before: Mapping[str, InstanceSnap], after: Mapping[str, Insta
     for path in sorted(set(before) | set(after)):
         a, b = before.get(path), after.get(path)
         if a is None:
-            assert b is not None
+            assert b is not None  # noqa: S101 - the path is in one of the two, and not in `before`
             out.append(Change("instance-added", path, "", None, b.module))
             continue
         if b is None:

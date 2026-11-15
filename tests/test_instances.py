@@ -253,13 +253,13 @@ import json
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, tree_bytes
 
 from hdl_vet.cli import main
 from hdl_vet.ops import DriftError, Vet, VetError
 from hdl_vet.output import write_tree
 from hdl_vet.session import Session, SessionError
 from hdl_vet.slang_adapter import load
+from vetkit import make_design, tree_bytes
 
 # A second small design: one child with a spare port and a spare parameter.
 CHILD = (
@@ -905,7 +905,7 @@ def test_remove_a_port_that_is_still_used_is_refused(family):
 
 
 def test_a_group_removes_the_last_port_with_its_driver(family):
-    vet, child, parent = family
+    vet, _child, _parent = family
     c = vet.module("child")
     with vet.group():
         c.remove_assign("dbg_o")
@@ -926,7 +926,7 @@ def test_a_group_removes_the_last_port_with_its_driver(family):
 
 
 def test_remove_a_parameter_and_its_override(family):
-    vet, child, parent = family
+    vet, _child, _parent = family
     c = vet.module("child")
     with pytest.raises(VetError, match="'W'"):
         c.remove_param("W")  # the port widths use it

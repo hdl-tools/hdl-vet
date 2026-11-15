@@ -156,10 +156,7 @@ class OffsetMap:
     def in_new_text(self, new: int) -> bool:
         """True when `new` lies inside replacement or inserted text of the result."""
         i = bisect.bisect_right(self._new_start, new)
-        for k in range(i):
-            if new < self._new_start[k] + len(self._s[k].text):
-                return True
-        return False
+        return any(new < self._new_start[k] + len(self._s[k].text) for k in range(i))
 
     def backward(self, new: int) -> int:
         i = bisect.bisect_right(self._new_start, new)

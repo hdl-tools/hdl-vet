@@ -127,12 +127,12 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from test_instances import CELLS
-from vetkit import make_design, span, tree_bytes
 
 from hdl_vet.cli import main
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session, SessionError
+from test_instances import CELLS
+from vetkit import make_design, span, tree_bytes
 
 A = """\
 def apply(vet):

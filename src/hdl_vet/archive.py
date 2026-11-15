@@ -19,6 +19,7 @@ index and the entries their meaning.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import tempfile
@@ -113,10 +114,8 @@ def write_archive(path: Path, index: dict[str, Any], files: dict[str, bytes]) ->
         raise ArchiveError(f"{dest}: cannot write the session archive ({e})") from e
     finally:
         if tmp is not None:
-            try:
+            with contextlib.suppress(OSError):
                 os.unlink(tmp)
-            except OSError:
-                pass
 
 
 def read_archive(path: Path) -> tuple[dict[str, Any], dict[str, bytes]]:

@@ -82,11 +82,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, span
 
 from hdl_vet.session import HEADER_MARK, Session, SessionError
 from hdl_vet.signoff import Change, Expect
 from hdl_vet.splice import SpliceError
+from vetkit import make_design, span
 
 SCRIPTS = [("dft.py", "0123456789abcdef" * 4), ("swap.py", "fedcba9876543210" * 4)]
 HEADER = b"// Modified by hdl-vet; scripts: dft.py sha256:0123456789ab, swap.py sha256:fedcba987654"

@@ -21,11 +21,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design
 
 from hdl_vet import slang_adapter
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from vetkit import make_design
 
 
 def write(root: Path, files: dict[str, str], filelist: str) -> Path:
@@ -226,7 +226,7 @@ def test_scan_cache_sees_a_generate_copy_added_later(tmp_path: Path):
     vet = Vet(Session(fl, top="t"))
     vet.punch_port("p0", "input", to="t.u_mid.u_leaf")  # fills the cache
     t = (tmp_path / "t.sv").resolve()
-    vet.design
+    _ = vet.design
     text = vet.text(t)
     at = text.index(b"endmodule")
     vet.splice(t, at, at, b"  if (1) begin : g\n    leaf u_gen (.a(a), .p0(1'b0));\n  end\n")

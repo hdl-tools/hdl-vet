@@ -77,11 +77,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design
 
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.output import write_tree
 from hdl_vet.session import Session
+from vetkit import make_design
 
 
 def design(tmp_path: Path, files: dict[str, str], top: str = "top") -> tuple[Vet, dict[str, Path]]:

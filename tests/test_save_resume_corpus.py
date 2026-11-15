@@ -18,13 +18,12 @@ import corpus
 
 pytest.importorskip("ruamel.yaml", reason="hdl-bag (and its YAML library) not installed")
 
-from test_instances_corpus import TECH_CELL, swap  # noqa: E402
-from test_ops_corpus import dft  # noqa: E402
-from vetkit import tree_bytes  # noqa: E402
-
-from hdl_vet.ops import Vet  # noqa: E402
-from hdl_vet.output import write_tree  # noqa: E402
-from hdl_vet.session import Session  # noqa: E402
+from hdl_vet.ops import Vet
+from hdl_vet.output import write_tree
+from hdl_vet.session import Session
+from test_instances_corpus import TECH_CELL, swap
+from test_ops_corpus import dft
+from vetkit import tree_bytes
 
 pytestmark = [
     pytest.mark.corpus,

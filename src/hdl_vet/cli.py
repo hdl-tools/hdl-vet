@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import sys
 import traceback
@@ -35,7 +36,11 @@ def _parser() -> argparse.ArgumentParser:
     a.add_argument("-s", "--script", action="append", default=[], type=Path, help="script defining apply(vet)")
     a.add_argument("--top", help="top module")
     a.add_argument("--base", type=Path, help="directory that relative file list entries resolve against")
-    a.add_argument("--dry-run", action="store_true", help="print the diff; no output tree is written (an archive named by --save still is)")
+    a.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the diff; no output tree is written (an archive named by --save still is)",
+    )
     a.add_argument("--force", action="store_true", help="replace an existing output directory")
     a.add_argument(
         "--save",
@@ -140,10 +145,8 @@ def _apply(args: argparse.Namespace) -> int:
             ) from e
         # Every script ends a stage: the next one sees what this one queued, as it would after a
         # resume. A state that cannot be loaded is left for sign-off to report.
-        try:
+        with contextlib.suppress(AdapterError):
             session.refresh()
-        except AdapterError:
-            pass
     ident = [(name, sha) for name, sha, _ in scripts]
     everything = [*session.scripts, *ident]
     ran = vet.log[first_record:]
@@ -191,10 +194,8 @@ def _apply(args: argparse.Namespace) -> int:
 def _tolerate_any_text() -> None:
     """Never crash on text the console encoding cannot represent: escape it."""
     for stream in (sys.stdout, sys.stderr):
-        try:
+        with contextlib.suppress(AttributeError, ValueError, OSError):
             stream.reconfigure(errors="backslashreplace")  # type: ignore[union-attr]
-        except (AttributeError, ValueError, OSError):
-            pass
 
 
 def main(argv: Sequence[str] | None = None) -> int:

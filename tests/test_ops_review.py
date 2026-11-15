@@ -74,10 +74,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design
 
 from hdl_vet.ops import DriftError, Vet, VetError
 from hdl_vet.session import Session
+from vetkit import make_design
 
 LEAF = b"module leaf(input logic a, output logic q);\n  assign q = a;\nendmodule\n"
 
@@ -201,7 +201,8 @@ def test_add_param_skip_needs_the_same_type(tmp_path: Path):
             lambda v: v.module("t").add_port("x", "input"),
         ),
         (
-            b"module t #(\n  parameter int A = 1\n`ifndef SYNTH\n  , parameter int B = 2\n`endif\n) (input logic a);\nendmodule\n",
+            b"module t #(\n  parameter int A = 1\n`ifndef SYNTH\n  , parameter int B = 2\n`endif\n"
+            b") (input logic a);\nendmodule\n",
             lambda v: v.module("t").add_param("C", 3),
         ),
     ],

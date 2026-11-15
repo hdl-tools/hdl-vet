@@ -31,7 +31,7 @@ from hdl_vet.archive import need_bool, need_dict, need_int, need_list, need_str
 from hdl_vet.filelist import Filelist, read_filelist
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
-from hdl_vet.splice import OffsetMap, Splice, SpliceError, SpliceQueue, apply_splices, unified_diff
+from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
 
 __all__ = ["ADDED_DIR", "HEADER_MARK", "Comparison", "Result", "Session", "SessionError", "describe"]
 
@@ -468,8 +468,9 @@ class Session:
         The diagnostics are compared by location through the edits made since `cp`, as
         sign-off does against the baseline; warnings inside an added file never count.
         The dangling (see `dangling_set`) and unused entries are compared as multisets of
-        (code, module, file, message); dangling entries inside an added file never count. `drove` are the (module, signal) pairs that
-        something removed used to drive: the bits driven afterwards must cover the bits driven before.
+        (code, module, file, message); dangling entries inside an added file never count. `drove` are the
+        (module, signal) pairs that something removed used to drive: the bits driven afterwards must cover
+        the bits driven before.
         """
         if not isinstance(cp, _Checkpoint):
             raise SessionError("not a checkpoint of this session")
@@ -857,7 +858,7 @@ class Session:
         self._editable = None if editable is None else {under(v) for v in need_list(editable)}
         self._added = {}
         self._added_base = {}
-        for a, name in zip(added_in, names):
+        for a, name in zip(added_in, names, strict=True):
             path = _stored_path(a["path"])
             self._added[f"{ADDED_DIR}/{name}"] = (path, files[f"added/{name}"])
             counts: Counter[tuple[str, str]] = Counter()
@@ -881,7 +882,9 @@ class Session:
             self._maps[p] = [
                 OffsetMap(
                     [
-                        Splice(p, need_int(s), need_int(e), base64.b64decode(need_str(t).encode("ascii"), validate=True))
+                        Splice(
+                            p, need_int(s), need_int(e), base64.b64decode(need_str(t).encode("ascii"), validate=True)
+                        )
                         for s, e, t in (need_list(item, 3) for item in need_list(stage))
                     ]
                 )

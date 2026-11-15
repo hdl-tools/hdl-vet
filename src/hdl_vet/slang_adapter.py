@@ -22,24 +22,24 @@ from hdl_vet.filelist import Filelist, read_filelist
 
 __all__ = [
     "AdapterError",
+    "AssignInfo",
     "ConnInfo",
     "DeclInfo",
-    "AssignInfo",
     "Design",
     "Diag",
     "Driver",
     "InstanceInfo",
     "InstanceSite",
-    "LoadCache",
     "InstanceSnap",
+    "LoadCache",
     "ModuleInfo",
     "ParamInfo",
     "ParamOverride",
     "PortInfo",
-    "load",
-    "syntax_equivalent",
     "driven_bases",
     "is_simple_identifier",
+    "load",
+    "syntax_equivalent",
     "tokens",
 ]
 
@@ -100,7 +100,8 @@ class Diag:
     offset: int | None
     in_macro: bool = False
     module: str | None = None  # the module the diagnostic is located in (set for dangling / unused entries)
-    # the name of the signal the entry is about, slang's first argument (set for dangling / unused entries); not part of equality
+    # the name of the signal the entry is about, slang's first argument (set for dangling / unused entries);
+    # not part of equality
     symbol: str | None = field(default=None, compare=False, repr=False)
     # UndrivenPort entries: the port's external name and whether its module reads it; None / False when
     # the symbol could not be resolved (not part of equality)
@@ -896,7 +897,7 @@ class Design:
         tree = self._trees.get(key)
         if tree is None:
             raise AdapterError(f"{path}: not a source file of this design")
-        out = pyslang.syntax.SyntaxPrinter.printFile(tree).encode()
+        out = str(pyslang.syntax.SyntaxPrinter.printFile(tree)).encode()
         if self._boms[key] and not out.startswith(_BOM):
             out = _BOM + out
         return out
@@ -1024,7 +1025,10 @@ class Design:
 
     @staticmethod
     def _body_of(sym: Any) -> Any:
-        """The instance body a diagnostic's symbol belongs to (an instance's own, else the one holding its scope), or None."""
+        """The instance body a diagnostic's symbol belongs to (an instance's own, else the one holding its scope).
+
+        None when there is none.
+        """
         if sym is None:
             return None
         try:
@@ -1049,14 +1053,7 @@ class Design:
             inner = port.internalSymbol
             if inner is None or inner.name != signal:
                 continue
-            hits: list[int] = []
-
-            def visit(node: Any) -> None:
-                if isinstance(node, pyslang.ast.NamedValueExpression) and node.symbol == inner:
-                    hits.append(1)
-
-            body.visit(visit)
-            return str(port.name), bool(hits)
+            return str(port.name), _reads_symbol(body, inner)
         return None, True
 
     def _unused_pass(self) -> list[Diag]:
@@ -1520,7 +1517,7 @@ class Design:
     def _ports_of(syn: Any, hdr: Any, check: Any) -> tuple[list[PortInfo], int | None]:
         sk = pyslang.syntax.SyntaxKind
         tk = pyslang.parsing.TokenKind
-        dirs = {
+        dirs: dict[Any, str] = {
             tk.InputKeyword: "input",
             tk.OutputKeyword: "output",
             tk.InOutKeyword: "inout",
@@ -1854,6 +1851,18 @@ def _tokens_of(node: Any) -> list[Any]:
     return out
 
 
+def _reads_symbol(body: Any, symbol: Any) -> bool:
+    """True when an expression in `body` names `symbol`."""
+    hits: list[int] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, pyslang.ast.NamedValueExpression) and node.symbol == symbol:
+            hits.append(1)
+
+    body.visit(visit)
+    return bool(hits)
+
+
 def _items(lst: Any) -> list[Any]:
     """The nodes of a separated syntax list (separator tokens dropped)."""
     return [x for x in lst if not isinstance(x, pyslang.parsing.Token)]
@@ -1926,9 +1935,8 @@ def _first_token(node: Any) -> Any:
     found: list[Any] = []
 
     def scan(n: Any) -> None:
-        if not found and isinstance(n, pyslang.parsing.Token):
-            if n.location.buffer == buf and n.location.offset >= cut:
-                found.append(n)
+        if not found and isinstance(n, pyslang.parsing.Token) and n.location.buffer == buf and n.location.offset >= cut:
+            found.append(n)
 
     node.visit(scan)
     return found[0] if found else node.getFirstToken()

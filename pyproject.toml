@@ -22,10 +22,50 @@ vet = "hdl_vet.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=8",
+    # Exact versions: a new release of either can add findings, which must not break
+    # an unrelated pull request. Bump them deliberately, together with any cleanup.
+    "ruff==0.17.5",
+    "mypy==2.4.1",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hdl_vet"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "W",  # pycodestyle
+    "F",       # pyflakes
+    "I",       # import order
+    "B",       # bugbear
+    "UP",      # outdated syntax for the supported Python versions
+    "S",       # bandit: exec, subprocess, pickle, temp files
+    "SIM",     # needless complexity
+    "C4",      # comprehensions
+    "RUF",     # ruff's own, including unused `noqa`
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = [
+    "S101",    # assert is what tests are made of
+    "S603",    # tests run the `bag` CLI with fixed arguments
+    "SIM117",  # nested `with` reads better for pytest.raises around vet.group()
+    "RUF043",  # `match=` patterns are short regular expressions on purpose
+]
+
+[tool.mypy]
+files = ["src"]
+strict = true
+python_version = "3.11"
+
+[[tool.mypy.overrides]]
+# pyslang ships no type information; only hdl_vet.slang_adapter imports it.
+module = ["pyslang", "pyslang.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
