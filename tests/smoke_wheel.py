@@ -32,7 +32,9 @@ def apply(vet):
 def main() -> int:
     installed = Path(hdl_vet.__file__).resolve().parent
     source = REPO / "src" / "hdl_vet"
-    if installed == source or REPO in installed.parents:
+    # The environment may live inside the checkout (CI creates it there); what must not
+    # happen is that the package comes from `src`, as it would with an editable install.
+    if installed == source or (REPO / "src") in installed.parents:
         print(f"FAIL: hdl_vet was imported from the source tree ({installed}), not from an installed wheel")
         return 1
     missing = sorted({p.name for p in source.glob("*.py")} - {p.name for p in installed.glob("*.py")})
