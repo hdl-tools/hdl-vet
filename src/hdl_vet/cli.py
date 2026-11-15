@@ -90,12 +90,16 @@ def _apply(args: argparse.Namespace) -> int:
     summary = f"{applied} applied, {skipped} skipped"
     if args.dry_run:
         sys.stdout.write(result.diff)
+        sys.stderr.write("".join(f"added {name}\n" for name in result.added))
+        sys.stderr.write("".join(f"note: {note}\n" for note in vet.notes))
         sys.stderr.write(summary + "\n")
         return 0
     out = write_tree(session, result, args.outdir, scripts=ident, force=args.force)
     root = session.layout_root
     lines = [f"wrote {out}", summary]
     lines += [f"changed {p.relative_to(root).as_posix()}" for p in sorted(result.files, key=lambda p: p.as_posix())]
+    lines += [f"added {name}" for name in result.added]
+    lines += [f"note: {note}" for note in vet.notes]
     sys.stdout.write("\n".join(lines) + "\n")
     return 0
 
