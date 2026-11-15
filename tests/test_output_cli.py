@@ -163,6 +163,7 @@ def test_untouched_design_gives_an_identical_tree(kit, tmp_path: Path):
         "scripts": [],
         "changed": {},
         "added": {},
+        "files": ["design.f", "rtl/alt_leaf.sv", "rtl/leaf.sv", "rtl/mid.sv", "rtl/top.sv"],
     }
 
 
