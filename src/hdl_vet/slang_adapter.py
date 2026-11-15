@@ -66,6 +66,8 @@ _CODE_NAMES: dict[Any, str] = {
 }
 _INCLUDE_RE = re.compile(r'`include\s+"([^"\r\n]+)"')
 _MAX_INCLUDE_DEPTH = 64
+_GROWTH_FACTOR = 4  # start over when the buffers exceed this multiple of the first load's...
+_GROWTH_FLOOR = 2000  # ...plus this many
 _SAFE_NAME = re.compile(r"[A-Za-z0-9._-]+")
 
 
@@ -297,21 +299,34 @@ def _read(path: Path, overrides: Mapping[Path, bytes]) -> bytes:
 
 
 class LoadCache:
-    """File-system answers that stay valid across the loads of one session.
+    """What stays valid across the loads of one session.
 
-    A session reads every file once and then re-loads from its own bytes, so
-    which real file an include name resolves to, and what a path resolves to,
-    cannot change between its loads. Without this, every re-load asked the file
-    system again for each include of each source (over a third of a re-load on
-    the demo_ss sample). Pass one instance to every `load` of a session; a load
-    without a cache behaves as before.
+    File-system answers: a session reads every file once and then re-loads from
+    its own bytes, so which real file an include name resolves to, and what a
+    path resolves to, cannot change between its loads. Without this, every re-load
+    asked the file system again for each include of each source (over a third of a
+    re-load on the demo_ss sample).
+
+    Parse trees: unless `reuse` is False, the cache also keeps one slang driver /
+    SourceManager and the tree of every source it parsed, so a later load parses
+    only the sources whose bytes changed. Whenever reuse is not provably safe (a
+    header's bytes changed, an operation failed half-way) the cache starts over
+    with a new SourceManager and parses everything; correctness never depends on a
+    tree being reused. A cache is bound to one file list and one `top`.
+
+    Pass one instance to every `load` of a session; a load without a cache
+    behaves as before.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, reuse: bool = True) -> None:
         self.includes: dict[tuple[str, Path], Path | None] = {}
         self.paths: dict[Path, Path] = {}
         self.headers: dict[Path, bytes] = {}
+        self.reuse = reuse
+        self.parsed = 0  # source files parsed by loads using this cache, in total
         self._filelist: Filelist | None = None
+        self._top: Any = _UNBOUND
+        self._shared: _Shared | None = None
 
     def bind(self, fl: Filelist) -> None:
         """Tie the cache to one file list: its answers depend on the include directories."""
@@ -319,6 +334,15 @@ class LoadCache:
             self._filelist = fl
         elif self._filelist is not fl and self._filelist != fl:
             raise AdapterError("a LoadCache belongs to one file list and cannot be shared with another")
+
+    def bind_top(self, top: str | None) -> None:
+        """Tie the cache to one top module: kept trees are parsed with it in their options."""
+        if self._top is _UNBOUND:
+            self._top = top
+        elif self._top != top:
+            raise AdapterError(
+                f"a LoadCache belongs to one top module ({self._top!r}); it cannot load top {top!r}"
+            )
 
     def resolved(self, path: Path) -> Path:
         # A relative path means something else after a change of directory.
@@ -330,37 +354,83 @@ class LoadCache:
         return out
 
 
-class _Loader:
-    """Builds syntax trees from bytes read in Python, on one shared SourceManager.
+_UNBOUND = object()
 
-    slang never touches the file system: every source and every header the design
-    includes is handed over as text (`fromText` for sources, `assignText` for
-    headers) under a synthetic ASCII path, which sidesteps its narrow-string path
-    handling. The synthetic tree mirrors the real one (`<anchor>/__hdlvet__/<drive>/
-    <real components>`, non-ASCII components renamed consistently), so relative
-    names, ".." included, resolve inside it exactly as they would on the real tree.
-    Each header is registered under the mirror of the file it really resolves to;
-    slang is given the mirrored include directories. Python resolves the real file
-    in slang's order (the includer's real directory, then the include directories),
-    applying overrides.
+
+def _header_raw(header: Path, overrides: Mapping[Path, bytes], cache: LoadCache) -> bytes:
+    """The bytes of a header: the caller's, else the file's (read once per cache)."""
+    raw = overrides.get(header)
+    if raw is None:
+        raw = cache.headers.get(header)
+    if raw is None:
+        raw = cache.headers[header] = _read(header, overrides)
+    return raw
+
+
+@dataclass
+class _Entry:
+    """A source's parse tree and the bytes it was parsed from."""
+
+    raw: bytes
+    tree: Any
+    deps: frozenset[Path]  # headers the adapter's scan of the text resolved (closure)
+    headers: frozenset[Path]  # real paths of the headers slang included while parsing it
+
+
+class _Unsafe(Exception):
+    """slang bound an include the adapter did not predict, or a registered key clashed:
+    what an earlier load registered may have leaked into this tree, so the history matters."""
+
+
+class _Shared:
+    """One slang driver and SourceManager, and what was registered on it.
+
+    All trees of a compilation must come from the same SourceManager, and slang
+    refuses a second buffer under a path it already holds; so this state only
+    grows (new buffers, new synthetic names) and is thrown away as a whole when
+    reuse is not provably safe. Designs hold on to the instance they were built
+    from, so discarding it never affects them. Nothing a Design reads is ever
+    changed after the fact: `real` and `hbytes` only gain keys whose values stay
+    the same, `entries` is read only while loading.
     """
 
-    def __init__(
-        self, fl: Filelist, overrides: Mapping[Path, bytes], sm: Any, cache: LoadCache | None = None
-    ) -> None:
+    def __init__(self, fl: Filelist, top: str | None) -> None:
+        # A driver is used only for its configured diagnostic engine, option defaults
+        # and SourceManager; "-" is a placeholder input that is never read.
+        driver = pyslang.driver.Driver()
+        driver.addStandardArgs()
+        if not driver.parseCommandLine("slang -", pyslang.driver.CommandLineOptions()):
+            raise AdapterError("slang rejected its default command line")
+        if not driver.processOptions():
+            raise AdapterError("slang rejected its default options")
+        for name in _ALWAYS_WARN:
+            driver.diagEngine.setSeverity(getattr(pyslang.Diags, name), pyslang.DiagnosticSeverity.Warning)
+        self.driver = driver  # keeps the SourceManager and engine alive
+        self.sm = driver.sourceManager
+        self.engine = driver.diagEngine
         self.fl = fl
-        self.overrides = overrides
-        self.sm = sm
-        # Even one load asks for the same header many times; a private cache
-        # covers that when the caller shares none.
-        self.cache = cache if cache is not None else LoadCache()
-        self.real: dict[str, Path] = {}  # synthetic buffer path -> real path
-        self.boms: dict[Path, bool] = {}
-        self.bad: dict[Path, str] = {}  # headers that are not valid UTF-8
-        self.bytes: dict[Path, bytes] = {}  # raw bytes of every header read
-        self._bodies: dict[Path, str] = {}
         self._names: dict[str, str] = {}
         self._root = Path(fl.root.anchor) / "__hdlvet__"
+        self.real: dict[str, Path] = {}  # synthetic buffer path -> real path
+        self.hbytes: dict[Path, bytes] = {}  # raw bytes of every header registered
+        self.bad: dict[Path, str] = {}  # headers that are not valid UTF-8
+        self.bodies: dict[Path, str] = {}
+        self.entries: dict[Path, _Entry] = {}
+        self.versions = 0
+        self.unsafe = False  # reuse was found unsafe: every later load starts over
+        self.initial: int | None = None  # buffers after the first complete load
+        self.nbuf = 0  # buffers the SourceManager holds, as of the last parse
+        self.dirty = False  # a registration is under way; if it fails the state is unusable
+        bag = driver.createOptionBag()
+        pre = bag.preprocessorOptions
+        pre.predefines = [n if v is None else f"{n}={v}" for n, v in fl.defines.items()]
+        pre.additionalIncludePaths = [str(self.mirror(d)) for d in fl.incdirs]
+        bag.preprocessorOptions = pre
+        if top is not None:
+            comp_opts = bag.compilationOptions
+            comp_opts.topModules = {top}
+            bag.compilationOptions = comp_opts
+        self.bag = bag
 
     def _component(self, part: str) -> str:
         if _SAFE_NAME.fullmatch(part):
@@ -379,6 +449,85 @@ class _Loader:
             out = out / self._component(part)
         return out
 
+    def renamed(self, key: Path) -> Path:
+        """A fresh name for the buffer of a source: `mirror()` can never produce it.
+
+        '@' is not in _SAFE_NAME and `_component` never emits it, so no include of a
+        real file can resolve to a source's buffer, and slang never holds two
+        buffers under one name when a source is parsed again.
+        """
+        while True:
+            self.versions += 1
+            cand = key.with_name(f"{key.name}@{self.versions}")
+            if _key(cand) not in self.real:
+                return cand
+
+    def grown(self) -> bool:
+        """True once the SourceManager holds far more buffers than after the first load.
+
+        Every re-parse leaves its buffers (and those of its macro expansions) behind;
+        a session that edits one file a thousand times would otherwise carry them all.
+        """
+        return self.initial is not None and self.nbuf > _GROWTH_FACTOR * self.initial + _GROWTH_FLOOR
+
+    def headers_unchanged(self, overrides: Mapping[Path, bytes], cache: LoadCache) -> bool:
+        """True if every registered header still has the bytes it was registered with."""
+        for header, raw in self.hbytes.items():
+            try:
+                if _header_raw(header, overrides, cache) != raw:
+                    return False
+            except AdapterError:
+                return False
+        return True
+
+    def included(self, sources: Sequence[Path]) -> set[Path]:
+        """Real paths of the headers slang included while parsing exactly `sources`."""
+        out: set[Path] = set()
+        for src in sources:
+            out |= self.entries[src].headers
+        return out
+
+
+class _Loader:
+    """Builds syntax trees from bytes read in Python, on one shared SourceManager.
+
+    slang never touches the file system: every source and every header the design
+    includes is handed over as text (`fromText` for sources, `assignText` for
+    headers) under a synthetic ASCII path, which sidesteps its narrow-string path
+    handling. The synthetic tree mirrors the real one (`<anchor>/__hdlvet__/<drive>/
+    <real components>`, non-ASCII components renamed consistently), so relative
+    names, ".." included, resolve inside it exactly as they would on the real tree.
+    Each header is registered under the mirror of the file it really resolves to;
+    slang is given the mirrored include directories. Python resolves the real file
+    in slang's order (the includer's real directory, then the include directories),
+    applying overrides.
+
+    One `_Loader` serves one load; what outlives it lives in `_Shared`.
+    """
+
+    def __init__(
+        self,
+        fl: Filelist,
+        overrides: Mapping[Path, bytes],
+        shared: _Shared,
+        cache: LoadCache,
+        strict: bool = False,
+    ) -> None:
+        self.strict = strict  # a reused state: anything unexpected means "start over"
+        self.fl = fl
+        self.overrides = overrides
+        self.shared = shared
+        self.sm = shared.sm
+        self.cache = cache
+        self.boms: dict[Path, bool] = {}  # per load: a Design must keep its own
+
+    @property
+    def real(self) -> dict[str, Path]:
+        return self.shared.real
+
+    def mirror(self, real: Path) -> Path:
+        return self.shared.mirror(real)
+
     def _resolve(self, name: str, real_dir: Path) -> Path | None:
         key = (name, real_dir)
         known = self.cache.includes
@@ -394,48 +543,92 @@ class _Loader:
         return found
 
     def _body(self, header: Path) -> str:
-        body = self._bodies.get(header)
+        sh = self.shared
+        body = sh.bodies.get(header)
         if body is None:
             # A header the caller did not supply (one named only in an inactive
             # `ifdef branch) is read from disk once per cache, not once per load.
-            raw = self.overrides.get(header)
-            if raw is None:
-                raw = self.cache.headers.get(header)
-            if raw is None:
-                raw = self.cache.headers[header] = _read(header, self.overrides)
-            self.bytes[header] = raw
+            raw = _header_raw(header, self.overrides, self.cache)
             try:
                 body = raw.decode("utf-8")
             except UnicodeDecodeError as e:
-                self.bad[header] = str(e)
+                sh.bad[header] = str(e)
                 body = raw.decode("utf-8", errors="replace")
-            self._bodies[header] = body
+            sh.hbytes[header] = raw
+            sh.bodies[header] = body
         return body
 
-    def _register_includes(self, text: str, real_dir: Path, depth: int = 0) -> None:
+    def _register_includes(
+        self, text: str, real_dir: Path, depth: int = 0, raw_dir: Path | None = None
+    ) -> None:
+        """Hand every header `text` includes (recursively) to slang as text.
+
+        `raw_dir` is set when the includer was registered under a raw real path (an
+        include named by an absolute path): slang then looks its relative includes up
+        next to that raw path, not in the mirror, so they are registered there too.
+        """
         if depth > _MAX_INCLUDE_DEPTH:
             return
+        sh = self.shared
         for name in _INCLUDE_RE.findall(text):
             header = self._resolve(name, real_dir)
             if header is None:
                 continue
             body = self._body(header)
+            child_raw: Path | None = None
             if Path(name).is_absolute():
                 keys = [Path(name)] if name.isascii() else []
+                child_raw = Path(os.path.normpath(name)).parent if keys else None
             else:
-                # Where slang looks first: next to the includer. It differs from the
-                # mirror of the resolved file only through case or a symlink.
-                keys = [self.mirror(Path(os.path.normpath(real_dir / name)))]
+                # Where slang looks first: next to the includer. Register that key only
+                # when the file really resolves there: a header found through an include
+                # directory must not appear next to its includer, or its own relative
+                # includes would resolve from the wrong directory.
+                keys = []
+                if self.cache.resolved(real_dir / name) == header:
+                    keys.append(self.mirror(Path(os.path.normpath(real_dir / name))))
+                    if raw_dir is not None and name.isascii():
+                        raw = Path(os.path.normpath(raw_dir / name))
+                        keys.append(raw)
+                        child_raw = raw.parent
             keys.append(self.mirror(header))
             fresh = False
             for key in keys:
-                if _key(key) in self.real:
+                k = _key(key)
+                known = sh.real.get(k)
+                if known is not None:
+                    if known != header and self.strict:
+                        raise _Unsafe()
                     continue
-                self.real[_key(key)] = header
+                sh.real[k] = header
                 self.sm.assignText(str(key), body)
                 fresh = True
             if fresh:
-                self._register_includes(body, header.parent, depth + 1)
+                self._register_includes(body, header.parent, depth + 1, child_raw)
+
+    def deps(self, text: str, real_dir: Path, seen: set[Path] | None = None, depth: int = 0) -> set[Path]:
+        """The closure of headers the scan of `text` resolves (what slang may include)."""
+        seen = set() if seen is None else seen
+        if depth > _MAX_INCLUDE_DEPTH:
+            return seen
+        for name in _INCLUDE_RE.findall(text):
+            header = self._resolve(name, real_dir)
+            if header is None or header in seen:
+                continue
+            seen.add(header)
+            self.deps(self._body(header), header.parent, seen, depth + 1)
+        return seen
+
+    def reusable(self, src: Path) -> Any | None:
+        """The kept tree of `src` if it was parsed from exactly the bytes now given."""
+        entry = self.shared.entries.get(src)
+        if entry is None or not self.cache.reuse:
+            return None
+        raw = _read(src, self.overrides)
+        if entry.raw != raw:
+            return None
+        self.boms[src] = raw.startswith(_BOM)
+        return entry.tree
 
     def tree(self, src: Path, bag: Any) -> Any:
         raw = _read(src, self.overrides)
@@ -443,21 +636,41 @@ class _Loader:
             text = raw.decode("utf-8")
         except UnicodeDecodeError as e:
             raise AdapterError(f"{src}: not valid UTF-8, refusing to load ({e})") from e
+        sh = self.shared
         self.boms[src] = raw.startswith(_BOM)
-        key = self.mirror(src)
-        self.real[_key(key)] = src
+        key = sh.renamed(self.mirror(src))
+        # From here until the tree is stored the state is half-registered.
+        sh.dirty = True
+        sh.real[_key(key)] = src
         self._register_includes(text, src.parent)
-        return pyslang.syntax.SyntaxTree.fromText(text, self.sm, src.name, str(key), bag)
-
-    def included(self) -> set[Path]:
-        """Real paths of the headers slang actually included."""
-        out: set[Path] = set()
-        for buf in self.sm.getAllBuffers():
-            if self.sm.getIncludedFrom(buf).buffer.id != 0:
-                path = self.real.get(_key(Path(str(self.sm.getFullPath(buf)))))
-                if path is not None:
-                    out.add(path)
-        return out
+        deps = frozenset(self.deps(text, src.parent))
+        before = len(self.sm.getAllBuffers())
+        tree = pyslang.syntax.SyntaxTree.fromText(text, self.sm, src.name, str(key), bag)
+        buffers = self.sm.getAllBuffers()
+        sh.nbuf = len(buffers)
+        headers: set[Path] = set()
+        unexpected = False
+        for buf in buffers[before:]:
+            if self.sm.getIncludedFrom(buf).buffer.id == 0:
+                continue  # not an include
+            path = sh.real.get(_key(Path(str(self.sm.getFullPath(buf)))))
+            if path is None:
+                unexpected = True
+            else:
+                headers.add(path)
+        if not headers <= deps:
+            unexpected = True
+        if unexpected and self.cache.reuse:
+            # slang bound an include the scan did not predict (a name built by a macro):
+            # it may have found a header an earlier load registered. This state's
+            # history matters from now on, so it is not kept.
+            sh.unsafe = True
+            if self.strict:
+                raise _Unsafe()
+        sh.entries[src] = _Entry(raw, tree, deps, frozenset(headers))
+        sh.dirty = False
+        self.cache.parsed += 1
+        return tree
 
 
 def load(
@@ -473,41 +686,67 @@ def load(
 
     `filelist` is a path (read now) or an already parsed `Filelist`. With
     `check_overrides`, an override for a file that is neither a source nor an
-    included file is an error. `cache` carries file-system answers from one load
-    of a session to the next (see LoadCache).
+    included file is an error. `cache` carries what stays valid from one load
+    of a session to the next (see LoadCache): file-system answers and parse trees.
     """
     fl = filelist if isinstance(filelist, Filelist) else read_filelist(filelist, base=base)
     if cache is None:
         ov = {Path(k).resolve(): bytes(v) for k, v in (overrides or {}).items()}
+        # Even one load asks for the same header many times; a private cache
+        # covers that. Nothing of it outlives the load.
+        use = LoadCache(reuse=False)
     else:
         cache.bind(fl)
+        cache.bind_top(top)
         ov = {cache.resolved(Path(k)): bytes(v) for k, v in (overrides or {}).items()}
+        use = cache
 
-    # A driver is used only for its configured diagnostic engine, option defaults
-    # and SourceManager; "-" is a placeholder input that is never read.
-    driver = pyslang.driver.Driver()
-    driver.addStandardArgs()
-    if not driver.parseCommandLine("slang -", pyslang.driver.CommandLineOptions()):
-        raise AdapterError("slang rejected its default command line")
-    if not driver.processOptions():
-        raise AdapterError("slang rejected its default options")
-    for name in _ALWAYS_WARN:
-        driver.diagEngine.setSeverity(getattr(pyslang.Diags, name), pyslang.DiagnosticSeverity.Warning)
-    bag = driver.createOptionBag()
-    loader = _Loader(fl, ov, driver.sourceManager, cache)
-    pre = bag.preprocessorOptions
-    pre.predefines = [n if v is None else f"{n}={v}" for n, v in fl.defines.items()]
-    pre.additionalIncludePaths = [str(loader.mirror(d)) for d in fl.incdirs]
-    bag.preprocessorOptions = pre
-    if top is not None:
-        comp_opts = bag.compilationOptions
-        comp_opts.topModules = {top}
-        bag.compilationOptions = comp_opts
+    shared = use._shared if use.reuse else None
+    if shared is not None and (shared.unsafe or shared.grown() or not shared.headers_unchanged(ov, use)):
+        shared = None  # not provably safe (or too big) to reuse: start over
+    for _attempt in (0, 1):
+        reused = shared is not None
+        if shared is None:
+            shared = _Shared(fl, top)
+            if use.reuse:
+                use._shared = shared
+        try:
+            return _load(fl, top, ov, check_overrides, use, shared, strict=reused)
+        except _Unsafe:
+            shared = use._shared = None  # redo the load on a fresh state
+        except BaseException as e:
+            # Entries are stored only once whole, so a refusal before any registration
+            # (bad UTF-8, top not found) leaves the state valid; anything else may
+            # have left a half-registered header or version behind.
+            if shared.dirty or not isinstance(e, AdapterError):
+                use._shared = None
+                if reused and not isinstance(e, AdapterError):
+                    shared = None  # the reused state may be why (slang remembers failed lookups)
+                    continue
+            raise
+    raise AssertionError("a fresh state cannot be unsafe")  # pragma: no cover
 
-    trees = [loader.tree(src, bag) for src in fl.files]
-    used = loader.included()
-    for header in sorted(used & loader.bad.keys()):
-        raise AdapterError(f"{header}: not valid UTF-8, refusing to load ({loader.bad[header]})")
+
+def _load(
+    fl: Filelist,
+    top: str | None,
+    ov: dict[Path, bytes],
+    check_overrides: bool,
+    cache: LoadCache,
+    shared: _Shared,
+    strict: bool = False,
+) -> Design:
+    loader = _Loader(fl, ov, shared, cache, strict)
+    bag = shared.bag
+    trees = []
+    for src in fl.files:
+        tree = loader.reusable(src)
+        trees.append(tree if tree is not None else loader.tree(src, bag))
+    if shared.initial is None:
+        shared.initial = shared.nbuf
+    used = shared.included(fl.files)
+    for header in sorted(used & shared.bad.keys()):
+        raise AdapterError(f"{header}: not valid UTF-8, refusing to load ({shared.bad[header]})")
     if check_overrides:
         for key in ov:
             if key not in fl.files and key not in used:
@@ -518,26 +757,35 @@ def load(
         comp.addSyntaxTree(tree)
     if top is not None and not comp.getRoot().topInstances:
         raise AdapterError(f"top module {top!r} not found")
-    return Design(fl, loader, driver.diagEngine, dict(zip(fl.files, trees, strict=True)), comp)
+    return Design(fl, loader, shared, dict(zip(fl.files, trees, strict=True)), comp, used)
 
 
 class Design:
     def __init__(
-        self, fl: Filelist, loader: _Loader, engine: Any, trees: dict[Path, Any], comp: Any
+        self,
+        fl: Filelist,
+        loader: _Loader,
+        shared: _Shared,
+        trees: dict[Path, Any],
+        comp: Any,
+        included: set[Path],
     ) -> None:
         self._fl = fl
-        self._loader = loader
-        self._real = loader.real
-        self._boms = loader.boms
+        self._real = shared.real  # only ever gains keys
+        self._hbytes = shared.hbytes  # a header's bytes never change once registered
+        self._boms = loader.boms  # this load's own
         self._sm = loader.sm
         self._trees = trees
         self._comp = comp
-        self._engine = engine
+        self._engine = shared.engine
+        self._included = included
         self._diags: list[Diag] | None = None
         self._analysis: Any = None
         self._snap: dict[str, InstanceSnap] | None = None
         self._instance_cache: tuple[Any, ...] | None = None
         self._modules: dict[str, ModuleInfo] = {}
+        self._buffer_paths: dict[int, Path | None] = {}
+        self._buffer_texts: dict[int, bytes] = {}
 
     @property
     def files(self) -> list[Path]:
@@ -550,17 +798,47 @@ class Design:
     @property
     def included(self) -> list[Path]:
         """Headers slang actually included, sorted."""
-        return sorted(self._loader.included())
+        return sorted(self._included)
 
     @property
     def included_bytes(self) -> dict[Path, bytes]:
         """The bytes this load read for each header it actually included."""
-        return {p: self._loader.bytes[p] for p in self.included if p in self._loader.bytes}
+        return {p: self._hbytes[p] for p in self.included if p in self._hbytes}
 
     # --- helpers -----------------------------------------------------------
 
     def _buffer_path(self, buffer: Any) -> Path | None:
-        return self._real.get(_key(Path(str(self._sm.getFullPath(buffer)))))
+        # Asked once per token while a module's model is built; the answer for a
+        # buffer never changes.
+        known = self._buffer_paths
+        if buffer.id not in known:
+            known[buffer.id] = self._real.get(_key(Path(str(self._sm.getFullPath(buffer)))))
+        return known[buffer.id]
+
+    def _buffer_bytes(self, buffer: Any) -> bytes:
+        data = self._buffer_texts.get(buffer.id)
+        if data is None:
+            data = self._buffer_texts[buffer.id] = str(self._sm.getSourceText(buffer)).encode()
+        return data
+
+    def _plain(self, node: Any) -> bool:
+        """True when `node` certainly has no macro-generated token and no directive inside.
+
+        Both need a backtick somewhere in the node's own source text: a macro use,
+        an `include, or an `ifdef between two of its tokens. When the node starts
+        and ends in the same file buffer and that stretch of text has no backtick,
+        the per-token scans can be skipped. They cost a Python call per token and
+        were most of the time of building a large module's model. A backtick in a
+        comment or string only means the scans run as before.
+        """
+        first, last = node.getFirstToken(), node.getLastToken()
+        if not first or not last:
+            return False
+        a, b = first.location, last.location
+        sm = self._sm
+        if sm.isMacroLoc(a) or sm.isMacroLoc(b) or a.buffer != b.buffer:
+            return False
+        return b"`" not in self._buffer_bytes(a.buffer)[a.offset : last.range.end.offset]
 
     def _original(self, loc: Any) -> Any:
         while self._sm.isMacroLoc(loc):
@@ -792,7 +1070,7 @@ class Design:
         definition.syntax.visit(visit)
         return sites
 
-    def _sites_of(self, inst: Any) -> list[InstanceSite]:
+    def _sites_of(self, inst: Any, plain: bool | None = None) -> list[InstanceSite]:
         sm = self._sm
         from_macro = False
 
@@ -801,7 +1079,8 @@ class Design:
             if isinstance(node, pyslang.parsing.Token) and sm.isMacroLoc(node.location):
                 from_macro = True
 
-        inst.visit(scan)
+        if not (self._plain(inst) if plain is None else plain):
+            inst.visit(scan)
         first, last = _first_token(inst), inst.getLastToken()
         start = first.location
         while sm.isMacroLoc(start):
@@ -888,7 +1167,8 @@ class Design:
                         )
                     )
         instances: list[InstanceInfo] = []
-        has_macros = _has_macro_tokens(syn, self._sm)
+        plain = self._plain(syn)
+        has_macros = False if plain else _has_macro_tokens(syn, self._sm)
 
         def visit(node: Any) -> None:
             if node.kind == sk.HierarchyInstantiation:
@@ -923,12 +1203,14 @@ class Design:
             body_indent=self._body_indent(syn),
             decls=decls,
             assigns=assigns,
-            header_has_macros=_header_has_macros(hdr, self._sm),
+            header_has_macros=False if plain else _header_has_macros(hdr, self._sm),
             param_kinds=param_kinds,
             other_names=_other_names(syn),
             imports_end=hdr.imports[-1].getLastToken().range.end.offset if len(hdr.imports) else None,
-            ports_directive=None if hdr.ports is None else _conditional_directive(hdr.ports),
-            params_directive=None if hdr.parameters is None else _conditional_directive(hdr.parameters),
+            ports_directive=None if plain or hdr.ports is None else _conditional_directive(hdr.ports),
+            params_directive=None
+            if plain or hdr.parameters is None
+            else _conditional_directive(hdr.parameters),
         )
 
     def _body_indent(self, syn: Any) -> str:
@@ -1068,11 +1350,12 @@ class Design:
 
     def _instances_of(self, node: Any, mod_path: Path) -> list[InstanceInfo]:
         sk = pyslang.syntax.SyntaxKind
-        from_macro = _has_macro_tokens(node, self._sm)
+        plain = self._plain(node)
+        from_macro = False if plain else _has_macro_tokens(node, self._sm)
         module = node.type.valueText
         hier = [i for i in node.instances if i.kind == sk.HierarchicalInstance]
         try:
-            sites: list[InstanceSite | None] = list(self._sites_of(node))
+            sites: list[InstanceSite | None] = list(self._sites_of(node, plain))
         except AdapterError:
             sites = [None] * len(hier)
         overrides: list[ParamOverride] = []
@@ -1118,9 +1401,9 @@ class Design:
                     params_open=params_open,
                     in_generate=in_generate,
                     is_array=len(hi.decl.dimensions) > 0,
-                    conn_directive=_conditional_directive(hi, skip_first=False),
+                    conn_directive=None if plain else _conditional_directive(hi, skip_first=False),
                     override_directive=None
-                    if node.parameters is None
+                    if plain or node.parameters is None
                     else _conditional_directive(node.parameters),
                 )
             )
