@@ -42,7 +42,7 @@ def test_comments_blank_lines_and_trailing_comment(tmp_path: Path):
     (tmp_path / "a.sv").write_text("module a; endmodule\n")
     (tmp_path / "x.f").write_text(
         "// slash comment\n# hash comment\n\n   \na.sv   // trailing comment\n"
-    )
+    )  # fmt: skip
     assert read_filelist(tmp_path / "x.f").files == [(tmp_path / "a.sv").resolve()]
 
 

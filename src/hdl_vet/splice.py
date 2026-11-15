@@ -184,9 +184,7 @@ def unified_diff(path: Path, before: bytes, after: bytes, label: str | None = No
         return ""
     name = label if label is not None else Path(path).as_posix()
     out: list[str] = []
-    for line in difflib.unified_diff(
-        _lines(before), _lines(after), f"a/{name}", f"b/{name}", n=3, lineterm="\n"
-    ):
+    for line in difflib.unified_diff(_lines(before), _lines(after), f"a/{name}", f"b/{name}", n=3, lineterm="\n"):
         out.append(line)
         if not line.endswith("\n"):
             out.append("\n\\ No newline at end of file\n")

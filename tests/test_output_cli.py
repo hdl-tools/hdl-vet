@@ -70,29 +70,29 @@ from hdl_vet.session import HEADER_MARK, Session
 from hdl_vet.slang_adapter import load
 from vetkit import make_design, span, tree_bytes
 
-GOOD = '''\
+GOOD = """\
 def apply(vet):
     inst = vet.module("mid").instance("u_l1")
     ov = inst.param_override("DEPTH")
     vet.splice(inst.path, ov.start, ov.end, b".DEPTH(5)", old=b".DEPTH(3)")
     vet.expect("param-changed", "top.u_mid.u_l1", "DEPTH")
-'''
+"""
 
-SECOND = '''\
+SECOND = """\
 def apply(vet):
     # sees the result of the first script
     ov = vet.module("mid").instance("u_l1").param_override("DEPTH")
     assert ov.value == "5", ov.value
     vet.splice(vet.module("mid").path, ov.start, ov.end, b".DEPTH(6)", old=b".DEPTH(5)")
-'''
+"""
 
-BAD = '''\
+BAD = """\
 def apply(vet):
     inst = vet.module("mid").instance("u_l0")
     c = inst.connection("d")
     vet.splice(inst.path, c.start, c.end, b".d(a_typo)")
     vet.expect("*")
-'''
+"""
 
 EMPTY = "def apply(vet):\n    pass\n"
 RAISES = "def apply(vet):\n    raise RuntimeError('boom in script')\n"
@@ -254,7 +254,7 @@ def test_layout_with_includes_defines_and_nested_lists(tmp_path: Path):
     (root / "ip" / "ip.f").write_text("cell.sv\n+incdir+inc\n")
     (root / "lists" / "t.f").write_text(
         "+define+EXTRA+MODE=2\n+incdir+../ip/unused_inc\n-F ../ip/ip.f\n../rtl/t.sv\n"
-    )
+    )  # fmt: skip
     s = Session(root / "lists" / "t.f", top="t")
     out = write_tree(s, s.finish(), tmp_path / "out")
     got = tree_bytes(out)
@@ -264,7 +264,7 @@ def test_layout_with_includes_defines_and_nested_lists(tmp_path: Path):
     assert got["lists/t.f"].decode() == (
         "+incdir+../ip/unused_inc\n+incdir+../ip/inc\n+define+EXTRA\n+define+MODE=2\n"
         "../ip/cell.sv\n../rtl/t.sv\n"
-    )
+    )  # fmt: skip
     a, b = read_filelist(root / "lists" / "t.f"), read_filelist(out / "lists" / "t.f")
     assert [p.relative_to(root) for p in a.files] == [p.relative_to(out.resolve()) for p in b.files]
     assert [p.relative_to(root) for p in a.incdirs] == [p.relative_to(out.resolve()) for p in b.incdirs]

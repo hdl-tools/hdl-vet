@@ -37,6 +37,8 @@ jobs:
           uv pip install -e . --group dev
       - name: Ruff
         run: uv run --no-sync ruff check --output-format=github
+      - name: Format
+        run: uv run --no-sync ruff format --check --diff
       - name: Mypy
         run: uv run --no-sync mypy
       - name: Project rules

@@ -364,9 +364,7 @@ T_MID = b"module t (input logic a);\n  mid u_mid (.a(a));\nendmodule\n"
 
 def test_existing_output_port_is_carried_up_without_touching_its_module(tmp_path: Path):
     # leaf already has output q, left open in mid: only mid and t are edited
-    vet = vet_for(
-        tmp_path, LEAF_Q + b"module mid (input logic a);\n  leaf u_leaf (.a(a), .q());\nendmodule\n" + T_MID
-    )
+    vet = vet_for(tmp_path, LEAF_Q + b"module mid (input logic a);\n  leaf u_leaf (.a(a), .q());\nendmodule\n" + T_MID)
     vet.punch_port("q", "output", to="t.u_mid.u_leaf")
     r = vet.finish()
     assert r.ok, r.report()

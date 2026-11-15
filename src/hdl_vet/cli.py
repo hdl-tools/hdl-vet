@@ -140,9 +140,7 @@ def _apply(args: argparse.Namespace) -> int:
         except SystemExit as e:
             raise _InputError(f"script {name} called exit ({e.code!r}); scripts must return from apply()") from e
         except Exception as e:
-            raise _InputError(
-                f"script {name} raised {type(e).__name__}: {e}\n{traceback.format_exc()}"
-            ) from e
+            raise _InputError(f"script {name} raised {type(e).__name__}: {e}\n{traceback.format_exc()}") from e
         # Every script ends a stage: the next one sees what this one queued, as it would after a
         # resume. A state that cannot be loaded is left for sign-off to report.
         with contextlib.suppress(AdapterError):

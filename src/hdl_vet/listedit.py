@@ -71,9 +71,7 @@ def append_items(
     ls = data.rfind(b"\n", 0, close) + 1
     if data[ls:close].strip() == b"":
         indent = _indent_of(data, last_start)
-        text = b"".join(
-            indent + item + (b"," if k < len(items) - 1 else b"") + eol for k, item in enumerate(items)
-        )
+        text = b"".join(indent + item + (b"," if k < len(items) - 1 else b"") + eol for k, item in enumerate(items))
         return [(last_end, last_end, b","), (ls, ls, text)]
     return [(last_end, last_end, b", " + b", ".join(items))]
 

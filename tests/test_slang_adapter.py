@@ -136,7 +136,7 @@ def test_analysis_diagnostics_are_included_with_engine_severity(tmp_path: Path):
     (tmp_path / "m.sv").write_text(
         "module m(input logic a, input logic b, output logic y);\n"
         "  assign y = a;\n  assign y = b;\nendmodule\n"
-    )
+    )  # fmt: skip
     (tmp_path / "m.f").write_text("m.sv\n")
     diags = load(tmp_path / "m.f", top="m").diagnostics()
     hits = [d for d in diags if d.code == "MultipleContAssigns"]

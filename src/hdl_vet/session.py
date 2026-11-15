@@ -254,16 +254,12 @@ class Session:
 
         for p in self._files:
             if _has_header(self._orig[p]):
-                raise SessionError(
-                    f"{p}: already carries the hdl-vet header; the input must be an unmodified tree"
-                )
+                raise SessionError(f"{p}: already carries the hdl-vet header; the input must be an unmodified tree")
         errors = [d for d in self._baseline.diagnostics() if d.severity == "error"]
         if errors:
             d = errors[0]
             where = f"{d.path}:{d.line}: " if d.path is not None else ""
-            raise SessionError(
-                f"the baseline design has {len(errors)} error(s); first: {where}{d.code}: {d.message}"
-            )
+            raise SessionError(f"the baseline design has {len(errors)} error(s); first: {where}{d.code}: {d.message}")
         self.layout_root = self._compute_layout_root()
 
     @staticmethod
@@ -344,9 +340,7 @@ class Session:
             raise SessionError(f"{path}: is not editable in this session")
         current = self._text[key]
         if old is not None and current[start:end] != old:
-            raise SessionError(
-                f"{path}: bytes [{start}, {end}) are {current[start:end]!r}, expected {old!r}"
-            )
+            raise SessionError(f"{path}: bytes [{start}, {end}) are {current[start:end]!r}, expected {old!r}")
         queue = self._queue.get(key)
         if queue is None:
             queue = self._queue[key] = SpliceQueue(len(current))
@@ -357,9 +351,7 @@ class Session:
         key = self._key(path)
         return key in self._text and (self._editable is None or key in self._editable)
 
-    def expect(
-        self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False
-    ) -> None:
+    def expect(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False) -> None:
         self._expects.append(Expect(kind, path, name, exact=exact, below=below))
 
     def _apply_queue(self) -> None:
@@ -372,9 +364,7 @@ class Session:
             self._maps.setdefault(key, []).append(OffsetMap(splices))
         self._queue = {}
 
-    def permit(
-        self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False
-    ) -> None:
+    def permit(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False) -> None:
         """Allow a change without requiring it."""
         self._expects.append(Expect(kind, path, name, required=False, exact=exact, below=below))
 
@@ -657,8 +647,16 @@ class Session:
                 design = self._design if self._added else self._baseline
             failed = self._run_checks(checks, design)
             return Result(
-                not unmatched and not failed, [], [], unexpected, unmatched, {}, "", self.layout_root,
-                failed_checks=failed, added=self.added,
+                not unmatched and not failed,
+                [],
+                [],
+                unexpected,
+                unmatched,
+                {},
+                "",
+                self.layout_root,
+                failed_checks=failed,
+                added=self.added,
             )
 
         files = {p: self._text[p] for p in changed}
@@ -681,8 +679,18 @@ class Session:
         dangling = _grown(dangling_set(self._baseline, added_paths), dangling_set(self._design, added_paths))
         ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling
         return Result(
-            ok, new, changes, unexpected, unmatched, files, diff, self.layout_root, new_files,
-            failed_checks=failed, added=self.added, dangling=dangling,
+            ok,
+            new,
+            changes,
+            unexpected,
+            unmatched,
+            files,
+            diff,
+            self.layout_root,
+            new_files,
+            failed_checks=failed,
+            added=self.added,
+            dangling=dangling,
         )
 
     def _run_checks(self, checks: Sequence[Callable[[Design], str | None]], design: Design) -> list[str]:

@@ -86,8 +86,7 @@ def test_propagate_refuses_an_unrelated_parameter_of_the_same_name(tmp_path: Pat
     # mid has its own W (overridden to 3 from t) and gives leaf a fixed 8.
     vet = vet_for(
         tmp_path,
-        LEAF_W
-        + b"module mid #(parameter int W = 8) (input logic a);\n  logic [W-1:0] r;\n"
+        LEAF_W + b"module mid #(parameter int W = 8) (input logic a);\n  logic [W-1:0] r;\n"
         b"  leaf #(.W(8)) u_l (.a(a));\nendmodule\n"
         + b"module t (input logic a);\n  mid #(.W(3)) u_mid (.a(a));\nendmodule\n",
     )

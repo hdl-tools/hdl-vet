@@ -1,62 +1,62 @@
 """Phase 2: sign-off comparisons (`hdl_vet.signoff`). Pure Python, no pyslang.
 
-    new_diagnostics(before, after, maps) -> list[Diag]
-        before, after: list[Diag] of the baseline and the modified design.
-        maps: Mapping[Path, Sequence[OffsetMap]], for each changed file the
-              offset maps of every re-load stage, in order (baseline -> final).
-        Notes (severity "note") are ignored on both sides.
-        Each diagnostic is keyed on (code, path, canonical offset):
-          - after:  its offset mapped backward through every stage, last first;
-          - before: its offset mapped forward through every stage, then backward
-                    again (so a location inside replaced text lands on the start
-                    of that replacement, exactly where an `after` diagnostic
-                    inside the new text lands).
-        Line and severity are never part of the key. Matching is in two passes,
-        each a multiset match that consumes one baseline diagnostic per match:
-          1. exact: (code, path, canonical offset, message);
-          2. location only: (code, path, canonical offset), allowed only when
-             BOTH diagnostics are untouched and neither has in_macro set. This
-             pass exists because an edit elsewhere (a rename) may change the
-             message of a diagnostic whose own text was not edited.
-        A baseline diagnostic is "touched" if, at some stage of its forward
-        mapping, it lies inside a replaced range. An `after` diagnostic is
-        touched if, at some stage of its backward mapping, it lies inside
-        replacement or inserted text. Inside edited text a vanished warning must
-        never pay for a new one, so there the message has to match exactly;
-        the same holds for macro expansions, whose content can change through an
-        edit in another file.
-        The result is the unmatched `after` diagnostics, sorted by
-        (path, offset, code). Diagnostics without a location use offset None;
-        a None path or offset sorts before any value.
+new_diagnostics(before, after, maps) -> list[Diag]
+    before, after: list[Diag] of the baseline and the modified design.
+    maps: Mapping[Path, Sequence[OffsetMap]], for each changed file the
+          offset maps of every re-load stage, in order (baseline -> final).
+    Notes (severity "note") are ignored on both sides.
+    Each diagnostic is keyed on (code, path, canonical offset):
+      - after:  its offset mapped backward through every stage, last first;
+      - before: its offset mapped forward through every stage, then backward
+                again (so a location inside replaced text lands on the start
+                of that replacement, exactly where an `after` diagnostic
+                inside the new text lands).
+    Line and severity are never part of the key. Matching is in two passes,
+    each a multiset match that consumes one baseline diagnostic per match:
+      1. exact: (code, path, canonical offset, message);
+      2. location only: (code, path, canonical offset), allowed only when
+         BOTH diagnostics are untouched and neither has in_macro set. This
+         pass exists because an edit elsewhere (a rename) may change the
+         message of a diagnostic whose own text was not edited.
+    A baseline diagnostic is "touched" if, at some stage of its forward
+    mapping, it lies inside a replaced range. An `after` diagnostic is
+    touched if, at some stage of its backward mapping, it lies inside
+    replacement or inserted text. Inside edited text a vanished warning must
+    never pay for a new one, so there the message has to match exactly;
+    the same holds for macro expansions, whose content can change through an
+    edit in another file.
+    The result is the unmatched `after` diagnostics, sorted by
+    (path, offset, code). Diagnostics without a location use offset None;
+    a None path or offset sorts before any value.
 
-    Diag has a seventh field, `in_macro: bool = False`: True when the
-    diagnostic's original location was inside a macro expansion.
+Diag has a seventh field, `in_macro: bool = False`: True when the
+diagnostic's original location was inside a macro expansion.
 
-    Change (frozen): kind, path, name, before, after
-        kind is one of
-          "instance-added"      name "",  before None,   after module
-          "instance-removed"    name "",  before module, after None
-          "module-changed"      name "",  before/after module
-          "param-changed"       name = parameter; None on the missing side
-          "port-added"          name = port; after  = "<direction> <width>"
-          "port-removed"        name = port; before = "<direction> <width>"
-          "port-changed"        name = port; both sides "<direction> <width>"
-          "connection-changed"  name = port; expression text, None when the port
-                                does not exist on that side
-        `path` is the instance's hierarchical path.
+Change (frozen): kind, path, name, before, after
+    kind is one of
+      "instance-added"      name "",  before None,   after module
+      "instance-removed"    name "",  before module, after None
+      "module-changed"      name "",  before/after module
+      "param-changed"       name = parameter; None on the missing side
+      "port-added"          name = port; after  = "<direction> <width>"
+      "port-removed"        name = port; before = "<direction> <width>"
+      "port-changed"        name = port; both sides "<direction> <width>"
+      "connection-changed"  name = port; expression text, None when the port
+                            does not exist on that side
+    `path` is the instance's hierarchical path.
 
-    diff_snapshots(before, after) -> list[Change]
-        Sorted by (path, kind, name). An added or removed instance produces
-        only its instance-added / instance-removed change (plus the same for
-        each instance below it), never port or parameter changes. An instance
-        whose module changed produces "module-changed" and, in addition, any
-        parameter, port and connection changes between the two.
+diff_snapshots(before, after) -> list[Change]
+    Sorted by (path, kind, name). An added or removed instance produces
+    only its instance-added / instance-removed change (plus the same for
+    each instance below it), never port or parameter changes. An instance
+    whose module changed produces "module-changed" and, in addition, any
+    parameter, port and connection changes between the two.
 
-    Expect (frozen): kind, path = "*", name = "*"
-        All three are case-sensitive glob patterns (fnmatchcase rules).
+Expect (frozen): kind, path = "*", name = "*"
+    All three are case-sensitive glob patterns (fnmatchcase rules).
 
-    check_changes(changes, expects) -> tuple[list[Change], list[Expect]]
-        (changes matched by no Expect, Expects that matched no change).
+check_changes(changes, expects) -> tuple[list[Change], list[Expect]]
+    (changes matched by no Expect, Expects that matched no change).
 """
 
 from __future__ import annotations

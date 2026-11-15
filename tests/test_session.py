@@ -1,80 +1,80 @@
 """Phase 2: the edit session (`hdl_vet.session`). Imports no pyslang.
 
-    Session(filelist, top=None, editable=None, base=None)
-        Loads the baseline design. `editable` is an optional collection of paths
-        that may be changed; None means every source and included file.
-        `base` is passed to read_filelist (see test_output_cli.py).
-        Raises SessionError when
-          - the baseline has error diagnostics (the message names the first), or
-          - any source or included file already carries the hdl-vet header
-            (HEADER_MARK at the start of a line): input must be a fresh tree.
+Session(filelist, top=None, editable=None, base=None)
+    Loads the baseline design. `editable` is an optional collection of paths
+    that may be changed; None means every source and included file.
+    `base` is passed to read_filelist (see test_output_cli.py).
+    Raises SessionError when
+      - the baseline has error diagnostics (the message names the first), or
+      - any source or included file already carries the hdl-vet header
+        (HEADER_MARK at the start of a line): input must be a fresh tree.
 
-    Coordinates. Offsets passed to `splice` for a file are offsets into
-    `session.text(path)`, which are the same offsets that the most recent
-    `module()` result for that file reported.
+Coordinates. Offsets passed to `splice` for a file are offsets into
+`session.text(path)`, which are the same offsets that the most recent
+`module()` result for that file reported.
 
-    .text(path) -> bytes
-        Content of a source or included file as of the last (re-)load.
-    .splice(path, start, end, text, old=None)
-        Queue a replacement of [start, end) by `text` (bytes). Nothing is parsed.
-        SessionError if `path` is not a file of the design or is not editable,
-        or if `old` is given and differs from the bytes currently at
-        [start, end). SpliceError if it overlaps a queued splice of that file.
-    .module(name) -> ModuleInfo
-        Re-load on demand: queued splices are applied and the whole design is
-        re-loaded only if the file that defines `name` has queued splices, or if
-        `name` is unknown while anything is queued. Otherwise the answer comes
-        from the last load. A re-load applies the queued splices of all files.
-    .design -> Design
-        The design with every queued splice applied (re-loads if any is queued).
-    .reloads -> int
-        Number of re-loads so far; the baseline load does not count.
-    .expect(kind, path="*", name="*")
-        Declare an expected structural change (see signoff.Expect).
-    .finish(scripts=()) -> Result
-        `scripts` is a sequence of (name, sha256 hex) pairs. Steps:
-          1. apply queued splices;
-          2. add the header line to every file whose content differs from the
-             baseline (see below);
-          3. if any file differs, re-load and compare with the baseline:
-             new_diagnostics over all stages, diff_snapshots + check_changes;
-          4. return the Result. A session can be finished once.
-        The header is part of the text that is checked: what is verified is
-        byte-for-byte what will be written. The header insertion is one more
-        stage in each changed file's offset maps, so it never makes an existing
-        diagnostic look new. The re-load in step 3 counts in `reloads`.
-        After finish, `.design` is the final design.
-    .layout_root -> Path
-        The deepest directory containing every source file, included file,
-        include directory and the top-level file list. Diff labels and manifest
-        keys are POSIX paths relative to it.
+.text(path) -> bytes
+    Content of a source or included file as of the last (re-)load.
+.splice(path, start, end, text, old=None)
+    Queue a replacement of [start, end) by `text` (bytes). Nothing is parsed.
+    SessionError if `path` is not a file of the design or is not editable,
+    or if `old` is given and differs from the bytes currently at
+    [start, end). SpliceError if it overlaps a queued splice of that file.
+.module(name) -> ModuleInfo
+    Re-load on demand: queued splices are applied and the whole design is
+    re-loaded only if the file that defines `name` has queued splices, or if
+    `name` is unknown while anything is queued. Otherwise the answer comes
+    from the last load. A re-load applies the queued splices of all files.
+.design -> Design
+    The design with every queued splice applied (re-loads if any is queued).
+.reloads -> int
+    Number of re-loads so far; the baseline load does not count.
+.expect(kind, path="*", name="*")
+    Declare an expected structural change (see signoff.Expect).
+.finish(scripts=()) -> Result
+    `scripts` is a sequence of (name, sha256 hex) pairs. Steps:
+      1. apply queued splices;
+      2. add the header line to every file whose content differs from the
+         baseline (see below);
+      3. if any file differs, re-load and compare with the baseline:
+         new_diagnostics over all stages, diff_snapshots + check_changes;
+      4. return the Result. A session can be finished once.
+    The header is part of the text that is checked: what is verified is
+    byte-for-byte what will be written. The header insertion is one more
+    stage in each changed file's offset maps, so it never makes an existing
+    diagnostic look new. The re-load in step 3 counts in `reloads`.
+    After finish, `.design` is the final design.
+.layout_root -> Path
+    The deepest directory containing every source file, included file,
+    include directory and the top-level file list. Diff labels and manifest
+    keys are POSIX paths relative to it.
 
-    Header line
-        HEADER_MARK = b"// Modified by hdl-vet"
-        Full line: `// Modified by hdl-vet` when there are no scripts, else
-        `// Modified by hdl-vet; scripts: a.py sha256:0123456789ab, b.py sha256:...`
-        (first 12 hex digits). It is inserted as its own line directly after
-        the file's leading comment block: the run of `//` lines, or one
-        `/* ... */` block, that starts at the first byte after any BOM. Without
-        such a block it becomes the first line (after any BOM). It ends with the
-        file's own line ending: CRLF if the first line break in the file is
-        CRLF, else LF (also for a file with no line break). A `/* */` block
-        followed by code on its closing line is not a leading block. If the
-        leading `//` run is the whole file and lacks a final line break, one is
-        added before the header.
+Header line
+    HEADER_MARK = b"// Modified by hdl-vet"
+    Full line: `// Modified by hdl-vet` when there are no scripts, else
+    `// Modified by hdl-vet; scripts: a.py sha256:0123456789ab, b.py sha256:...`
+    (first 12 hex digits). It is inserted as its own line directly after
+    the file's leading comment block: the run of `//` lines, or one
+    `/* ... */` block, that starts at the first byte after any BOM. Without
+    such a block it becomes the first line (after any BOM). It ends with the
+    file's own line ending: CRLF if the first line break in the file is
+    CRLF, else LF (also for a file with no line break). A `/* */` block
+    followed by code on its closing line is not a leading block. If the
+    leading `//` run is the whole file and lacks a final line break, one is
+    added before the header.
 
-    Result
-        ok: bool      no new diagnostics, no unexpected changes, no unmatched expects
-        new_diagnostics: list[Diag]
-        changes: list[Change]              everything diff_snapshots found
-        unexpected_changes: list[Change]
-        unmatched_expects: list[Expect]
-        files: dict[Path, bytes]           new content of each changed file
-        diff: str                          unified diffs of changed files, sorted by
-                                           path, labels relative to layout_root
-        report() -> str                    human-readable summary; names every new
-                                           diagnostic (code, file, line), unexpected
-                                           change and unmatched expect
+Result
+    ok: bool      no new diagnostics, no unexpected changes, no unmatched expects
+    new_diagnostics: list[Diag]
+    changes: list[Change]              everything diff_snapshots found
+    unexpected_changes: list[Change]
+    unmatched_expects: list[Expect]
+    files: dict[Path, bytes]           new content of each changed file
+    diff: str                          unified diffs of changed files, sorted by
+                                       path, labels relative to layout_root
+    report() -> str                    human-readable summary; names every new
+                                       diagnostic (code, file, line), unexpected
+                                       change and unmatched expect
 """
 
 from __future__ import annotations

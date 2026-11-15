@@ -57,7 +57,7 @@ def test_instantiation_ending_in_a_macro(tmp_path: Path):
         "module t(input logic a, output logic y1);\n"
         "  leaf u2 (.a(a), `TAIL\n"
         "endmodule\n"
-    )
+    )  # fmt: skip
     design = _design(tmp_path, src)
     assert [d for d in design.diagnostics() if d.severity == "error"] == []
     (site,) = design.instance_sites("t")
@@ -74,7 +74,7 @@ def test_instantiation_starting_with_a_macro(tmp_path: Path):
         "module t(input logic a, output logic y1);\n"
         "  `TY u_x (.a(a), .y(y1));\n"
         "endmodule\n"
-    )
+    )  # fmt: skip
     design = _design(tmp_path, src)
     (site,) = design.instance_sites("t")
     assert site.from_macro is True
@@ -89,7 +89,7 @@ def test_macro_only_inside_a_connection_still_flags_the_site(tmp_path: Path):
         "module t(input logic a, output logic y1);\n"
         "  leaf u_m (.a(`SIG), .y(y1));\n"
         "endmodule\n"
-    )
+    )  # fmt: skip
     design = _design(tmp_path, src)
     (site,) = design.instance_sites("t")
     assert site.from_macro is True
@@ -105,7 +105,7 @@ def test_non_ascii_and_spaced_project_path(tmp_path: Path):
         "  leaf u_l (.a(a), .y(y1));\n"
         "  assign y1 = nope;\n"
         "endmodule\n"
-    )
+    )  # fmt: skip
     design = _design(root, src)
     assert design.files == [(root / "leaf.sv").resolve(), (root / "t.sv").resolve()]
     assert design.roundtrip(root / "t.sv") == (root / "t.sv").read_bytes()
@@ -132,7 +132,7 @@ def test_define_value_with_backslash_and_quotes(tmp_path: Path):
     (tmp_path / "t.sv").write_text(
         "module t(output string s, output string p);\n"
         "  assign s = `MSG;\n  assign p = `WINPATH;\nendmodule\n"
-    )
+    )  # fmt: skip
     (tmp_path / "t.f").write_text('+define+MSG="hi there"\n+define+WINPATH="C:\\\\tmp\\\\x"\nt.sv\n')
     design = load(tmp_path / "t.f", top="t")
     assert [d for d in design.diagnostics() if d.severity == "error"] == []
@@ -164,12 +164,10 @@ def test_overrides_apply_to_included_headers(tmp_path: Path):
     (tmp_path / "t.sv").write_text(
         '`include "w.svh"\nmodule t(input logic a, output logic y);\n'
         "  assign y = `SIG & 1'b1;\nendmodule\n"
-    )
+    )  # fmt: skip
     (tmp_path / "t.f").write_text("+incdir+.\nt.sv\n")
     on_disk = load(tmp_path / "t.f", top="t").diagnostics()
-    fixed = load(
-        tmp_path / "t.f", top="t", overrides={tmp_path / "w.svh": b"`define SIG a\n"}
-    ).diagnostics()
+    fixed = load(tmp_path / "t.f", top="t", overrides={tmp_path / "w.svh": b"`define SIG a\n"}).diagnostics()
     assert [d.code for d in on_disk if d.severity == "error"] == ["UndeclaredIdentifier"]
     assert [d for d in fixed if d.severity == "error"] == []
     assert (tmp_path / "w.svh").read_bytes() == b"`define SIG nope\n"
@@ -199,9 +197,7 @@ def test_invalid_utf8_in_included_header_is_refused(tmp_path: Path):
 
 
 def test_drivers_of_an_instance_path_is_an_adapter_error(tmp_path: Path):
-    design = _design(
-        tmp_path, "module t(input logic a, output logic y1);\n  leaf u_l (.a(a), .y(y1));\nendmodule\n"
-    )
+    design = _design(tmp_path, "module t(input logic a, output logic y1);\n  leaf u_l (.a(a), .y(y1));\nendmodule\n")
     with pytest.raises(slang_adapter.AdapterError, match="u_l"):
         design.drivers_of("t.u_l")
 

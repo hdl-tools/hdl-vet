@@ -1,11 +1,11 @@
 """Rules of the code base that used to be checked by hand in every review.
 
-    - Only `hdl_vet.slang_adapter` imports pyslang. Everything else talks to the
-      adapter, so a pyslang upgrade touches one module.
-    - Nothing in the package can run code from data: no pickle, marshal or shelve,
-      and no `eval` or `exec`, with one exception: the command line executes the
-      edit scripts the user names (`cli._load_script`).
-    - No module of the package imports from the tests.
+- Only `hdl_vet.slang_adapter` imports pyslang. Everything else talks to the
+  adapter, so a pyslang upgrade touches one module.
+- Nothing in the package can run code from data: no pickle, marshal or shelve,
+  and no `eval` or `exec`, with one exception: the command line executes the
+  edit scripts the user names (`cli._load_script`).
+- No module of the package imports from the tests.
 """
 
 from __future__ import annotations

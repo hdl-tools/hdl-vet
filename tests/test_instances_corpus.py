@@ -30,8 +30,7 @@ from hdl_vet.slang_adapter import load
 pytestmark = [
     pytest.mark.corpus,
     pytest.mark.skipif(
-        (not corpus.bag_available() or not variants.variants())
-        and os.environ.get("HDL_VET_REQUIRE_CORPUS") != "1",
+        (not corpus.bag_available() or not variants.variants()) and os.environ.get("HDL_VET_REQUIRE_CORPUS") != "1",
         reason="hdl-bag CLI (`bag`) or an hdl-bag checkout (for the variants) is missing",
     ),
 ]
@@ -58,9 +57,11 @@ TECH_CELL = (
     "endmodule\n"
 )
 # The same cell with a two-bit output: it does not fit a one-bit reset.
-WIDE_CELL = TECH_CELL.replace("tech_rst_sync", "wide_rst_sync").replace(
-    "output logic Q", "output logic [1:0] Q"
-).replace("assign Q = q[Stages-1];", "assign Q = {2{q[Stages-1]}};")
+WIDE_CELL = (
+    TECH_CELL.replace("tech_rst_sync", "wide_rst_sync")
+    .replace("output logic Q", "output logic [1:0] Q")
+    .replace("assign Q = q[Stages-1];", "assign Q = {2{q[Stages-1]}};")
+)
 
 
 @pytest.fixture
@@ -126,9 +127,7 @@ def test_reset_synchronisers_swapped_for_a_tech_cell_on_demo_ss(demo, cell):
     paths = {f"{TOP}.u_bag_rst_sync_D_{dom}" for dom in DOMAINS}
     assert {c.path for c in r.changes if c.kind == "module-changed"} == paths
     assert {c.path for c in r.changes} == paths  # nothing changed anywhere else
-    assert [(rec.op, rec.status) for rec in vet.log] == [("add_file", "applied")] + [
-        ("replace_module", "applied")
-    ] * 4
+    assert [(rec.op, rec.status) for rec in vet.log] == [("add_file", "applied")] + [("replace_module", "applied")] * 4
     assert vet.notes == []
 
 
