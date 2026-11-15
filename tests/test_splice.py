@@ -1,38 +1,38 @@
 """Phase 2: the splice engine (`hdl_vet.splice`). No pyslang involved.
 
-    Splice(path: Path, start: int, end: int, text: bytes)
-        Frozen, hashable. Replace bytes [start, end) of `path` with `text`.
-        start == end is a pure insertion before the byte at `start`.
+Splice(path: Path, start: int, end: int, text: bytes)
+    Frozen, hashable. Replace bytes [start, end) of `path` with `text`.
+    start == end is a pure insertion before the byte at `start`.
 
-    apply_splices(data: bytes, splices: Iterable[Splice]) -> bytes
-        All splices belong to one file and are expressed in the coordinates of
-        `data`. Rules:
-          - Exact duplicates (same range and text) count once.
-          - Ranges must not overlap. An insertion strictly inside a replaced
-            range overlaps it. An insertion at either boundary of a replaced
-            range does not.
-          - Several different insertions at the same offset are kept in the
-            order given.
-          - 0 <= start <= end <= len(data), else SpliceError.
-        Violations raise SpliceError; the message contains the offsets.
+apply_splices(data: bytes, splices: Iterable[Splice]) -> bytes
+    All splices belong to one file and are expressed in the coordinates of
+    `data`. Rules:
+      - Exact duplicates (same range and text) count once.
+      - Ranges must not overlap. An insertion strictly inside a replaced
+        range overlaps it. An insertion at either boundary of a replaced
+        range does not.
+      - Several different insertions at the same offset are kept in the
+        order given.
+      - 0 <= start <= end <= len(data), else SpliceError.
+    Violations raise SpliceError; the message contains the offsets.
 
-    OffsetMap(splices: Iterable[Splice])     (same validation as apply_splices)
-        .forward(old: int) -> int
-            Position in the output of input offset `old`. An offset inside a
-            replaced range [start, end) maps to the first byte of its
-            replacement. An offset at a pure insertion point maps after the
-            inserted text (the byte that was there moved).
-        .backward(new: int) -> int
-            Input offset for output offset `new`. An offset inside replacement
-            or inserted text maps to the `start` of that splice.
+OffsetMap(splices: Iterable[Splice])     (same validation as apply_splices)
+    .forward(old: int) -> int
+        Position in the output of input offset `old`. An offset inside a
+        replaced range [start, end) maps to the first byte of its
+        replacement. An offset at a pure insertion point maps after the
+        inserted text (the byte that was there moved).
+    .backward(new: int) -> int
+        Input offset for output offset `new`. An offset inside replacement
+        or inserted text maps to the `start` of that splice.
 
-    unified_diff(path: Path, before: bytes, after: bytes, label: str | None = None) -> str
-        Standard unified diff with 3 lines of context, headers
-        `--- a/<label>` and `+++ b/<label>` (label defaults to path.as_posix()).
-        Empty string when before == after. Line endings inside the diff body
-        are shown as "\\n"; CRLF content does not produce doubled blank lines.
-        Bytes that are not UTF-8 are shown with the replacement character. A
-        missing final newline gets the usual "\\ No newline at end of file" line.
+unified_diff(path: Path, before: bytes, after: bytes, label: str | None = None) -> str
+    Standard unified diff with 3 lines of context, headers
+    `--- a/<label>` and `+++ b/<label>` (label defaults to path.as_posix()).
+    Empty string when before == after. Line endings inside the diff body
+    are shown as "\\n"; CRLF content does not produce doubled blank lines.
+    Bytes that are not UTF-8 are shown with the replacement character. A
+    missing final newline gets the usual "\\ No newline at end of file" line.
 """
 
 from __future__ import annotations

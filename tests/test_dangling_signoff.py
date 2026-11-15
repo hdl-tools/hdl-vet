@@ -244,7 +244,6 @@ def test_the_driver_of_a_connected_output_still_cannot_be_removed(tmp_path: Path
     assert vet.log == []
 
 
-
 # --- review fixes --------------------------------------------------------------------------
 
 

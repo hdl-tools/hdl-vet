@@ -171,7 +171,7 @@ def test_module_ranges(kit):
     assert data[m.start : m.end] == data[data.index(b"module top") :].rstrip(b"\n")
     assert data[m.body_end : m.body_end + 9] == b"endmodule"
     assert data[m.ports_close : m.ports_close + 2] == b");"
-    assert data[:m.ports_close].count(b")") == 0
+    assert data[: m.ports_close].count(b")") == 0
     assert m.has_macros is False
 
 

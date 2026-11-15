@@ -93,9 +93,7 @@ def make_design(root: Path, newline: str = "\n") -> Kit:
     for name, text in (("leaf", LEAF), ("alt_leaf", ALT_LEAF), ("mid", MID), ("top", TOP)):
         (rtl / f"{name}.sv").write_bytes(text.replace("\n", newline).encode())
     (root / "design.f").write_bytes(FILELIST.encode())
-    return Kit(
-        root, root / "design.f", rtl / "leaf.sv", rtl / "alt_leaf.sv", rtl / "mid.sv", rtl / "top.sv"
-    )
+    return Kit(root, root / "design.f", rtl / "leaf.sv", rtl / "alt_leaf.sv", rtl / "mid.sv", rtl / "top.sv")
 
 
 def span(data: bytes, needle: bytes, nth: int = 0) -> tuple[int, int]:

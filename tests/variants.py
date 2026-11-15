@@ -134,9 +134,7 @@ def _yaml() -> YAML:
     yaml.default_flow_style = False
     yaml.width = 4096
     yaml.indent(mapping=2, sequence=4, offset=2)
-    yaml.representer.add_representer(
-        type(None), lambda r, _: r.represent_scalar("tag:yaml.org,2002:null", "null")
-    )
+    yaml.representer.add_representer(type(None), lambda r, _: r.represent_scalar("tag:yaml.org,2002:null", "null"))
     return yaml
 
 

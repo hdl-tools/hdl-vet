@@ -76,9 +76,7 @@ _SEVERITY = {
     pyslang.DiagnosticSeverity.Error: "error",
     pyslang.DiagnosticSeverity.Fatal: "error",
 }
-_CODE_NAMES: dict[Any, str] = {
-    getattr(pyslang.Diags, n): n for n in dir(pyslang.Diags) if not n.startswith("_")
-}
+_CODE_NAMES: dict[Any, str] = {getattr(pyslang.Diags, n): n for n in dir(pyslang.Diags) if not n.startswith("_")}
 _INCLUDE_RE = re.compile(r'`include\s+"([^"\r\n]+)"')
 _MAX_INCLUDE_DEPTH = 64
 _GROWTH_FACTOR = 4  # start over when the buffers exceed this multiple of the first load's...
@@ -373,8 +371,7 @@ class LoadCache:
         if self._filelist is None:
             self._filelist = fl
         elif self._filelist is not fl and (
-            (self._filelist.incdirs, self._filelist.defines, self._filelist.root)
-            != (fl.incdirs, fl.defines, fl.root)
+            (self._filelist.incdirs, self._filelist.defines, self._filelist.root) != (fl.incdirs, fl.defines, fl.root)
         ):
             raise AdapterError("a LoadCache belongs to one file list and cannot be shared with another")
 
@@ -383,9 +380,7 @@ class LoadCache:
         if self._top is _UNBOUND:
             self._top = top
         elif self._top != top:
-            raise AdapterError(
-                f"a LoadCache belongs to one top module ({self._top!r}); it cannot load top {top!r}"
-            )
+            raise AdapterError(f"a LoadCache belongs to one top module ({self._top!r}); it cannot load top {top!r}")
 
     def resolved(self, path: Path) -> Path:
         # A relative path means something else after a change of directory.
@@ -601,9 +596,7 @@ class _Loader:
             sh.bodies[header] = body
         return body
 
-    def _register_includes(
-        self, text: str, real_dir: Path, depth: int = 0, raw_dir: Path | None = None
-    ) -> None:
+    def _register_includes(self, text: str, real_dir: Path, depth: int = 0, raw_dir: Path | None = None) -> None:
         """Hand every header `text` includes (recursively) to slang as text.
 
         `raw_dir` is set when the includer was registered under a raw real path (an
@@ -1019,8 +1012,17 @@ class Design:
             if code == "UndrivenPort" and name:
                 port, read = self._port_reads(body, str(name))
         return Diag(
-            severity, code, self._engine.formatMessage(diag), path, line, offset, in_macro, module,
-            str(name) if name else None, port, read,
+            severity,
+            code,
+            self._engine.formatMessage(diag),
+            path,
+            line,
+            offset,
+            in_macro,
+            module,
+            str(name) if name else None,
+            port,
+            read,
         )
 
     @staticmethod
@@ -1325,7 +1327,6 @@ class Design:
             if i.kind == pyslang.syntax.SyntaxKind.HierarchicalInstance and i.decl is not None
         ]
 
-
     # --- source model --------------------------------------------------------
 
     def modules(self) -> list[str]:
@@ -1413,11 +1414,7 @@ class Design:
             else hdr.ports.openParen.location.offset,
             params_open=None if hdr.parameters is None else hdr.parameters.hash.location.offset,
             params_close=None if hdr.parameters is None else hdr.parameters.closeParen.location.offset,
-            port_list_kind="none"
-            if hdr.ports is None
-            else "ansi"
-            if hdr.ports.kind == sk.AnsiPortList
-            else "nonansi",
+            port_list_kind="none" if hdr.ports is None else "ansi" if hdr.ports.kind == sk.AnsiPortList else "nonansi",
             header_end=hdr.semi.range.end.offset,
             body_indent=self._body_indent(syn),
             decls=decls,
@@ -1427,9 +1424,7 @@ class Design:
             other_names=_other_names(syn),
             imports_end=hdr.imports[-1].getLastToken().range.end.offset if len(hdr.imports) else None,
             ports_directive=None if plain or hdr.ports is None else _conditional_directive(hdr.ports),
-            params_directive=None
-            if plain or hdr.parameters is None
-            else _conditional_directive(hdr.parameters),
+            params_directive=None if plain or hdr.parameters is None else _conditional_directive(hdr.parameters),
             disabled_names={} if plain else _disabled_names(syn),
             generate_decls=gen_decls,
             generate_assigned=gen_assigned,
@@ -1567,8 +1562,10 @@ class Design:
         for mem in syn.members:
             if mem.kind == sk.PortDeclaration:
                 tok = getattr(mem.header, "direction", None)
-                direction = "interface" if mem.header.kind == sk.InterfacePortHeader else dirs.get(
-                    getattr(tok, "kind", None), "inout"
+                direction = (
+                    "interface"
+                    if mem.header.kind == sk.InterfacePortHeader
+                    else dirs.get(getattr(tok, "kind", None), "inout")
                 )
                 for d in _items(mem.declarators):
                     declared[d.name.valueText] = direction
@@ -1617,9 +1614,7 @@ class Design:
                         value="" if expr is None else _text(expr),
                         start=a.getFirstToken().location.offset,
                         end=a.getLastToken().range.end.offset,
-                        open=a.openParen.location.offset
-                        if a.kind == sk.NamedParamAssignment and a.openParen
-                        else None,
+                        open=a.openParen.location.offset if a.kind == sk.NamedParamAssignment and a.openParen else None,
                     )
                 )
         out: list[InstanceInfo] = []
@@ -1898,7 +1893,7 @@ def _header_has_macros(hdr: Any, sm: Any) -> bool:
             continue
         if isinstance(part, pyslang.parsing.Token):
             scan(part)
-        elif hasattr(part, 'visit'):
+        elif hasattr(part, "visit"):
             part.visit(scan)
         else:
             for item in part:

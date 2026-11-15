@@ -118,7 +118,6 @@ class Expect:
     below: bool = False  # matches every path strictly below `path`
 
 
-
 def _port(p: tuple[str, int] | None) -> str | None:
     return None if p is None else f"{p[0]} {p[1]}"
 
@@ -166,9 +165,7 @@ def _matches(e: Expect, c: Change) -> bool:
     return where and fnmatchcase(c.kind, e.kind) and fnmatchcase(c.name, e.name)
 
 
-def check_changes(
-    changes: Sequence[Change], expects: Sequence[Expect]
-) -> tuple[list[Change], list[Expect]]:
+def check_changes(changes: Sequence[Change], expects: Sequence[Expect]) -> tuple[list[Change], list[Expect]]:
     """(changes no expectation covers, expectations that matched nothing)."""
     unexpected = [c for c in changes if not any(_matches(e, c) for e in expects)]
     unmatched = [e for e in expects if e.required and not any(_matches(e, c) for c in changes)]

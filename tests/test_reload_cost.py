@@ -114,9 +114,7 @@ def test_a_newly_added_include_is_still_looked_up_and_rejected(tmp_path: Path):
     assert [p.name for p in r.new_files] == ["extra.svh"]
 
 
-def test_load_without_a_cache_is_unchanged_and_a_shared_cache_gives_the_same_design(
-    tmp_path: Path, no_file_system
-):
+def test_load_without_a_cache_is_unchanged_and_a_shared_cache_gives_the_same_design(tmp_path: Path, no_file_system):
     from hdl_vet.filelist import read_filelist
 
     path = write(tmp_path, INCLUDES, INCLUDES_F)

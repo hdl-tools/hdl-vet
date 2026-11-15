@@ -30,8 +30,7 @@ from hdl_vet.session import Session
 pytestmark = [
     pytest.mark.corpus,
     pytest.mark.skipif(
-        (not corpus.bag_available() or not variants.variants())
-        and os.environ.get("HDL_VET_REQUIRE_CORPUS") != "1",
+        (not corpus.bag_available() or not variants.variants()) and os.environ.get("HDL_VET_REQUIRE_CORPUS") != "1",
         reason="hdl-bag CLI (`bag`) or an hdl-bag checkout (for the variants) is missing",
     ),
 ]

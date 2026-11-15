@@ -117,9 +117,7 @@ def test_vanished_warning_does_not_mask_a_new_one_in_the_same_splice(kit):
 def test_macro_use_site_warning_changed_through_a_header_is_new(tmp_path: Path):
     kit = make_design(tmp_path / "in")
     (kit.root / "rtl" / "sig.svh").write_bytes(b"`define SIGQ spare_q\n")
-    kit.top.write_bytes(
-        b'`include "sig.svh"\n' + kit.top.read_bytes().replace(b".q(spare_q)", b".q(`SIGQ)")
-    )
+    kit.top.write_bytes(b'`include "sig.svh"\n' + kit.top.read_bytes().replace(b".q(spare_q)", b".q(`SIGQ)"))
     s = Session(kit.filelist, top="top")
     hdr = kit.root / "rtl" / "sig.svh"
     replace(s, hdr, b"spare_q", b"other_typo")
@@ -270,7 +268,7 @@ def test_empty_positional_connection(tmp_path: Path):
     src = (
         "module c(input logic a, input logic b);\nendmodule\n"
         "module t(input logic a);\n  c u (a, );\nendmodule\n"
-    )
+    )  # fmt: skip
     d = design(tmp_path, {"t.sv": src}, "t.sv\n", "t")
     conns = d.module("t").instance("u").connections
     assert [(c.port, c.expr) for c in conns] == [(None, "a"), (None, "")]
@@ -367,12 +365,21 @@ def test_dry_run_with_text_the_console_cannot_encode(kit, tmp_path: Path):
         "def apply(vet):\n"
         "    m = vet.module('mid')\n"
         "    vet.splice(m.path, m.body_end, m.body_end, b'// note\\n')\n"
-    )
+    )  # fmt: skip
     env = dict(os.environ, PYTHONIOENCODING="ascii")
     p = subprocess.run(
         [
-            sys.executable, "-m", "hdl_vet", "apply", "-f", str(kit.filelist), "-s", str(script),
-            "--top", "top", "--dry-run",
+            sys.executable,
+            "-m",
+            "hdl_vet",
+            "apply",
+            "-f",
+            str(kit.filelist),
+            "-s",
+            str(script),
+            "--top",
+            "top",
+            "--dry-run",
         ],
         capture_output=True,
         env=env,

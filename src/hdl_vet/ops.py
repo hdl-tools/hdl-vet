@@ -65,8 +65,19 @@ _BASED = re.compile(r"'[sS]?[bBoOdDhH]")
 _DIGITS = re.compile(r"[0-9a-fA-FxXzZ?_]+")
 _NET_KEYWORDS = frozenset(
     [
-        "wire", "tri", "tri0", "tri1", "triand", "trior", "trireg",
-        "wand", "wor", "uwire", "supply0", "supply1", "interconnect",
+        "wire",
+        "tri",
+        "tri0",
+        "tri1",
+        "triand",
+        "trior",
+        "trireg",
+        "wand",
+        "wor",
+        "uwire",
+        "supply0",
+        "supply1",
+        "interconnect",
     ]
 )
 
@@ -690,9 +701,7 @@ class Vet:
                 raise VetError(f"module {name!r} is defined in the added file {where.name}, which is never edited")
             raise VetError(f"module {name!r} is not elaborated under the top, so it cannot be edited")
         if instances is not None and instances != len(paths):
-            raise VetError(
-                f"module {name!r} is elaborated {len(paths)} time(s) ({', '.join(paths)}), not {instances}"
-            )
+            raise VetError(f"module {name!r} is elaborated {len(paths)} time(s) ({', '.join(paths)}), not {instances}")
         return Module(self, name, instances)
 
     # --- bookkeeping ---------------------------------------------------------------
@@ -765,11 +774,7 @@ class Vet:
     def _commit_all(self, op: str, plans: list[_Plan]) -> None:
         """Commit validated plans; nothing is queued unless every file to edit is editable."""
         bad = sorted(
-            {
-                str(p.path)
-                for p in plans
-                if not p.skip and p.path is not None and not self.session.is_editable(p.path)
-            }
+            {str(p.path) for p in plans if not p.skip and p.path is not None and not self.session.is_editable(p.path)}
         )
         if bad:
             raise VetError(f"{op}: cannot edit {', '.join(bad)}: not editable in this session")
@@ -1162,17 +1167,13 @@ class Vet:
             check=_Check(("add_param", mod, name), "add_param", (mod, name, str(default), str(type))),
         )
 
-    def _plan_assign(
-        self, mod: str, info: ModuleInfo, target: str, expr: object, planned_port: bool = False
-    ) -> _Plan:
+    def _plan_assign(self, mod: str, info: ModuleInfo, target: str, expr: object, planned_port: bool = False) -> _Plan:
         """`planned_port`: `target` is an output port this operation adds, so it is undriven."""
         if not planned_port:
             ports = {p.name: p for p in info.ports}
             names = set(ports) | {d.name for d in info.decls}
             if target not in names:
-                raise VetError(
-                    f"add_assign {mod}: no net, variable or port {target!r}{_did_you_mean(target, names)}"
-                )
+                raise VetError(f"add_assign {mod}: no net, variable or port {target!r}{_did_you_mean(target, names)}")
             if any(a.left == target and _same(a.right, expr) for a in info.assigns):
                 return _Plan("add_assign", mod, skip=True)
             if target in ports and ports[target].direction == "input":
@@ -1219,9 +1220,7 @@ class Vet:
         names: list[str] = []
         for seg in segs[1:]:
             if "[" in seg or "]" in seg:
-                raise VetError(
-                    f"{op}: {seg!r} in {to!r}: generate blocks and instance arrays are not supported"
-                )
+                raise VetError(f"{op}: {seg!r} in {to!r}: generate blocks and instance arrays are not supported")
             nxt = f"{path}.{seg}"
             if nxt not in snap:
                 try:
@@ -1323,9 +1322,7 @@ class Vet:
             for p in self.module_paths(m):
                 parent, _, iname = p.rpartition(".")
                 if parent not in snap or "[" in iname:
-                    raise VetError(
-                        f"{op}: {p} is inside a generate block or an instance array, which is not supported"
-                    )
+                    raise VetError(f"{op}: {p} is inside a generate block or an instance array, which is not supported")
                 if snap[parent].module not in mods:
                     raise VetError(
                         f"{op}: {p} is an instance of {m!r} in module {snap[parent].module!r}, "
@@ -1384,9 +1381,7 @@ class Vet:
         decl = f"{direction:<6} {text} {name}"
 
         plans: list[_Plan] = []
-        special = out and sig == name and any(
-            p.name == name and p.direction == "output" for p in infos[mods[-1]].ports
-        )
+        special = out and sig == name and any(p.name == name and p.direction == "output" for p in infos[mods[-1]].ports)
         for i, m in enumerate(mods):
             if i == 0 and not out and signal is not None:
                 continue
@@ -1425,20 +1420,17 @@ class Vet:
         kind = dest.param_kinds.get(name)
         if kind is None:
             values = [k for k, v in dest.param_kinds.items() if v == "value"]
-            raise VetError(
-                f"{op}: module {mods[-1]!r} has no parameter {name!r}{_did_you_mean(name, values)}"
-            )
+            raise VetError(f"{op}: module {mods[-1]!r} has no parameter {name!r}{_did_you_mean(name, values)}")
         if kind != "value":
             what = "a localparam" if kind == "local" else "a type parameter"
-            raise VetError(
-                f"{op}: parameter {name!r} of module {mods[-1]!r} is {what}, not an overridable value"
-            )
+            raise VetError(f"{op}: parameter {name!r} of module {mods[-1]!r} is {what}, not an overridable value")
         pinfo = next((p for p in dest.params if p.name == name), None)
         if pinfo is None:
             raise VetError(
                 f"{op}: parameter {name!r} of module {mods[-1]!r} is declared in the module body, "
                 f"not in its parameter port list, so its type is unknown"
             )
+
         def passes_on(j: int) -> bool:
             if infos[mods[j]].param_kinds.get(name) != "value":
                 return False
@@ -1696,9 +1688,7 @@ class Module:
             found = [d for d in info.decls if d.name == name]
             if not found:
                 if name in info.generate_decls:
-                    raise VetError(
-                        f"{op} {mod}: {name!r} is declared inside a generate block, which is not supported"
-                    )
+                    raise VetError(f"{op} {mod}: {name!r} is declared inside a generate block, which is not supported")
                 other = v._other_use(info, name, "decl")
                 if other is not None:
                     raise VetError(f"{op} {mod}: {name!r} is {other}, not a net or variable")
@@ -1752,9 +1742,7 @@ class Module:
                 raise VetError(f"{op} {mod}: {len(found)} assignments to {target!r}; edit them by hand")
             assign = found[0]
             if was is not None and not _same(was, assign.right):
-                raise DriftError(
-                    f"{op} {mod}: {target!r} is assigned {assign.right!r}, not {str(was)!r}"
-                )
+                raise DriftError(f"{op} {mod}: {target!r} is assigned {assign.right!r}, not {str(was)!r}")
             if assign.stmt_start < 0:
                 raise VetError(f"{op} {mod}: the assignment to {target!r} comes from a macro or an include")
             if assign.stmt_count > 1:
@@ -1844,9 +1832,7 @@ class Module:
                     v._drove.extend(
                         (host, base) for c in inst.connections if c.port == name for base in driven_bases(c.expr)
                     )
-                plans.append(
-                    _Plan(op, mod, path=inst.path, splices=sp, mark=("conns", host, inst.name), quiet=True)
-                )
+                plans.append(_Plan(op, mod, path=inst.path, splices=sp, mark=("conns", host, inst.name), quiet=True))
             v._commit_all(op, plans)
 
         v._checked(op, mod, run)
@@ -1862,8 +1848,7 @@ class Module:
             if param is None:
                 if name in info.param_kinds:
                     raise VetError(
-                        f"{op} {mod}: parameter {name!r} is declared in the module body, not in the "
-                        f"parameter port list"
+                        f"{op} {mod}: parameter {name!r} is declared in the module body, not in the parameter port list"
                     )
                 v._record(op, mod, "skipped")
                 return
@@ -2021,8 +2006,7 @@ class Instance:
     def _is_interface_port(self, port: str) -> bool:
         snap = self.vet._snap()
         return any(
-            (found := snap.get(p)) is not None and found.ports.get(port, ("",))[0] == "interface"
-            for p in self.paths
+            (found := snap.get(p)) is not None and found.ports.get(port, ("",))[0] == "interface" for p in self.paths
         )
 
     def _tie_message(self, port: str, inst: InstanceInfo, cur: ConnInfo | None) -> str:
@@ -2106,9 +2090,7 @@ class Instance:
             v._record("disconnect", self.target, "skipped")
             return
         if was is not None and not _same(was, cur.expr):
-            raise DriftError(
-                f"disconnect {self.target} {port}: currently connected to {cur.expr!r}, not {str(was)!r}"
-            )
+            raise DriftError(f"disconnect {self.target} {port}: currently connected to {cur.expr!r}, not {str(was)!r}")
         if cur.open is not None:
             splices = [(cur.open + 1, cur.end - 1, b"")]
         else:
@@ -2171,9 +2153,7 @@ class Instance:
                 return _Plan("set_param", self.target, skip=True)
             if not force and (was is None or not _same(was, cur.value)):
                 note = "" if was is None else f" (was={str(was)!r} does not match)"
-                raise DriftError(
-                    f"set_param {self.target} {name}: currently {cur.value!r}, not {text!r}{note}"
-                )
+                raise DriftError(f"set_param {self.target} {name}: currently {cur.value!r}, not {text!r}{note}")
             if cur.open is not None:
                 splices = [(cur.open + 1, cur.end - 1, text.encode())]
             else:
@@ -2265,9 +2245,7 @@ class Instance:
                         f"{port!r} (expected {expr!r})"
                     )
                 if not _same(c.expr, expr):
-                    raise DriftError(
-                        f"{op} {target}: connection {port!r} is {c.expr!r}, not {expr!r}"
-                    )
+                    raise DriftError(f"{op} {target}: connection {port!r} is {c.expr!r}, not {expr!r}")
             for name, value in set_params.items():
                 o = next((o for o in inst.param_overrides if o.name == name), None)
                 if o is None:
