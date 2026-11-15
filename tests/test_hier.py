@@ -106,11 +106,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design
 
 from hdl_vet.ops import DriftError, Vet, VetError
 from hdl_vet.session import Session
 from hdl_vet.signoff import Change
+from vetkit import make_design
 
 
 @pytest.fixture
@@ -434,7 +434,13 @@ def test_generate_blocks_and_arrays_on_the_path_are_refused(tmp_path: Path):
         b"endmodule\n"
     )
     vet = vet_for(tmp_path, src)
-    for to, word in (("t.g[0].u", "generate"), ("t.u", "generate block"), ("t.u_arr", "instance array"), ("t.u_arr[0]", "array")):
+    cases = (
+        ("t.g[0].u", "generate"),
+        ("t.u", "generate block"),
+        ("t.u_arr", "instance array"),
+        ("t.u_arr[0]", "array"),
+    )
+    for to, word in cases:
         with pytest.raises(VetError, match=word):
             vet.punch_port("x", "input", to=to, all_instances=True)
     assert vet.log == [] and vet.finish().files == {}
@@ -478,7 +484,7 @@ def test_post_condition_fires_when_a_level_is_undone(vet, kit):
     from vetkit import span
 
     vet.punch_port("dft_en", "input", to="top.u_mid")
-    vet.design  # apply the queue
+    _ = vet.design  # apply the queue
     start, end = span(vet.text(kit.top), b", .dft_en(dft_en)")
     vet.splice(kit.top, start, end, b"")
     r = vet.finish()

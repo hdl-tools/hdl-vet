@@ -47,17 +47,18 @@ with it, so the baseline's diagnostics and snapshot must be unaffected by them.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, span
 
 from hdl_vet import slang_adapter
 from hdl_vet.filelist import read_filelist
 from hdl_vet.ops import Vet
 from hdl_vet.session import Session
 from hdl_vet.slang_adapter import AdapterError, LoadCache, load
+from vetkit import make_design, span
 
 
 def describe(design) -> dict:
@@ -367,7 +368,7 @@ def test_session_reloads_equal_fresh_loads_and_parse_only_what_changed(kit, monk
     parsed = count_parses(monkeypatch)
     vet.punch_port("dft_en", "input", to="top.u_mid.u_l0", all_instances=True)
     vet.punch_port("dbg_o", "output", to="top.u_mid", signal="y0")  # re-loads: three files changed
-    session_parses = [n for n in parsed]
+    session_parses = list(parsed)
     vet.module("mid").instance("u_l1").set_param("DEPTH", 5, was=3)
     vet.propagate_param("DEPTH", to="top.u_mid.u_l1")
     r = vet.finish()
@@ -383,10 +384,8 @@ def test_baseline_is_unaffected_by_later_loads(kit):
     for old, new in ((b".DEPTH(3)", b".DEPTH(5)"), (b".DEPTH(5)", b".DEPTH(6)"), (b"endmodule", b"endmodul")):
         start, end = span(s.text(kit.mid), old)
         s.splice(kit.mid, start, end, new)
-        try:
+        with contextlib.suppress(AdapterError):
             s.refresh()
-        except AdapterError:
-            pass
         s.loaded.diagnostics()
     assert s.baseline_snapshot() == want["snapshot"]
     assert differences(describe(s._baseline), want) == []

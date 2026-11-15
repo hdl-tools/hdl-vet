@@ -72,14 +72,14 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from test_instances import CELLS
-from vetkit import make_design, span, tree_bytes
 
 import hdl_vet.archive
 from hdl_vet.cli import main
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import Session, SessionError
+from test_instances import CELLS
+from vetkit import make_design, span, tree_bytes
 
 
 @pytest.fixture
@@ -153,8 +153,16 @@ def test_post_conditions_see_the_queue_when_the_text_ends_up_unchanged(kit, cell
 
 
 def test_a_script_sees_what_the_scripts_before_it_queued(kit, tmp_path: Path, capsys):
-    one = script(tmp_path, "one", 'p = vet.module("top").path\nat = vet.text(p).index(b"0000")\nvet.splice(p, at, at + 4, b"1111")')
-    two = script(tmp_path, "two", 'p = vet.module("top").path\nat = vet.text(p).index(b"1111")\nvet.splice(p, at, at + 4, b"2222")')
+    one = script(
+        tmp_path,
+        "one",
+        'p = vet.module("top").path\nat = vet.text(p).index(b"0000")\nvet.splice(p, at, at + 4, b"1111")',
+    )
+    two = script(
+        tmp_path,
+        "two",
+        'p = vet.module("top").path\nat = vet.text(p).index(b"1111")\nvet.splice(p, at, at + 4, b"2222")',
+    )
     base = ["apply", "-f", kit.filelist, "--top", "top"]
     assert run(*base, "-s", one, "-s", two, "-o", tmp_path / "straight") == 0
     assert b"sha256: 2222" in (tmp_path / "straight" / "rtl" / "top.sv").read_bytes()
@@ -179,7 +187,11 @@ def test_a_refusal_reads_the_same_in_one_run_and_in_a_split_run(kit, tmp_path: P
 
 def test_a_state_that_cannot_be_checked_between_scripts_is_still_reported_by_sign_off(kit, tmp_path: Path, capsys):
     # The first script leaves a design with a new error; the run goes on and sign-off reports it.
-    one = script(tmp_path, "one", 'p = vet.module("mid").path\nat = vet.text(p).index(b".d(a)")\nvet.splice(p, at, at + 5, b".d(nope_x)")')
+    one = script(
+        tmp_path,
+        "one",
+        'p = vet.module("mid").path\nat = vet.text(p).index(b".d(a)")\nvet.splice(p, at, at + 5, b".d(nope_x)")',
+    )
     two = script(tmp_path, "two", 'vet.module("top").add_wire("w")')
     assert run("apply", "-f", kit.filelist, "--top", "top", "-s", one, "-s", two, "-o", tmp_path / "out") == 1
     err = capsys.readouterr().err

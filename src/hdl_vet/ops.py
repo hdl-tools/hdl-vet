@@ -64,7 +64,10 @@ _DIRECTIONS = ("input", "output", "inout")
 _BASED = re.compile(r"'[sS]?[bBoOdDhH]")
 _DIGITS = re.compile(r"[0-9a-fA-FxXzZ?_]+")
 _NET_KEYWORDS = frozenset(
-    "wire tri tri0 tri1 triand trior trireg wand wor uwire supply0 supply1 interconnect".split()
+    [
+        "wire", "tri", "tri0", "tri1", "triand", "trior", "trireg",
+        "wand", "wor", "uwire", "supply0", "supply1", "interconnect",
+    ]
 )
 
 
@@ -803,7 +806,11 @@ class Vet:
         sources = set(self.session.filelist.files)
         headers = tuple(self.session.text(p) for p in self.session.files if p not in sources)
         known = self._gen_headers
-        if known is None or len(known) != len(headers) or any(a is not b and a != b for a, b in zip(known, headers)):
+        if (
+            known is None
+            or len(known) != len(headers)
+            or any(a is not b and a != b for a, b in zip(known, headers, strict=True))
+        ):
             self._gen_cache.clear()
             self._gen_headers = headers
         out: dict[str, list[tuple[str, str, bool]]] = {}
@@ -987,7 +994,9 @@ class Vet:
         self._checks = [
             c
             for c in self._checks
-            if not (len(c.key) >= 3 and c.key[0] in ("replace_module", "conn", "param") and c.key[1:3] == (module, name))
+            if not (
+                len(c.key) >= 3 and c.key[0] in ("replace_module", "conn", "param") and c.key[1:3] == (module, name)
+            )
         ]
 
     def _refuse_disabled(self, op: str, mod: str, info: ModuleInfo, name: str) -> None:
@@ -1042,7 +1051,7 @@ class Vet:
         if plan.skip:
             self._record(plan.op, plan.target, "skipped")
             return
-        assert plan.path is not None
+        assert plan.path is not None  # noqa: S101 - every plan that is not skipped names its file
         self._queue(plan.path, plan.splices)
         if plan.mark is not None:
             self._mark(*plan.mark)
@@ -1256,7 +1265,9 @@ class Vet:
         decl = next((d for d in info.decls if d.name == signal), None)
         if port is None and decl is None:
             names = [p.name for p in info.ports] + [d.name for d in info.decls]
-            raise VetError(f"{op}: module {mod!r} has no net, variable or port {signal!r}{_did_you_mean(signal, names)}")
+            raise VetError(
+                f"{op}: module {mod!r} has no net, variable or port {signal!r}{_did_you_mean(signal, names)}"
+            )
         if port is not None and self._is_interface(mod, signal):
             raise VetError(f"{op}: {signal!r} in module {mod!r} is an interface port, which cannot be punched")
         if port is not None:
@@ -1265,7 +1276,7 @@ class Vet:
             if not port.type_text:
                 raise VetError(f"{op}: cannot tell the type of port {signal!r} of module {mod!r}; pass type= or width=")
             return port.type_text
-        assert decl is not None
+        assert decl is not None  # noqa: S101 - no port, so the check above found a declaration
         toks = tokens(self.session.text(info.path)[decl.start : decl.end].decode("utf-8", errors="replace"))
         if "interconnect" in (tokens(decl.type_text)[:1] or toks[:1]):
             raise VetError(f"{op}: {signal!r} in module {mod!r} is declared interconnect, which cannot be punched")
@@ -1293,7 +1304,7 @@ class Vet:
             raise VetError(f"{op}: the signal must be a plain identifier, not {signal!r}")
         out = direction == "output"
         snap = self._snap()
-        mods, paths, inames = self._walk_path(op, to)
+        mods, _paths, inames = self._walk_path(op, to)
         n = len(mods) - 1
         for m in mods[1:]:
             where = self.module_paths(m)
@@ -1325,11 +1336,10 @@ class Vet:
         self._refresh_for(mods)
         # After the refresh, so a copy added by an earlier raw splice is seen.
         self._refuse_generate_copies(op, mods[1:])
-        if out and sig != name:
-            if any(p.name == name for p in self._info(mods[-1]).ports):
-                # an assign to an existing port needs its drivers: they depend on everything queued
-                self.session.refresh()
-                self._sync()
+        # an assign to an existing port needs its drivers: they depend on everything queued
+        if out and sig != name and any(p.name == name for p in self._info(mods[-1]).ports):
+            self.session.refresh()
+            self._sync()
         infos = {m: self._info(m) for m in mods}
         if out:
             existing = [
@@ -1358,7 +1368,10 @@ class Vet:
             if sig is not None:
                 self._signal_type(op, mods[-1] if out else mods[0], infos[mods[-1] if out else mods[0]], sig)
         elif sig is not None:
-            base, pwidth = self._signal_type(op, mods[-1] if out else mods[0], infos[mods[-1] if out else mods[0]], sig), None
+            base, pwidth = (
+                self._signal_type(op, mods[-1] if out else mods[0], infos[mods[-1] if out else mods[0]], sig),
+                None,
+            )
         else:
             base, pwidth = "logic", None
         text = f"{base}{_range(pwidth)}"
@@ -1382,7 +1395,7 @@ class Vet:
             port_plan = self._plan_add_port(m, name, decl, infos[m], self.module_paths(m))
             plans.append(port_plan)
             if out and i == n:
-                assert sig is not None
+                assert sig is not None  # noqa: S101 - an output always has a source signal
                 plans.append(self._plan_assign(m, infos[m], name, sig, planned_port=not port_plan.skip))
         for (host, iname), child in sorted(targets.items()):
             handle = Instance(self, host, iname)
@@ -1535,7 +1548,9 @@ class Module:
         ]
         if len(found) != count:
             listing = ", ".join(i.name for i in found) or "none"
-            raise VetError(f"module {self._name!r}: expected {count} matching instances, found {len(found)} ({listing})")
+            raise VetError(
+                f"module {self._name!r}: expected {count} matching instances, found {len(found)} ({listing})"
+            )
         return [Instance(self.vet, self._name, i.name, self._instances) for i in found]
 
     # --- operations
@@ -1826,7 +1841,9 @@ class Module:
                 if sp is None:
                     sp = [remove_all(idata, conns)]
                 if port.direction in ("output", "inout"):
-                    v._drove.extend((host, base) for c in inst.connections if c.port == name for base in driven_bases(c.expr))
+                    v._drove.extend(
+                        (host, base) for c in inst.connections if c.port == name for base in driven_bases(c.expr)
+                    )
                 plans.append(
                     _Plan(op, mod, path=inst.path, splices=sp, mark=("conns", host, inst.name), quiet=True)
                 )
@@ -1891,11 +1908,12 @@ class Module:
                 drop = {i for i, o in enumerate(inst.param_overrides) if o.name == name}
                 if not drop:
                     continue
+                assert inst.params_close is not None  # noqa: S101 - it has overrides, so a parameter list
                 idata = v.session.text(inst.path)
                 items = [(o.start, o.end) for o in inst.param_overrides]
-                sp = edit_list(idata, items, drop, inst.params_close, _eol(idata))  # type: ignore[arg-type]
+                sp = edit_list(idata, items, drop, inst.params_close, _eol(idata))
                 if sp is None:
-                    sp = [(inst.module_end, inst.params_close + 1, _list_gap(idata, inst.params_close))]  # type: ignore[operator]
+                    sp = [(inst.module_end, inst.params_close + 1, _list_gap(idata, inst.params_close))]
                 plans.append(
                     _Plan(op, mod, path=inst.path, splices=sp, mark=("overrides", host, inst.name), quiet=True)
                 )
@@ -2117,7 +2135,8 @@ class Instance:
         if kind != "value":
             what = "a localparam" if kind == "local" else "a type parameter"
             raise VetError(
-                f"set_param {self.target}: parameter {name!r} of module {inst.module!r} is {what}, not an overridable value"
+                f"set_param {self.target}: parameter {name!r} of module {inst.module!r} is {what}, "
+                f"not an overridable value"
             )
         v._commit(self._plan_set_param(inst, paths, name, value, was))
 
@@ -2311,7 +2330,9 @@ class Instance:
                 )
         for n, expr in connect.items():
             if n not in new_ports:
-                problems.append(f"connect names {n!r}, which is not a port of module {module!r}{_did_you_mean(n, new_ports)}")
+                problems.append(
+                    f"connect names {n!r}, which is not a port of module {module!r}{_did_you_mean(n, new_ports)}"
+                )
             elif not tokens(expr):
                 problems.append(f"connect gives port {n!r} an empty expression; use unconnected= for an output")
         for n in unconnected:
@@ -2323,9 +2344,11 @@ class Instance:
                 problems.append(f"unconnected names {n!r}, an input port, which cannot be left unconnected")
         for n in set_params:
             if n not in new_values:
-                kind = new_info.param_kinds.get(n)
-                why = "is not a parameter" if kind is None else "is not an overridable value parameter"
-                problems.append(f"set_params names {n!r}, which {why} of module {module!r}{_did_you_mean(n, new_values)}")
+                pkind = new_info.param_kinds.get(n)
+                why = "is not a parameter" if pkind is None else "is not an overridable value parameter"
+                problems.append(
+                    f"set_params names {n!r}, which {why} of module {module!r}{_did_you_mean(n, new_values)}"
+                )
 
         landing: dict[str, list[str]] = {}
         for n in old_conns:
@@ -2367,9 +2390,9 @@ class Instance:
                     f"override {n!r} is not accounted for: module {module!r} has no overridable parameter {n!r} "
                     f"(rename it with params= or remove it with drop_params=)"
                 )
-        for t, who in carried.items():
-            if len(who) > 1:
-                problems.append(f"overrides {' and '.join(repr(n) for _, n in who)} both land on parameter {t!r}")
+        for t, olds in carried.items():
+            if len(olds) > 1:
+                problems.append(f"overrides {' and '.join(repr(n) for _, n in olds)} both land on parameter {t!r}")
         for n in set_params:
             if any(how == "renamed" for how, _ in carried.get(n, [])):
                 problems.append(f"set_params and the renamed override both land on parameter {n!r}")
@@ -2404,7 +2427,7 @@ class Instance:
         for i, c in enumerate(conns):
             if i in drop or c.port not in ports:
                 continue
-            assert c.port is not None
+            assert c.port is not None  # noqa: S101 - `c.port in ports` above, and None is never a key
             if c.open is None:
                 splices.append((c.start, c.end, f".{ports[c.port]}({c.port})".encode()))
                 continue
@@ -2427,7 +2450,7 @@ class Instance:
         fresh = [f".{n:<{w}}({x})".encode() for n, x in set_params.items() if n not in replaced]
         oitems = [(o.start, o.end) for o in ovs]
         if ovs:
-            assert inst.params_close is not None
+            assert inst.params_close is not None  # noqa: S101 - overrides exist, so the list has its paren
             sp = edit_list(data, oitems, odrop, inst.params_close, eol, fresh)
             if sp is None:
                 whole = b" #(" + b", ".join(fresh) + b")" if fresh else _list_gap(data, inst.params_close)
@@ -2441,10 +2464,14 @@ class Instance:
         for i, o in enumerate(ovs):
             if i in odrop:
                 continue
-            assert o.name is not None
+            assert o.name is not None  # noqa: S101 - positional overrides were refused above
             if o.name in replaced:
                 text = set_params[o.name].encode()
-                splices.append((o.open + 1, o.end - 1, text) if o.open is not None else (o.start, o.end, f".{o.name}({set_params[o.name]})".encode()))
+                splices.append(
+                    (o.open + 1, o.end - 1, text)
+                    if o.open is not None
+                    else (o.start, o.end, f".{o.name}({set_params[o.name]})".encode())
+                )
             elif o.name in params:
                 if o.open is None:
                     splices.append((o.start, o.end, f".{params[o.name]}({o.name})".encode()))
@@ -2486,20 +2513,20 @@ class Instance:
         v._sync()
         after = v.session.loaded
         for p in paths:
-            a, b = before.instance_snap(p), after.instance_snap(p)
-            if b is None:
+            old_snap, new_snap = before.instance_snap(p), after.instance_snap(p)
+            if new_snap is None:
                 raise VetError(f"{op} {target}: there is no instance at {p} in the edited design")
-            if a is None:
+            if old_snap is None:
                 continue
             wrong: list[str] = []
             for old in old_conns:
                 if old in drop_ports:
                     continue
                 new = ports.get(old, old)
-                x, y = a.ports.get(old), b.ports.get(new)
+                x, y = old_snap.ports.get(old), new_snap.ports.get(new)
                 if x is None or y is None:
                     continue
-                tx, ty = a.port_types.get(old), b.port_types.get(new)
+                tx, ty = old_snap.port_types.get(old), new_snap.port_types.get(new)
                 if x[0] != y[0]:
                     wrong.append(f"port {old!r} of {cur!r} is an {x[0]} but port {new!r} of {module!r} is an {y[0]}")
                 elif x[1] != y[1] and x[1] > 0 and y[1] > 0:
@@ -2517,10 +2544,10 @@ class Instance:
                 src = carried[n][0][1] if n in carried else n  # the parameter it takes over from
                 if src == n and old_info.param_kinds.get(n) != "value":
                     continue
-                x, y = a.params.get(src), b.params.get(n)
-                if x is not None and y is not None and not _same_value(x, y):
+                xv, yv = old_snap.params.get(src), new_snap.params.get(n)
+                if xv is not None and yv is not None and not _same_value(xv, yv):
                     raise VetError(
-                        f"{op} {target}: parameter {n!r} would change from {x} to {y}: {module!r} takes "
+                        f"{op} {target}: parameter {n!r} would change from {xv} to {yv}: {module!r} takes "
                         f"the value differently from {cur!r}; keep the value with set_params={{{n!r}: ...}} "
                         f"or accept the new one with an explicit set_params"
                     )

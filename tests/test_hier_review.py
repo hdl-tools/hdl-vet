@@ -47,10 +47,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design
 
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from vetkit import make_design
 
 LEAF_W = b"module leaf #(parameter int W = 4) (input logic a);\nendmodule\n"
 
@@ -87,7 +87,8 @@ def test_propagate_refuses_an_unrelated_parameter_of_the_same_name(tmp_path: Pat
     vet = vet_for(
         tmp_path,
         LEAF_W
-        + b"module mid #(parameter int W = 8) (input logic a);\n  logic [W-1:0] r;\n  leaf #(.W(8)) u_l (.a(a));\nendmodule\n"
+        + b"module mid #(parameter int W = 8) (input logic a);\n  logic [W-1:0] r;\n"
+        b"  leaf #(.W(8)) u_l (.a(a));\nendmodule\n"
         + b"module t (input logic a);\n  mid #(.W(3)) u_mid (.a(a));\nendmodule\n",
     )
     with pytest.raises(VetError, match=r"mid.*'W'"):
@@ -150,7 +151,7 @@ def test_propagate_permits_no_value_change_on_the_way(tmp_path: Path):
         + b"module t (input logic a);\n  mid u_mid (.a(a));\nendmodule\n",
     )
     vet.propagate_param("W", to="t.u_mid.u_l")
-    vet.design
+    _ = vet.design
     text = vet.text(tmp_path / "t.sv")
     at = text.index(b".W(W)) u_l")
     vet.splice(tmp_path / "t.sv", at, at + 5, b".W(W + 1)")
@@ -166,7 +167,8 @@ def test_output_through_an_already_driven_port_is_refused(tmp_path: Path):
     vet = vet_for(
         tmp_path,
         b"module leaf (input logic a, output logic [3:0] q);\n  assign q = {4{a}};\nendmodule\n"
-        b"module mid (input logic a, output logic [3:0] dbg);\n  assign dbg = 4'h5;\n  leaf u_l (.a(a), .q());\nendmodule\n"
+        b"module mid (input logic a, output logic [3:0] dbg);\n  assign dbg = 4'h5;\n"
+        b"  leaf u_l (.a(a), .q());\nendmodule\n"
         b"module t (input logic a, output logic [3:0] dbg);\n  mid u_mid (.a(a), .dbg(dbg));\nendmodule\n",
     )
     with pytest.raises(VetError, match=r"mid.*'dbg'.*driven"):

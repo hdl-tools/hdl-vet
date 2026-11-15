@@ -172,11 +172,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, span
 
 from hdl_vet.ops import DriftError, Vet, VetError
 from hdl_vet.session import Session
 from hdl_vet.signoff import Change
+from vetkit import make_design, span
 
 
 @pytest.fixture
@@ -664,7 +664,7 @@ def test_add_assign_only_on_undriven_targets(vet):
 
 
 def corrupt(vet: Vet, path: Path, old: bytes, new: bytes) -> None:
-    vet.design  # apply what is queued so the text shows the operation's result
+    _ = vet.design  # apply what is queued so the text shows the operation's result
     start, end = span(vet.text(path), old)
     vet.splice(path, start, end, new, old=old)
 

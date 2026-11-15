@@ -59,7 +59,6 @@ import sys
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, span, tree_bytes
 
 from hdl_vet import slang_adapter
 from hdl_vet.cli import main
@@ -67,6 +66,7 @@ from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import Session, SessionError
 from hdl_vet.signoff import Change, diff_snapshots
 from hdl_vet.slang_adapter import InstanceSnap, load
+from vetkit import make_design, span, tree_bytes
 
 
 @pytest.fixture
@@ -370,7 +370,10 @@ def test_dry_run_with_text_the_console_cannot_encode(kit, tmp_path: Path):
     )
     env = dict(os.environ, PYTHONIOENCODING="ascii")
     p = subprocess.run(
-        [sys.executable, "-m", "hdl_vet", "apply", "-f", str(kit.filelist), "-s", str(script), "--top", "top", "--dry-run"],
+        [
+            sys.executable, "-m", "hdl_vet", "apply", "-f", str(kit.filelist), "-s", str(script),
+            "--top", "top", "--dry-run",
+        ],
         capture_output=True,
         env=env,
         check=False,

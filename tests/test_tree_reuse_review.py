@@ -49,10 +49,9 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from test_tree_reuse import describe, differences, write
-
 from hdl_vet.filelist import read_filelist
 from hdl_vet.slang_adapter import LoadCache, load
+from test_tree_reuse import describe, differences, write
 
 
 def fresh(fl, top, texts):
@@ -86,7 +85,10 @@ def test_an_earlier_source_may_include_a_later_one(tmp_path: Path):
     fl = read_filelist(
         write(
             tmp_path,
-            {"t.sv": 'module t;\n`include "defs.sv"\nlocalparam int P = W; endmodule\n', "defs.sv": "localparam int W = 5;\n"},
+            {
+                "t.sv": 'module t;\n`include "defs.sv"\nlocalparam int P = W; endmodule\n',
+                "defs.sv": "localparam int W = 5;\n",
+            },
             "t.sv\ndefs.sv\n",
         )
     )

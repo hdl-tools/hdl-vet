@@ -66,11 +66,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, span
 
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
 from hdl_vet.slang_adapter import load
+from vetkit import make_design, span
 
 
 @pytest.fixture

@@ -62,13 +62,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from vetkit import make_design, span, tree_bytes
 
 from hdl_vet import __version__
 from hdl_vet.filelist import read_filelist
 from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import HEADER_MARK, Session
 from hdl_vet.slang_adapter import load
+from vetkit import make_design, span, tree_bytes
 
 GOOD = '''\
 def apply(vet):
