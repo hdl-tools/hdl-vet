@@ -30,9 +30,18 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
+from functools import partial
 from pathlib import Path
 from typing import Any
 
+from hdl_vet.archive import (
+    ArchiveError,
+    need_dict,
+    need_list,
+    need_str,
+    read_archive,
+    write_archive,
+)
 from hdl_vet.listedit import append_items, edit_list, line_rule, remove_all
 from hdl_vet.session import Result, Session, SessionError, describe
 from hdl_vet.slang_adapter import (
@@ -46,6 +55,7 @@ from hdl_vet.slang_adapter import (
     is_simple_identifier,
     tokens,
 )
+from hdl_vet.splice import SpliceError
 
 __all__ = ["DriftError", "Instance", "Module", "OpRecord", "Vet", "VetError"]
 
@@ -259,6 +269,243 @@ def _param_decl(type: str, name: str, default: object) -> str:
     return f"parameter {t + ' ' if t else ''}{name} = {default}"
 
 
+@dataclass(frozen=True)
+class _Check:
+    """A post-condition as plain data: `kind` names its evaluator, `args` are the strings it needs.
+
+    `key` is the target: a later check with the same key replaces the earlier one. Nothing here
+    is a closure, so a session can be saved with its checks and evaluate them after a restore.
+    """
+
+    key: tuple[str, ...]
+    kind: str
+    args: tuple[str | None, ...]
+
+
+_MISSING = "{}: module not found in the final design"
+
+
+def _module_of(design: Design, mod: str) -> ModuleInfo | None:
+    try:
+        return design.module(mod)
+    except AdapterError:
+        return None
+
+
+def _ev_add_file(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    name, path = a
+    mods = set(design.defined_in(Path(path)))
+    if any("." in p and s.module in mods for p, s in design.snapshot().items()):
+        return None
+    return f"add_file {name}: none of its modules is instantiated"
+
+
+def _ev_add_port(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name, decl = a
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(f"add_port {mod} {name}")
+    port = next((p for p in m.ports if p.name == name), None)
+    if port is None:
+        return f"add_port {mod} {name}: port not found in the final design"
+    text = session.text(m.path)[port.start : port.end].decode("utf-8", errors="replace")
+    if not _same(text, decl):
+        return f"add_port {mod} {name}: expected {decl!r}, found {text!r}"
+    return None
+
+
+def _ev_add_param(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name, default, type = a
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(f"add_param {mod} {name}")
+    p = next((p for p in m.params if p.name == name), None)
+    if p is None or m.param_kinds.get(name) != "value":
+        return f"add_param {mod} {name}: parameter not found in the final design"
+    if not _same(p.default or "", default):
+        return f"add_param {mod} {name}: expected default {default!r}, found {p.default!r}"
+    if not _same(p.type_text, type):
+        return f"add_param {mod} {name}: expected type {type!r}, found {p.type_text!r}"
+    return None
+
+
+def _ev_add_wire(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name, type_text = a
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(f"add_wire {mod} {name}")
+    d = next((d for d in m.decls if d.name == name), None)
+    if d is None:
+        return f"add_wire {mod} {name}: declaration not found in the final design"
+    if not _same(d.type_text, type_text):
+        return f"add_wire {mod} {name}: expected type {type_text!r}, found {d.type_text!r}"
+    return None
+
+
+def _ev_add_assign(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, target, expr = a
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(f"add_assign {mod} {target}")
+    if not any(x.left == target and _same(x.right, expr) for x in m.assigns):
+        return f"add_assign {mod} {target}: the assignment 'assign {target} = {expr};' is missing"
+    return None
+
+
+def _ev_propagate_param(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    name, to, before = a
+    found = design.snapshot().get(to)
+    after = None if found is None else found.params.get(name)
+    if after != before:
+        return f"propagate_param {name} {to}: the value in use changed from {before!r} to {after!r}"
+    return None
+
+
+def _ev_remove_instance(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name = a
+    now = _module_of(design, mod)
+    if now is None:
+        return _MISSING.format(f"remove_instance {mod}.{name}")
+    if any(i.name == name for i in now.instances):
+        return f"remove_instance {mod}.{name}: the instance is still there in the final design"
+    return None
+
+
+def _ev_remove_wire(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name = a
+    now = _module_of(design, mod)
+    if now is None:
+        return _MISSING.format(f"remove_wire {mod} {name}")
+    if any(d.name == name for d in now.decls):
+        return f"remove_wire {mod} {name}: the declaration is still there in the final design"
+    return None
+
+
+def _ev_remove_assign(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, target = a
+    now = _module_of(design, mod)
+    if now is None:
+        return _MISSING.format(f"remove_assign {mod} {target}")
+    if any(x.left == target for x in now.assigns):
+        return f"remove_assign {mod} {target}: the assignment is still there in the final design"
+    return None
+
+
+def _ev_remove_port(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name = a
+    now = _module_of(design, mod)
+    if now is None:
+        return _MISSING.format(f"remove_port {mod} {name}")
+    if any(p.name == name for p in now.ports):
+        return f"remove_port {mod} {name}: the port is still there in the final design"
+    return None
+
+
+def _ev_remove_param(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, name = a
+    now = _module_of(design, mod)
+    if now is None:
+        return _MISSING.format(f"remove_param {mod} {name}")
+    if any(p.name == name for p in now.params):
+        return f"remove_param {mod} {name}: the parameter is still there in the final design"
+    return None
+
+
+def _ev_conn(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    """`text` is the expression a `connect` wants; None: a `disconnect` wants no connection."""
+    mod, name, port, text = a
+    op = "disconnect" if text is None else "connect"
+    try:
+        inst = design.module(mod).instance(name)
+    except AdapterError:
+        return f"{op} {mod}.{name} {port}: instance not found in the final design"
+    c = next((c for c in inst.connections if c.port == port), None)
+    found = None if c is None else c.expr
+    if text is None:
+        ok, expect = found is None or not tokens(found), "no connection"
+    else:
+        ok, expect = found is not None and _same(found, text), repr(text)
+    return None if ok else f"{op} {mod}.{name} {port}: expected {expect}, found {found!r}"
+
+
+def _ev_set_param(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, iname, name, text = a
+    try:
+        found = design.module(mod).instance(iname).param_override(name).value
+    except AdapterError:
+        return f"set_param {mod}.{iname} {name}: override not found in the final design"
+    if not _same(found, text):
+        return f"set_param {mod}.{iname} {name}: expected {text!r}, found {found!r}"
+    return None
+
+
+def _ev_replace_module(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, inst, module = a
+    try:
+        found = design.module(mod).instance(inst).module
+    except AdapterError:
+        return f"replace_module {mod}.{inst}: instance not found in the final design"
+    if found != module:
+        return f"replace_module {mod}.{inst}: expected module {module!r}, found {found!r}"
+    return None
+
+
+# kind -> (evaluator, number of arguments)
+_EVALUATORS: dict[str, tuple[Callable[[Session, tuple[Any, ...], Design], str | None], int]] = {
+    "add_file": (_ev_add_file, 2),
+    "add_port": (_ev_add_port, 3),
+    "add_param": (_ev_add_param, 4),
+    "add_wire": (_ev_add_wire, 3),
+    "add_assign": (_ev_add_assign, 3),
+    "propagate_param": (_ev_propagate_param, 3),
+    "remove_instance": (_ev_remove_instance, 2),
+    "remove_wire": (_ev_remove_wire, 2),
+    "remove_assign": (_ev_remove_assign, 2),
+    "remove_port": (_ev_remove_port, 2),
+    "remove_param": (_ev_remove_param, 2),
+    "conn": (_ev_conn, 4),
+    "param": (_ev_set_param, 4),
+    "replace_module": (_ev_replace_module, 3),
+}
+
+
+_DAMAGE = (KeyError, TypeError, ValueError, AttributeError, IndexError, SpliceError, RecursionError)
+
+
+def _stored_check(data: object) -> _Check:
+    """A post-condition from an archive's index; TypeError or ValueError when it is not one."""
+    fields = need_dict(data)
+    kind = need_str(fields["kind"])
+    if kind not in _EVALUATORS:
+        raise ValueError(f"unknown post-condition {kind!r}")
+    key = tuple(need_str(x) for x in need_list(fields["key"]))
+    args = tuple(None if x is None else need_str(x) for x in need_list(fields["args"], _EVALUATORS[kind][1]))
+    if not key:
+        raise ValueError(f"post-condition {kind!r} has no key")
+    return _Check(key, kind, args)
+
+
+def _read_vet_state(
+    index: dict[str, Any],
+) -> tuple[list[OpRecord], list[str], list[_Check], dict[tuple[str, str], set[str]]]:
+    """The Vet's own part of an archive's index, type-checked."""
+    log = [OpRecord(*(need_str(x) for x in need_list(e, 3))) for e in need_list(index["log"])]
+    notes = [need_str(n) for n in need_list(index["notes"])]
+    checks = [_stored_check(c) for c in need_list(index["checks"])]
+    if len({c.key for c in checks}) != len(checks):
+        raise ValueError("two post-conditions have the same key")
+    swapped: dict[tuple[str, str], set[str]] = {}
+    for entry in need_list(index["swapped"]):
+        mod, name, mods = need_list(entry, 3)
+        swapped[(need_str(mod), need_str(name))] = {need_str(m) for m in need_list(mods)}
+    return log, notes, checks, swapped
+
+
+def _evaluate(session: Session, check: _Check, design: Design) -> str | None:
+    """The message of a failed post-condition on `design`, or None."""
+    return _EVALUATORS[check.kind][0](session, check.args, design)
+
+
 @dataclass
 class _Plan:
     """What one underlying operation will do; `_commit` queues it and registers the rest."""
@@ -272,8 +519,7 @@ class _Plan:
     added: tuple[str, str, tuple[str, str]] | None = None  # (module, name, (kind, text))
     expects: list[tuple[str, str, str]] = field(default_factory=list)
     permits: list[tuple[str, str, str]] = field(default_factory=list)
-    check_key: tuple[str, ...] | None = None
-    check: Callable[[Design], str | None] | None = None
+    check: _Check | None = None
     quiet: bool = False  # part of an operation whose first plan is logged
 
 
@@ -284,7 +530,7 @@ class _VetState:
     session: object
     log: int
     notes: int
-    checks: dict[tuple[str, ...], Callable[[Design], str | None]]
+    checks: list[_Check]
     swapped: dict[tuple[str, str], set[str]]
     drove: int
 
@@ -302,7 +548,7 @@ class Vet:
         self._swapped: dict[tuple[str, str], set[str]] = {}
         # (module, signal) pairs that a removed connection or assignment used to drive
         self._drove: list[tuple[str, str]] = []
-        self._checks: dict[tuple[str, ...], Callable[[Design], str | None]] = {}
+        self._checks: list[_Check] = []  # in the order registered; a key is there once
         self._dirty: set[tuple[str, ...]] = set()
         self._all = False
         self._added: dict[str, dict[str, tuple[str, str]]] = {}
@@ -335,7 +581,91 @@ class Vet:
         return design
 
     def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
-        return self.session.finish(scripts, list(self._checks.values()))
+        return self.session.finish([*self.session.scripts, *scripts], self._evaluators())
+
+    def _idle(self, op: str) -> None:
+        """Refuse `op` inside a `group` block and after `finish`."""
+        if self._depth:
+            raise VetError(f"{op}: not allowed inside a group")
+        if self.session.finished:
+            raise VetError(f"{op}: the session is already finished")
+
+    def check(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
+        """What `finish` would return now, without finishing: text, queue and operations are as before.
+
+        Only `session.reloads` advances. What this Vet knows is waiting for a re-load (dirty marks,
+        names added since the last load) is kept: the rolled-back session is as unloaded as before.
+        """
+        self._idle("check")
+        self._sync()
+        dirty, everything = set(self._dirty), self._all
+        added = {mod: dict(names) for mod, names in self._added.items()}
+        try:
+            return self.session.check([*self.session.scripts, *scripts], self._evaluators())
+        finally:
+            self._dirty, self._all, self._added = dirty, everything, added
+            self._seen = self.session.reloads
+
+    # --- saved sessions ------------------------------------------------------------
+
+    def save(self, path: Path | str, scripts: Iterable[tuple[str, str]] = ()) -> None:
+        """Apply and load what is queued, then write the session to the archive `path`.
+
+        `scripts`: (name, sha256) of the scripts applied since the session began or was resumed;
+        they join `session.scripts`. The session stays usable. Refused when `path` is inside the
+        input tree, is the file list or the source of an added file. A save in the middle of a
+        script ends an offset-map stage there, as a load does. See `tests/test_save_resume.py`.
+        """
+        self._idle("save")
+        dest = Path(path)
+        root = self.session.layout_root
+        target = dest.resolve()
+        if target == root or root in target.parents:
+            raise VetError(f"save: {dest} is inside the input tree {root}; the archive must not be written there")
+        for owned, what in self.session.owned_paths().items():
+            if target == owned:
+                raise VetError(f"save: {dest} is {what}; the archive must not replace it")
+        try:
+            self.session.refresh()
+        except AdapterError as e:
+            raise VetError(f"save: the edits queued cannot be loaded: {e}") from e
+        self._sync()
+        applied = [(str(n), str(h)) for n, h in scripts]
+        extra = {
+            "log": [[r.op, r.target, r.status] for r in self.log],
+            "notes": list(self.notes),
+            "checks": [{"key": list(c.key), "kind": c.kind, "args": list(c.args)} for c in self._checks],
+            "swapped": [[mod, name, sorted(mods)] for (mod, name), mods in sorted(self._swapped.items())],
+        }
+        try:
+            index, files = self.session.to_state([*self.session.scripts, *applied], extra)
+            write_archive(dest, index, files)
+        except (SessionError, ArchiveError) as e:
+            raise VetError(f"save: {e}") from e
+        self.session.scripts.extend(applied)
+
+    @classmethod
+    def restore(cls, path: Path | str) -> Vet:
+        """A Vet on a new session in the state saved at `path`; the input tree is not needed.
+
+        SessionError (naming `path`) when it is not a session archive, is damaged in any way, has
+        another format version or too much data, or names a path outside its layout root.
+        """
+        try:
+            index, files = read_archive(Path(path))
+        except ArchiveError as e:
+            raise SessionError(str(e)) from e
+        try:
+            log, notes, checks, swapped = _read_vet_state(index)
+            vet = cls(Session.from_state(index, files))
+        except SessionError as e:
+            raise SessionError(f"{path}: {e}") from e
+        except AdapterError as e:
+            raise SessionError(f"{path}: the saved design cannot be loaded: {e}") from e
+        except _DAMAGE as e:
+            raise SessionError(f"{path}: the session archive is damaged ({type(e).__name__}: {e})") from e
+        vet.log, vet.notes, vet._checks, vet._swapped = log, notes, checks, swapped
+        return vet
 
     # --- selectors -----------------------------------------------------------------
 
@@ -403,10 +733,15 @@ class Vet:
             self._paths = paths
         return list(self._paths.get(module, []))
 
-    def _set_check(self, key: tuple[str, ...], check: Callable[[Design], str | None]) -> None:
+    def _set_check(self, check: _Check) -> None:
         """Register a post-condition; a later one on the same target replaces the earlier."""
-        self._checks.pop(key, None)
-        self._checks[key] = check
+        self._checks = [c for c in self._checks if c.key != check.key]
+        self._checks.append(check)
+
+    def _evaluators(self) -> list[Callable[[Design], str | None]]:
+        """The registered post-conditions as `Session.finish` takes them."""
+        session = self.session
+        return [partial(_evaluate, session, c) for c in self._checks]
 
     def _instance_info(self, module: str, name: str) -> InstanceInfo:
         info = self._info(module)
@@ -522,7 +857,7 @@ class Vet:
             self.session.checkpoint(),
             len(self.log),
             len(self.notes),
-            dict(self._checks),
+            list(self._checks),
             {k: set(v) for k, v in self._swapped.items()},
             len(self._drove),
         )
@@ -531,7 +866,7 @@ class Vet:
         self.session.rollback(st.session)
         del self.log[st.log :]
         del self.notes[st.notes :]
-        self._checks = dict(st.checks)
+        self._checks = list(st.checks)
         self._swapped = {k: set(v) for k, v in st.swapped.items()}
         del self._drove[st.drove :]
         self._dirty.clear()
@@ -621,15 +956,7 @@ class Vet:
             if not added:
                 self._record("add_file", name, "skipped")
                 return
-            key = Path(path).resolve()
-
-            def check(design: Design) -> str | None:
-                mods = set(design.defined_in(key))
-                if any("." in p and s.module in mods for p, s in design.snapshot().items()):
-                    return None
-                return f"add_file {name}: none of its modules is instantiated"
-
-            self._set_check(("add_file", name), check)
+            self._set_check(_Check(("add_file", name), "add_file", (name, str(Path(path).resolve()))))
             self._record("add_file", name, "applied")
 
         self._checked("add_file", name, run, tried=True)
@@ -657,10 +984,11 @@ class Vet:
 
     def _drop_registered(self, module: str, name: str) -> None:
         """Forget the post-conditions earlier operations registered for the instance `name` of `module`."""
-        for key in [
-            k for k in self._checks if len(k) >= 3 and k[0] in ("replace_module", "conn", "param") and k[1:3] == (module, name)
-        ]:
-            del self._checks[key]
+        self._checks = [
+            c
+            for c in self._checks
+            if not (len(c.key) >= 3 and c.key[0] in ("replace_module", "conn", "param") and c.key[1:3] == (module, name))
+        ]
 
     def _refuse_disabled(self, op: str, mod: str, info: ModuleInfo, name: str) -> None:
         """Refuse a name that conditional directives hide from this configuration but not from another."""
@@ -725,8 +1053,8 @@ class Vet:
             self.session.expect(kind, path, name, exact=True)
         for kind, path, name in plan.permits:
             self.session.permit(kind, path, name, exact=True)
-        if plan.check_key is not None and plan.check is not None:
-            self._set_check(plan.check_key, plan.check)
+        if plan.check is not None:
+            self._set_check(plan.check)
         if not plan.quiet:
             self._record(plan.op, plan.target, "applied")
 
@@ -762,19 +1090,6 @@ class Vet:
             last = info.ports[-1]
             splices = _append_to_list(data, last.start, last.end, info.ports_close, item, eol)
 
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_port {mod} {name}: module not found in the final design"
-            port = next((p for p in m.ports if p.name == name), None)
-            if port is None:
-                return f"add_port {mod} {name}: port not found in the final design"
-            text = self.session.text(m.path)[port.start : port.end].decode("utf-8", errors="replace")
-            if not _same(text, decl):
-                return f"add_port {mod} {name}: expected {decl!r}, found {text!r}"
-            return None
-
         return _Plan(
             "add_port",
             mod,
@@ -784,8 +1099,7 @@ class Vet:
             added=(mod, name, ("port", _norm(decl))),
             expects=[("port-added", p, name) for p in paths],
             permits=[("connection-changed", p, name) for p in paths],
-            check_key=("add_port", mod, name),
-            check=check,
+            check=_Check(("add_port", mod, name), "add_port", (mod, name, decl)),
         )
 
     def _plan_add_param(
@@ -828,20 +1142,6 @@ class Vet:
             last = info.params[-1]
             splices = _append_to_list(data, last.start, last.end, info.params_close, item, _eol(data))
 
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_param {mod} {name}: module not found in the final design"
-            p = next((p for p in m.params if p.name == name), None)
-            if p is None or m.param_kinds.get(name) != "value":
-                return f"add_param {mod} {name}: parameter not found in the final design"
-            if not _same(p.default or "", default):
-                return f"add_param {mod} {name}: expected default {str(default)!r}, found {p.default!r}"
-            if not _same(p.type_text, type):
-                return f"add_param {mod} {name}: expected type {type!r}, found {p.type_text!r}"
-            return None
-
         return _Plan(
             "add_param",
             mod,
@@ -850,8 +1150,7 @@ class Vet:
             mark=("params", mod),
             added=(mod, name, ("param", _norm(decl))),
             expects=[("param-changed", p, name) for p in paths],
-            check_key=("add_param", mod, name),
-            check=check,
+            check=_Check(("add_param", mod, name), "add_param", (mod, name, str(default), str(type))),
         )
 
     def _plan_assign(
@@ -882,23 +1181,13 @@ class Vet:
             raise VetError(f"add_assign {mod}: endmodule does not start its line")
         text = info.body_indent.encode() + f"assign {target} = {expr};".encode() + _eol(data)
 
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_assign {mod} {target}: module not found in the final design"
-            if not any(a.left == target and _same(a.right, expr) for a in m.assigns):
-                return f"add_assign {mod} {target}: the assignment 'assign {target} = {expr};' is missing"
-            return None
-
         return _Plan(
             "add_assign",
             mod,
             path=info.path,
             splices=[(ls, ls, text)],
             mark=("decls", mod),
-            check_key=("add_assign", mod, target, _norm(expr)),
-            check=check,
+            check=_Check(("add_assign", mod, target, _norm(expr)), "add_assign", (mod, target, str(expr))),
         )
 
     # --- hierarchical operations ----------------------------------------------------
@@ -1200,15 +1489,7 @@ class Vet:
             before = None if found is None else found.params.get(name)
         self._commit_all(op, plans)
         if any(not p.skip for p in plans):
-
-            def check(design: Design) -> str | None:
-                found = design.snapshot().get(to)
-                after = None if found is None else found.params.get(name)
-                if after != before:
-                    return f"{op} {name} {to}: the value in use changed from {before!r} to {after!r}"
-                return None
-
-            self._set_check((op, name, to), check)
+            self._set_check(_Check((op, name, to), op, (name, to, before)))
 
 
 # --- Module handle -----------------------------------------------------------------
@@ -1321,19 +1602,7 @@ class Module:
         v._mark("decls", mod)
         v._added.setdefault(mod, {})[name] = ("decl", _norm(type_text))
 
-        def check(design: Design) -> str | None:
-            try:
-                m = design.module(mod)
-            except AdapterError:
-                return f"add_wire {mod} {name}: module not found in the final design"
-            d = next((d for d in m.decls if d.name == name), None)
-            if d is None:
-                return f"add_wire {mod} {name}: declaration not found in the final design"
-            if not _same(d.type_text, type_text):
-                return f"add_wire {mod} {name}: expected type {type_text!r}, found {d.type_text!r}"
-            return None
-
-        v._set_check(("add_wire", mod, name), check)
+        v._set_check(_Check(("add_wire", mod, name), "add_wire", (mod, name, type_text)))
         v._record("add_wire", mod, "applied")
 
     def add_assign(self, target: str, expr: object) -> None:
@@ -1384,15 +1653,6 @@ class Module:
             v._drop_registered(mod, name)
             v._drove.extend(v._driven_by(mod, inst))
 
-            def check(design: Design) -> str | None:
-                try:
-                    now = design.module(mod)
-                except AdapterError:
-                    return f"{op} {target}: module not found in the final design"
-                if any(i.name == name for i in now.instances):
-                    return f"{op} {target}: the instance is still there in the final design"
-                return None
-
             v._commit_all(
                 op,
                 [
@@ -1403,8 +1663,7 @@ class Module:
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
                         expects=[("instance-removed", p, "") for p in where],
-                        check_key=(op, mod, name),
-                        check=check,
+                        check=_Check((op, mod, name), op, (mod, name)),
                     )
                 ],
             )
@@ -1444,15 +1703,6 @@ class Module:
             data = v.session.text(info.path)
             a, b = line_rule(data, decl.stmt_start, decl.stmt_end)
 
-            def check(design: Design) -> str | None:
-                try:
-                    now = design.module(mod)
-                except AdapterError:
-                    return f"{op} {mod} {name}: module not found in the final design"
-                if any(d.name == name for d in now.decls):
-                    return f"{op} {mod} {name}: the declaration is still there in the final design"
-                return None
-
             v._commit_all(
                 op,
                 [
@@ -1462,8 +1712,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
-                        check_key=(op, mod, name),
-                        check=check,
+                        check=_Check((op, mod, name), op, (mod, name)),
                     )
                 ],
             )
@@ -1502,15 +1751,6 @@ class Module:
             a, b = line_rule(data, assign.stmt_start, assign.stmt_end)
             v._drove.extend((mod, base) for base in driven_bases(assign.left))
 
-            def check(design: Design) -> str | None:
-                try:
-                    now = design.module(mod)
-                except AdapterError:
-                    return f"{op} {mod} {target}: module not found in the final design"
-                if any(x.left == target for x in now.assigns):
-                    return f"{op} {mod} {target}: the assignment is still there in the final design"
-                return None
-
             v._commit_all(
                 op,
                 [
@@ -1520,8 +1760,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
-                        check_key=(op, mod, "assign", target),
-                        check=check,
+                        check=_Check((op, mod, "assign", target), op, (mod, target)),
                     )
                 ],
             )
@@ -1572,8 +1811,7 @@ class Module:
                     mark=("ports", mod),
                     expects=[("port-removed", p, name) for p in paths],
                     permits=[("connection-changed", p, name) for p in paths],
-                    check_key=(op, mod, name),
-                    check=lambda design: self._gone(design, op, "port", name, lambda m: m.ports),
+                    check=_Check((op, mod, name), op, (mod, name)),
                 )
             ]
             for host, inst in hosts:
@@ -1644,8 +1882,7 @@ class Module:
                     splices=splices,
                     mark=("params", mod),
                     expects=[("param-changed", p, name) for p in paths],
-                    check_key=(op, mod, name),
-                    check=lambda design: self._gone(design, op, "parameter", name, lambda m: m.params),
+                    check=_Check((op, mod, name), op, (mod, name)),
                 )
             ]
             for host, inst in hosts:
@@ -1665,15 +1902,6 @@ class Module:
             v._commit_all(op, plans)
 
         v._checked(op, mod, run)
-
-    def _gone(self, design: Design, op: str, what: str, name: str, items: Callable[[ModuleInfo], Any]) -> str | None:
-        try:
-            now = design.module(self._name)
-        except AdapterError:
-            return f"{op} {self._name} {name}: module not found in the final design"
-        if any(i.name == name for i in items(now)):
-            return f"{op} {self._name} {name}: the {what} is still there in the final design"
-        return None
 
 
 # --- Instance handle ---------------------------------------------------------------
@@ -1772,23 +2000,6 @@ class Instance:
                 f"{_did_you_mean(port, [p.name for p in im.ports])}"
             )
 
-    def _conn_check(
-        self, op: str, port: str, want: Callable[[str | None], bool], expect: str
-    ) -> Callable[[Design], str | None]:
-        mod, name = self._mod, self._name
-
-        def check(design: Design) -> str | None:
-            try:
-                c = self._conn(design.module(mod).instance(name), port)
-            except AdapterError:
-                return f"{op} {mod}.{name} {port}: instance not found in the final design"
-            found = None if c is None else c.expr
-            if not want(found):
-                return f"{op} {mod}.{name} {port}: expected {expect}, found {found!r}"
-            return None
-
-        return check
-
     def _is_interface_port(self, port: str) -> bool:
         snap = self.vet._snap()
         return any(
@@ -1855,8 +2066,7 @@ class Instance:
             splices=splices,
             mark=("conns", self._mod, self._name),
             expects=[("connection-changed", p, port) for p in paths],
-            check_key=("conn", self._mod, self._name, port),
-            check=self._conn_check("connect", port, lambda f: f is not None and _same(f, text), repr(text)),
+            check=_Check(("conn", self._mod, self._name, port), "conn", (self._mod, self._name, port, text)),
         )
 
     def disconnect(self, port: str, was: object | None = None) -> None:
@@ -1889,10 +2099,7 @@ class Instance:
         v._mark("conns", self._mod, self._name)
         for p in paths:
             v.session.expect("connection-changed", p, port, exact=True)
-        v._set_check(
-            ("conn", self._mod, self._name, port),
-            self._conn_check("disconnect", port, lambda f: f is None or not tokens(f), "no connection"),
-        )
+        v._set_check(_Check(("conn", self._mod, self._name, port), "conn", (self._mod, self._name, port, None)))
         v._record("disconnect", self.target, "applied")
 
     def set_param(self, name: str, value: object, was: object | None = None) -> None:
@@ -1961,17 +2168,6 @@ class Instance:
                 splices = _append_to_list(data, last.start, last.end, inst.params_close, item, _eol(data))
             else:
                 splices = [(inst.params_close, inst.params_close, item)]
-        mod, iname = self._mod, self._name
-
-        def check(design: Design) -> str | None:
-            try:
-                found = design.module(mod).instance(iname).param_override(name).value
-            except AdapterError:
-                return f"set_param {mod}.{iname} {name}: override not found in the final design"
-            if not _same(found, text):
-                return f"set_param {mod}.{iname} {name}: expected {text!r}, found {found!r}"
-            return None
-
         return _Plan(
             "set_param",
             self.target,
@@ -1979,8 +2175,7 @@ class Instance:
             splices=splices,
             mark=("overrides", self._mod, self._name),
             permits=[("param-changed", p, name) for p in paths] if permit else [],
-            check_key=("param", self._mod, self._name, name),
-            check=check,
+            check=_Check(("param", self._mod, self._name, name), "param", (self._mod, self._name, name, text)),
         )
 
     # --- replace_module (a checked operation)
@@ -2261,15 +2456,6 @@ class Instance:
 
         mod_name, inst_name = self._mod, self._name
 
-        def check(design: Design) -> str | None:
-            try:
-                found = design.module(mod_name).instance(inst_name).module
-            except AdapterError:
-                return f"{op} {mod_name}.{inst_name}: instance not found in the final design"
-            if found != module:
-                return f"{op} {mod_name}.{inst_name}: expected module {module!r}, found {found!r}"
-            return None
-
         before = v.session.loaded
         v._commit_all(
             op,
@@ -2282,8 +2468,7 @@ class Instance:
                     mark=("conns", mod_name, inst_name),
                     expects=[("module-changed", p, "*") for p in paths],
                     permits=[("*", p, "*") for p in paths],
-                    check_key=(op, mod_name, inst_name),
-                    check=check,
+                    check=_Check((op, mod_name, inst_name), op, (mod_name, inst_name, module)),
                 )
             ],
         )

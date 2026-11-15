@@ -17,19 +17,21 @@ This module does not import pyslang; it talks to `hdl_vet.slang_adapter`.
 
 from __future__ import annotations
 
+import base64
 import copy
 import os
 import re
 from collections import Counter
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from hdl_vet.archive import need_bool, need_dict, need_int, need_list, need_str
 from hdl_vet.filelist import Filelist, read_filelist
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
-from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
+from hdl_vet.splice import OffsetMap, Splice, SpliceError, SpliceQueue, apply_splices, unified_diff
 
 __all__ = ["ADDED_DIR", "HEADER_MARK", "Comparison", "Result", "Session", "SessionError", "describe"]
 
@@ -239,6 +241,7 @@ class Session:
         for p, data in self._baseline.included_bytes.items():
             self._orig.setdefault(p, data)
         self.reloads = 0
+        self.scripts: list[tuple[str, str]] = []  # (name, sha256) of the scripts applied so far, in order
         self._finished = False
         self._expects: list[Expect] = []
         self._files = list(self._orig)
@@ -536,6 +539,11 @@ class Session:
         key = Path(path).resolve()
         if key in self._load_fl.files:
             return False
+        if _unwritable(Path(path).name):
+            raise SessionError(
+                f"its name {Path(path).name!r} cannot be written on every platform "
+                f"(a Windows device name, or a trailing dot or blank); added files are written under their own name"
+            )
         out = f"{ADDED_DIR}/{key.name}"
         for name, (other, _) in self._added.items():
             if other == key:
@@ -629,6 +637,7 @@ class Session:
         self._finished = True
         scripts = list(scripts)
         checks = list(checks)
+        queued = any(len(q) for q in self._queue.values())
         self._apply_queue()
         changed = sorted((p for p in self._text if self._text[p] != self._orig[p]), key=lambda p: p.as_posix())
         for p in changed:
@@ -637,7 +646,15 @@ class Session:
             self._maps.setdefault(p, []).append(OffsetMap([hs]))
         if not changed:
             unexpected, unmatched = check_changes([], self._expects)
-            failed = self._run_checks(checks, self._design if self._added else self._baseline)
+            if queued:  # the loaded design is behind the text (the edits may have cancelled out)
+                try:
+                    self._reload()
+                except AdapterError as e:
+                    return Result(False, [], [], [], [], {}, "", self.layout_root, [], str(e), added=self.added)
+                design = self._design
+            else:
+                design = self._design if self._added else self._baseline
+            failed = self._run_checks(checks, design)
             return Result(
                 not unmatched and not failed, [], [], unexpected, unmatched, {}, "", self.layout_root,
                 failed_checks=failed, added=self.added,
@@ -677,3 +694,262 @@ class Session:
             if msg is not None:
                 out.append(msg)
         return out
+
+    @property
+    def finished(self) -> bool:
+        return self._finished
+
+    def check(
+        self, scripts: Iterable[tuple[str, str]] = (), checks: Iterable[Callable[[Design], str | None]] = ()
+    ) -> Result:
+        """What `finish` would return now; afterwards the session is as it was (`reloads` keeps counting)."""
+        if self._finished:
+            raise SessionError("the session is already finished")
+        cp = self.checkpoint()
+        try:
+            return self.finish(scripts, checks)
+        finally:
+            self.rollback(cp)
+            self._finished = False
+
+    # --- saved sessions ------------------------------------------------------
+
+    def owned_paths(self) -> dict[Path, str]:
+        """Files of the user's that saving must never replace, each with what it is."""
+        out = {self._filelist_path: "the file list"}
+        for name, (path, _) in self._added.items():
+            out.setdefault(path, f"the source of the added file {name.rsplit('/', 1)[-1]}")
+        return out
+
+    def to_state(
+        self, scripts: Iterable[tuple[str, str]], extra: Mapping[str, Any] | None = None
+    ) -> tuple[dict[str, Any], dict[str, bytes]]:
+        """The session as plain data: an index of JSON values and the file entries of an archive.
+
+        Entry names are `original/<path>`, `current/<path>` (files that differ from the original;
+        `<path>` is relative to the layout root) and `added/<name>`. `scripts` is what the index
+        lists as applied; `extra` are further fields of the index (the Vet's own). Nothing queued
+        may be left: call `refresh` first. No slang object is stored; `from_state` re-loads the designs.
+        """
+        if any(len(q) for q in self._queue.values()):
+            raise SessionError("splices are queued; apply them before saving")
+        root = self.layout_root
+        files: dict[str, bytes] = {}
+        changed = [p for p in self._files if self._text[p] != self._orig[p]]
+        for p in self._files:
+            files[f"original/{p.relative_to(root).as_posix()}"] = self._orig[p]
+        for p in changed:
+            files[f"current/{p.relative_to(root).as_posix()}"] = self._text[p]
+        added: list[dict[str, Any]] = []
+        for out, (path, data) in self._added.items():
+            name = out.rsplit("/", 1)[-1]
+            files[f"added/{name}"] = data
+            seen = self._added_base.get(path, Counter())
+            diags = sorted([code, message, n] for (code, message), n in seen.items())
+            added.append({"name": name, "path": str(path), "diagnostics": diags})
+        fl = self._fl
+        index: dict[str, Any] = {
+            **(extra or {}),
+            "top": self._top,
+            "layout_root": str(root),
+            "filelist_path": str(self._filelist_path),
+            "filelist": {
+                "files": [str(p) for p in fl.files],
+                "incdirs": [str(p) for p in fl.incdirs],
+                "defines": [[name, value] for name, value in fl.defines.items()],
+                "root": str(fl.root),
+            },
+            "files": [str(p) for p in self._files],
+            "changed": [str(p) for p in changed],
+            "editable": None if self._editable is None else sorted(str(p) for p in self._editable),
+            "maps": {
+                str(p): [
+                    [[s.start, s.end, base64.b64encode(s.text).decode("ascii")] for s in m.splices] for m in stages
+                ]
+                for p, stages in sorted(self._maps.items(), key=lambda kv: kv[0].as_posix())
+            },
+            "expects": [
+                {
+                    "kind": e.kind,
+                    "path": e.path,
+                    "name": e.name,
+                    "required": e.required,
+                    "exact": e.exact,
+                    "below": e.below,
+                }
+                for e in self._expects
+            ],
+            "added": added,
+            "scripts": [[n, h] for n, h in scripts],
+        }
+        return index, files
+
+    @classmethod
+    def from_state(cls, index: dict[str, Any], files: dict[str, bytes]) -> Session:
+        """A session in the state `to_state` described. The file system is not read.
+
+        Both designs are loaded again from the saved bytes: the baseline from the originals, the
+        current one from the current text and the added files (the baseline itself when nothing
+        differs, so that `reloads` is 0 exactly then, else 1). Every value of the index is
+        type-checked and nothing is coerced. SessionError for a path outside the layout root, a
+        name that cannot be written on every platform, entries the index does not match, or
+        stored edits that do not lead from each original to its current text; TypeError,
+        ValueError, KeyError, SpliceError or AdapterError for other damage (the caller makes them
+        one SessionError naming the file).
+        """
+        root = _stored_path(index["layout_root"])
+
+        def under(value: object) -> Path:
+            p = _stored_path(value)
+            if p != root and root not in p.parents:
+                raise SessionError(f"the session archive has a path outside its layout root {root}: {value}")
+            if os.name == "nt" and any(_unwritable(part) for part in p.relative_to(root).parts):
+                raise SessionError(f"the session archive has a path with a name Windows cannot write: {value}")
+            return p
+
+        top = index["top"]
+        if top is not None:
+            top = need_str(top)
+        fl_in = need_dict(index["filelist"])
+        defines: dict[str, str | None] = {}
+        for pair in need_list(fl_in["defines"]):
+            name, value = need_list(pair, 2)
+            defines[need_str(name)] = None if value is None else need_str(value)
+        fl = Filelist(
+            [under(v) for v in need_list(fl_in["files"])],
+            [under(v) for v in need_list(fl_in["incdirs"])],
+            defines,
+            under(fl_in["root"]),
+        )
+        paths = [under(v) for v in need_list(index["files"])]
+        changed = [under(v) for v in need_list(index["changed"])]
+        if len(set(paths)) != len(paths) or len(set(changed)) != len(changed):
+            raise ValueError("a file is listed twice")
+        if not set(fl.files) <= set(paths) or not set(changed) <= set(paths):
+            raise ValueError("the file lists disagree")
+        added_in = [need_dict(a) for a in need_list(index["added"])]
+        names = [_plain_name(a["name"]) for a in added_in]
+        if len({n.casefold() for n in names}) != len(names):
+            raise SessionError("the session archive has two added files whose names differ only in case")
+        expected = {f"original/{p.relative_to(root).as_posix()}" for p in paths}
+        expected |= {f"current/{p.relative_to(root).as_posix()}" for p in changed}
+        expected |= {f"added/{n}" for n in names}
+        if set(files) != expected:
+            extra, missing = sorted(set(files) - expected), sorted(expected - set(files))
+            raise SessionError(
+                "the session archive does not match its index"
+                + (f"; entries the index does not know: {', '.join(extra[:3])}" if extra else "")
+                + (f"; entries missing: {', '.join(missing[:3])}" if missing else "")
+            )
+
+        self = object.__new__(cls)
+        self._filelist_path = _stored_path(index["filelist_path"])
+        self._top = top
+        self._fl = fl
+        self._orig = {p: files[f"original/{p.relative_to(root).as_posix()}"] for p in paths}
+        self._text = dict(self._orig)
+        for p in changed:
+            self._text[p] = files[f"current/{p.relative_to(root).as_posix()}"]
+        self._files = list(paths)
+        sources = set(fl.files)
+        self._headers = [p for p in paths if p not in sources]
+        editable = index["editable"]
+        self._editable = None if editable is None else {under(v) for v in need_list(editable)}
+        self._added = {}
+        self._added_base = {}
+        for a, name in zip(added_in, names):
+            path = _stored_path(a["path"])
+            self._added[f"{ADDED_DIR}/{name}"] = (path, files[f"added/{name}"])
+            counts: Counter[tuple[str, str]] = Counter()
+            for item in need_list(a["diagnostics"]):
+                code, message, n = need_list(item, 3)
+                if need_int(n) < 0:
+                    raise ValueError("a negative count")
+                counts[(need_str(code), need_str(message))] = n
+            self._added_base[path] = counts
+        self._load_fl = (
+            Filelist([*fl.files, *(path for path, _ in self._added.values())], fl.incdirs, fl.defines, fl.root)
+            if self._added
+            else fl
+        )
+        self._queue = {}
+        self._maps = {}
+        for key, stages in need_dict(index["maps"]).items():
+            p = under(key)
+            if p not in self._text:
+                raise ValueError(f"stages for {key}, which is not a file of the design")
+            self._maps[p] = [
+                OffsetMap(
+                    [
+                        Splice(p, need_int(s), need_int(e), base64.b64decode(need_str(t).encode("ascii"), validate=True))
+                        for s, e, t in (need_list(item, 3) for item in need_list(stage))
+                    ]
+                )
+                for stage in need_list(stages)
+            ]
+        for p in paths:  # the stored edits must lead from each original to its current text
+            data = self._orig[p]
+            for m in self._maps.get(p, ()):
+                data = apply_splices(data, m.splices)  # SpliceError for a splice outside its file
+            if data != self._text[p]:
+                raise SessionError(
+                    f"the session archive is damaged: the stored edits of {p.relative_to(root).as_posix()} "
+                    f"do not lead from its original to its current text"
+                )
+        self._expects = []
+        for e in (need_dict(x) for x in need_list(index["expects"])):
+            self._expects.append(
+                Expect(
+                    need_str(e["kind"]),
+                    need_str(e["path"]),
+                    need_str(e["name"]),
+                    need_bool(e["required"]),
+                    need_bool(e["exact"]),
+                    need_bool(e["below"]),
+                )
+            )
+        self.scripts = [(need_str(n), need_str(h)) for n, h in (need_list(x, 2) for x in need_list(index["scripts"]))]
+        self._finished = False
+        self._load_cache = LoadCache()
+        self.layout_root = self._compute_layout_root()
+        if self.layout_root != root:
+            raise SessionError(f"the session archive's layout root {root} is not the root of its files")
+        self._baseline = load(fl, top=top, overrides=dict(self._orig), check_overrides=False, cache=self._load_cache)
+        if not changed and not self._added:
+            self._design = self._baseline
+            self.reloads = 0
+        else:
+            self._design = load(
+                self._load_fl, top=top, overrides=self._overrides(), check_overrides=False, cache=self._load_cache
+            )
+            self.reloads = 1
+        return self
+
+
+_DEVICE = re.compile(r"(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?", re.IGNORECASE)
+
+
+def _unwritable(part: str) -> bool:
+    """True for a file name that some platform cannot write: a Windows device name, a trailing dot or blank."""
+    return part.endswith((".", " ")) or _DEVICE.fullmatch(part) is not None
+
+
+def _stored_path(value: object) -> Path:
+    """A path of a saved session: absolute and normalised (no `..`), as `Path` spells it."""
+    p = Path(need_str(value))
+    if not p.is_absolute() or ".." in p.parts or str(p) != value:
+        raise SessionError(f"the session archive has a path that is not absolute and normalised: {value!r}")
+    return p
+
+
+def _plain_name(value: object) -> str:
+    """The name of an added file in an archive: a plain file name that every platform can write."""
+    if (
+        not isinstance(value, str)
+        or value in ("", ".", "..")
+        or any(c in value for c in '/\\:*?"<>|\x00')
+        or Path(value).name != value
+        or _unwritable(value)
+    ):
+        raise SessionError(f"the session archive has an added file whose name is not a plain file name: {value!r}")
+    return value
