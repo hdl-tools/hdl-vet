@@ -27,7 +27,7 @@ from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from hdl_vet.session import Result, Session
+from hdl_vet.session import Result, Session, SessionError
 from hdl_vet.slang_adapter import (
     AdapterError,
     ConnInfo,
@@ -239,6 +239,8 @@ class Vet:
         self._seen = session.reloads
         self._paths: dict[str, list[str]] | None = None
         self._snap_cache: dict[str, Any] | None = None
+        self._gen_cache: dict[str, tuple[Path, bytes, list[tuple[str, str, bool]]]] = {}
+        self._gen_headers: tuple[bytes, ...] | None = None
 
     # --- raw escape hatch ----------------------------------------------------------
 
@@ -363,20 +365,66 @@ class Vet:
     def _refuse_generate_copies(self, op: str, mods: list[str]) -> None:
         """Refuse an instance of one of `mods` written in a generate block or array, in any module."""
         wanted = set(mods)
-        design = self.session.loaded
-        for host in design.modules():
-            try:
-                info = design.module(host)
-            except AdapterError:
-                continue
-            for inst in info.instances:
-                if inst.module in wanted and (inst.in_generate or inst.is_array):
-                    what = "inside a generate block" if inst.in_generate else "an instance array"
+        for host, flagged in self._generate_copies().items():
+            for name, module, in_generate in flagged:
+                if module in wanted:
+                    what = "inside a generate block" if in_generate else "an instance array"
                     raise VetError(
-                        f"{op}: instance {inst.name!r} of module {inst.module!r} in module {host!r} is "
+                        f"{op}: instance {name!r} of module {module!r} in module {host!r} is "
                         f"{what} (generate blocks and instance arrays are not supported): a new port could "
                         f"stay unconnected under another parameterisation"
                     )
+
+    def _generate_copies(self) -> dict[str, list[tuple[str, str, bool]]]:
+        """Per module: its instances written in a generate block or instance array.
+
+        Each entry is (instance name, instantiated module, in a generate block).
+        Building the source model of every module costs about 0.2 s on the demo_ss
+        sample, and a re-load used to throw the result away. The answer for a
+        module depends on the text of the file that defines it and on the headers:
+        a macro or a `define in a header can add an instance to a module whose own
+        file is unchanged. So an entry is kept while its file's text is unchanged,
+        and everything is dropped when any header's text changes (headers are few
+        and rarely edited). A module whose definition moved or changed has a file
+        with different text and is looked at again.
+        """
+        design = self.session.loaded
+        sources = set(self.session.filelist.files)
+        headers = tuple(self.session.text(p) for p in self.session.files if p not in sources)
+        known = self._gen_headers
+        if known is None or len(known) != len(headers) or any(a is not b and a != b for a, b in zip(known, headers)):
+            self._gen_cache.clear()
+            self._gen_headers = headers
+        out: dict[str, list[tuple[str, str, bool]]] = {}
+        for host in design.modules():
+            cached = self._gen_cache.get(host)
+            if cached is not None:
+                path, text, flagged = cached
+                try:
+                    current = self.session.text(path)
+                except SessionError:
+                    current = None
+                if current is text or current == text:
+                    out[host] = flagged
+                    continue
+            try:
+                info = design.module(host)
+            except AdapterError:
+                self._gen_cache.pop(host, None)
+                continue
+            flagged = [
+                (inst.name, inst.module, inst.in_generate)
+                for inst in info.instances
+                if inst.in_generate or inst.is_array
+            ]
+            try:
+                text = self.session.text(info.path)
+            except SessionError:
+                out[host] = flagged  # a file the session does not track: do not cache
+                continue
+            self._gen_cache[host] = (info.path, text, flagged)
+            out[host] = flagged
+        return out
 
     def _record(self, op: str, target: str, status: str) -> None:
         self.log.append(OpRecord(op, target, status))
@@ -722,9 +770,10 @@ class Vet:
                         f"which is not on the path to {to!r}, so it would have no {name!r} to connect"
                     )
                 targets[(snap[parent].module, iname)] = m
-        self._refuse_generate_copies(op, mods[1:])
         sig = signal if signal is not None else (name if out else None)
         self._refresh_for(mods)
+        # After the refresh, so a copy added by an earlier raw splice is seen.
+        self._refuse_generate_copies(op, mods[1:])
         if out and sig != name:
             if any(p.name == name for p in self._info(mods[-1]).ports):
                 # an assign to an existing port needs its drivers: they depend on everything queued

@@ -25,7 +25,7 @@ from pathlib import Path
 
 from hdl_vet.filelist import Filelist, read_filelist
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
-from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, ModuleInfo, load
+from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
 from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
 
 __all__ = ["HEADER_MARK", "Result", "Session", "SessionError"]
@@ -140,7 +140,10 @@ class Session:
         self._orig: dict[Path, bytes] = {}
         for p in self._fl.files:
             self._orig[p] = self._read(p)
-        self._design: Design = load(self._fl, top=top, overrides=dict(self._orig))
+        # File-system answers (which file an include resolves to) cannot change
+        # between this session's loads: it re-loads from its own bytes.
+        self._load_cache = LoadCache()
+        self._design: Design = load(self._fl, top=top, overrides=dict(self._orig), cache=self._load_cache)
         self._baseline = self._design
         for p, data in self._baseline.included_bytes.items():
             self._orig.setdefault(p, data)
@@ -210,9 +213,15 @@ class Session:
         except ValueError as e:
             raise SessionError(f"the design's files have no common directory ({e})") from e
 
+    def _key(self, path: Path) -> Path:
+        """`path` as the session keys its files. Callers mostly pass a resolved path
+        already, so the file system is asked only when the path is not known as given."""
+        path = Path(path)
+        return path if path in self._text else path.resolve()
+
     def text(self, path: Path) -> bytes:
         try:
-            return self._text[Path(path).resolve()]
+            return self._text[self._key(path)]
         except KeyError:
             raise SessionError(f"{path}: not a source or included file of this design") from None
 
@@ -236,7 +245,7 @@ class Session:
 
     def is_editable(self, path: Path) -> bool:
         """True when `splice` would accept `path`: a source or included file that is editable."""
-        key = Path(path).resolve()
+        key = self._key(path)
         return key in self._text and (self._editable is None or key in self._editable)
 
     def expect(
@@ -276,13 +285,25 @@ class Session:
         return self._baseline.snapshot()
 
     def _reload(self) -> None:
-        self._design = load(self._fl, top=self._top, overrides=dict(self._text), check_overrides=False)
+        self._design = load(
+            self._fl, top=self._top, overrides=dict(self._text), check_overrides=False, cache=self._load_cache
+        )
         self.reloads += 1
 
     def _refresh(self) -> None:
-        if any(len(q) for q in self._queue.values()):
-            self._apply_queue()
+        if not any(len(q) for q in self._queue.values()):
+            return
+        # If the edited text cannot be loaded, put everything back: otherwise the
+        # text would be ahead of the loaded design, and a script that caught the
+        # error would plan its next edit on a model that no longer matches it.
+        text, queue = dict(self._text), self._queue
+        maps = {p: list(stages) for p, stages in self._maps.items()}
+        self._apply_queue()
+        try:
             self._reload()
+        except AdapterError:
+            self._text, self._queue, self._maps = text, queue, maps
+            raise
 
     def _dirty(self, path: Path) -> bool:
         q = self._queue.get(path)
