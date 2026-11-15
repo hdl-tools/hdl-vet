@@ -79,6 +79,28 @@ def test_snapshot_covers_every_elaborated_instance(built):
     assert snap[built.top].module == built.top and snap[built.top].connections == {}
 
 
+def test_model_shortcut_equals_the_full_token_scan(built, monkeypatch):
+    # The adapter skips its per-token macro and directive scans for a piece of
+    # text that holds no backtick. With the shortcut disabled, every module's
+    # model must come out identical.
+    from hdl_vet import slang_adapter
+
+    def models(design):
+        out = {}
+        for name in design.modules():
+            try:
+                out[name] = design.module(name)
+            except slang_adapter.AdapterError as e:
+                out[name] = str(e)
+        return out
+
+    fast = models(load(built.filelist, top=built.top))
+    monkeypatch.setattr(slang_adapter.Design, "_plain", lambda self, node: False)
+    slow = models(load(built.filelist, top=built.top))
+    assert fast.keys() == slow.keys()
+    assert [name for name in fast if fast[name] != slow[name]] == []
+
+
 # --- demo_ss ---------------------------------------------------------------------
 
 

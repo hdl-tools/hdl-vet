@@ -282,6 +282,47 @@ def test_macro_tokens_are_flagged(tmp_path: Path):
     assert design.module("t").instances[0].from_macro is False
 
 
+def test_backtick_shortcut_does_not_hide_macros_or_directives(tmp_path: Path, monkeypatch):
+    # Every way a backtick can matter, plus backticks that do not (comment, string).
+    (tmp_path / "inc.svh").write_text("  leaf u_from_include (.a(a));\n")
+    (tmp_path / "t.sv").write_text(
+        "`define W 4\n`define LEAF leaf\n`define CONN .a(a)\n"
+        "module leaf(input logic a);\nendmodule\n"
+        "module clean(input logic a);\n  leaf u_c (.a(a));\nendmodule\n"
+        "module in_comment(input logic a);\n  // uses `W nowhere\n  leaf u_c (.a(a));\nendmodule\n"
+        'module in_string(input logic a);\n  string s = "`W";\n  leaf u_c (.a(a));\nendmodule\n'
+        "module hdr_macro(input logic [`W-1:0] a);\n  leaf u_c (.a(a[0]));\nendmodule\n"
+        "module type_macro(input logic a);\n  `LEAF u_m (.a(a));\n  leaf u_c (.a(a));\nendmodule\n"
+        "module conn_macro(input logic a);\n  leaf u_m (`CONN);\nendmodule\n"
+        "module conn_ifdef(input logic a, input logic b);\n  leaf u_m (\n    .a(a)\n`ifdef X\n    , .b(b)\n`endif\n  );\nendmodule\n"
+        "module port_ifdef(\n  input logic a\n`ifdef X\n  , input logic b\n`endif\n);\nendmodule\n"
+        "module t(input logic [3:0] a);\n"
+        "  clean u0 (.a(a[0]));\n  in_comment u1 (.a(a[0]));\n  in_string u2 (.a(a[0]));\n"
+        "  hdr_macro u3 (.a(a));\n  type_macro u4 (.a(a[0]));\n  conn_macro u5 (.a(a[0]));\n"
+        "  conn_ifdef u6 (.a(a[0]), .b(a[1]));\n  port_ifdef u7 (.a(a[0]));\n"
+        "endmodule\n"
+    )
+    (tmp_path / "t.f").write_text("t.sv\n")
+
+    def models():
+        design = load(tmp_path / "t.f", top="t")
+        return {name: design.module(name) for name in design.modules()}
+
+    fast = models()
+    monkeypatch.setattr(slang_adapter.Design, "_plain", lambda self, node: False)
+    assert fast == models()
+
+    assert not fast["clean"].has_macros and not fast["in_comment"].has_macros
+    assert not fast["in_string"].has_macros
+    assert fast["hdr_macro"].has_macros and fast["hdr_macro"].header_has_macros
+    assert fast["type_macro"].has_macros and not fast["type_macro"].header_has_macros
+    assert [i.from_macro for i in fast["type_macro"].instances] == [True, False]
+    assert fast["conn_macro"].instances[0].from_macro is True
+    assert fast["conn_ifdef"].instances[0].conn_directive == "`ifdef"
+    assert fast["port_ifdef"].ports_directive == "`ifdef"
+    assert fast["clean"].instances[0].conn_directive is None and fast["clean"].ports_directive is None
+
+
 def test_several_modules_in_one_file(tmp_path: Path):
     src = "module a(input logic x);\nendmodule\n\nmodule b(input logic x);\n  a u_a (.x(x));\nendmodule\n"
     (tmp_path / "t.sv").write_bytes(src.encode())
