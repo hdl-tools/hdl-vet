@@ -122,7 +122,7 @@ def write_tree(
                 os.rename(backup, target)
                 backup = None
             raise
-    except OSError as e:
+    except (OSError, ValueError) as e:  # ValueError: a path that cannot be expressed relative to another
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
         raise OutputError(f"{out}: cannot write the output tree ({e})") from e

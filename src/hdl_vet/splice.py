@@ -126,6 +126,11 @@ class OffsetMap:
             shift += len(s.text) - (s.end - s.start)
         self._starts = [s.start for s in self._s]
 
+    @property
+    def splices(self) -> list[Splice]:
+        """The splices as validated and ordered; `OffsetMap(m.splices)` is `m` again."""
+        return list(self._s)
+
     def forward(self, old: int) -> int:
         shift = 0
         for s in self._s:
