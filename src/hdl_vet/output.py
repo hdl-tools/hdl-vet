@@ -35,13 +35,17 @@ def _rel(path: Path, start: Path) -> str:
     return Path(os.path.relpath(path, start)).as_posix()
 
 
-def _filelist_text(session: Session, here: Path) -> str:
-    """The flattened file list; `here` is the directory it will sit in (input coordinates)."""
+def _filelist_text(session: Session, here: Path, added: Sequence[str] = ()) -> str:
+    """The flattened file list; `here` is the directory it will sit in (input coordinates).
+
+    `added` are the output names of the files a script added: one line each, last.
+    """
     fl = session.filelist
     lines = [f"+incdir+{_rel(d, here)}" for d in fl.incdirs]
     for name, value in fl.defines.items():
         lines.append(f"+define+{name}" if value is None else f"+define+{name}={value}")
     lines.extend(_rel(f, here) for f in fl.files)
+    lines.extend(_rel(session.layout_root / name, here) for name in added)
     return "\n".join(lines) + "\n"
 
 
@@ -84,12 +88,18 @@ def write_tree(
             dest.write_bytes(data)
             if path in result.files:
                 changed[rel] = {"before": _sha(before), "after": _sha(data)}
+        added: dict[str, dict[str, str]] = {}
+        for name, data in result.added.items():
+            dest = tmp / name
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(data)
+            added[name] = {"sha256": _sha(data)}
         for inc in session.filelist.incdirs:
             (tmp / inc.relative_to(root)).mkdir(parents=True, exist_ok=True)
         fl_path = session.filelist_path
         fl_rel = fl_path.relative_to(root) if _is_within(fl_path, root) else Path(fl_path.name)
         (tmp / fl_rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp / fl_rel).write_bytes(_filelist_text(session, (root / fl_rel).parent).encode())
+        (tmp / fl_rel).write_bytes(_filelist_text(session, (root / fl_rel).parent, list(result.added)).encode())
         manifest = {
             "tool": "hdl-vet",
             "version": __version__,
@@ -97,6 +107,7 @@ def write_tree(
             "filelist": fl_rel.as_posix(),
             "scripts": [{"name": n, "sha256": h} for n, h in scripts],
             "changed": changed,
+            "added": added,
         }
         (tmp / "hdl-vet.json").write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())
 

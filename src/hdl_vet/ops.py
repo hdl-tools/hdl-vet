@@ -7,6 +7,11 @@ structural expectations are registered and a post-condition is registered that
 `finish` evaluates on the final design; otherwise `DriftError`. See
 `tests/test_ops.py` for the full specification.
 
+Phase 5 adds the *checked* operations (`add_file`, `replace_module`, `remove_*`):
+each is tried on the design before it returns and taken back, with everything it did,
+when the edited design has a new diagnostic or leaves something dangling; `Vet.group`
+makes the same check once for a block of operations. See `tests/test_instances.py`.
+
 Handles are live: each operation and each model attribute looks the design up
 again. A re-load happens only when the lookup depends on something this `Vet` has
 edited since the last load (a module's port list, parameter list or declarations;
@@ -21,13 +26,15 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
-from hdl_vet.session import Result, Session, SessionError
+from hdl_vet.listedit import append_items, edit_list, line_rule, remove_all
+from hdl_vet.session import Result, Session, SessionError, describe
 from hdl_vet.slang_adapter import (
     AdapterError,
     ConnInfo,
@@ -35,6 +42,7 @@ from hdl_vet.slang_adapter import (
     InstanceInfo,
     ModuleInfo,
     ParamOverride,
+    driven_bases,
     is_simple_identifier,
     tokens,
 )
@@ -135,21 +143,64 @@ def _line_start(data: bytes, offset: int) -> int:
     return data.rfind(b"\n", 0, offset) + 1
 
 
-def _indent_of(data: bytes, offset: int) -> bytes:
-    start = _line_start(data, offset)
-    line = data[start:offset]
-    return line[: len(line) - len(line.lstrip(b" \t"))]
-
-
 def _append_to_list(
     data: bytes, last_start: int, last_end: int, close: int, item: bytes, eol: bytes
 ) -> list[tuple[int, int, bytes]]:
     """Splices that append `item` after the last element of a comma separated list."""
-    ls = _line_start(data, close)
-    if data[ls:close].strip() == b"":
-        # the ")" opens its line: "," after the last element, a new line before it
-        return [(last_end, last_end, b","), (ls, ls, _indent_of(data, last_start) + item + eol)]
-    return [(last_end, last_end, b", " + item)]
+    return append_items(data, last_start, last_end, close, [item], eol)
+
+
+_INT_TEXT = re.compile(r"[+-]?[0-9]+")
+_SIZED_TEXT = re.compile(r"([0-9]*)'([sS]?)([bBoOdDhH])([0-9a-fA-F_]+)")
+
+
+def _as_int(text: str) -> int | None:
+    """The integer a parameter value stands for (`4`, `32'd4`, `8'hFF`), or None."""
+    t = "".join(text.split())
+    if _INT_TEXT.fullmatch(t):
+        return int(t)
+    m = _SIZED_TEXT.fullmatch(t)
+    if m is None:
+        return None
+    try:
+        value = int(m.group(4).replace("_", ""), {"b": 2, "o": 8, "d": 10, "h": 16}[m.group(3).lower()])
+    except ValueError:
+        return None
+    if m.group(2) and m.group(1) and value >> (int(m.group(1)) - 1) & 1:
+        value -= 1 << int(m.group(1))
+    return value
+
+
+def _same_value(a: str, b: str) -> bool:
+    """Equal as integers when both are integral, whatever their type or width; else as text."""
+    x, y = _as_int(a), _as_int(b)
+    return (x == y) if x is not None and y is not None else a == b
+
+
+_REG_WORD = re.compile(r"(?<![A-Za-z0-9_$])reg(?![A-Za-z0-9_$])")
+
+
+def _type_key(text: str) -> str:
+    """A port type for comparison: `reg` is `logic` under another keyword."""
+    return _REG_WORD.sub("logic", text)
+
+
+def _common_width(fields: Iterable[int]) -> int:
+    """The width all name fields share, or 0 when they differ (or there are none)."""
+    fs = list(fields)
+    return fs[0] if fs and len(set(fs)) == 1 else 0
+
+
+def _renamed_field(start: int, open_: int | None, name: str, new: str | None) -> int:
+    """Width of the name field of a connection or override (name and blanks before "("), after a rename."""
+    base = (open_ - start - 1) if open_ is not None else len(name)
+    return base + (len(new) - len(name) if new is not None else 0)
+
+
+def _list_gap(data: bytes, close: int) -> bytes:
+    """One blank when removing a list that ends at the ")" at `close` would glue the next name to the previous one."""
+    nxt = data[close + 1 : close + 2]
+    return b" " if nxt and (nxt.isalnum() or nxt in (b"_", b"$", b"\\")) else b""
 
 
 def _name_width(items: Iterable[ConnInfo | ParamOverride]) -> int:
@@ -223,6 +274,19 @@ class _Plan:
     permits: list[tuple[str, str, str]] = field(default_factory=list)
     check_key: tuple[str, ...] | None = None
     check: Callable[[Design], str | None] | None = None
+    quiet: bool = False  # part of an operation whose first plan is logged
+
+
+@dataclass(frozen=True)
+class _VetState:
+    """What a rollback of the Vet restores besides the session (see `Vet._begin`)."""
+
+    session: object
+    log: int
+    notes: int
+    checks: dict[tuple[str, ...], Callable[[Design], str | None]]
+    swapped: dict[tuple[str, str], set[str]]
+    drove: int
 
 
 # --- Vet ---------------------------------------------------------------------------
@@ -232,6 +296,12 @@ class Vet:
     def __init__(self, session: Session) -> None:
         self.session = session
         self.log: list[OpRecord] = []
+        self.notes: list[str] = []
+        self._depth = 0  # open `group` blocks (a checked operation counts as one while it runs)
+        # (module, instance) -> modules the instance's baseline path had before `replace_module`
+        self._swapped: dict[tuple[str, str], set[str]] = {}
+        # (module, signal) pairs that a removed connection or assignment used to drive
+        self._drove: list[tuple[str, str]] = []
         self._checks: dict[tuple[str, ...], Callable[[Design], str | None]] = {}
         self._dirty: set[tuple[str, ...]] = set()
         self._all = False
@@ -279,6 +349,12 @@ class Vet:
             raise VetError(f"no module {name!r} in the design{_did_you_mean(name, known)}")
         paths = self.module_paths(name)
         if not paths:
+            try:
+                where = self.session.loaded.module(name).path
+            except AdapterError:
+                where = None
+            if where is not None and self.session.is_added(where):
+                raise VetError(f"module {name!r} is defined in the added file {where.name}, which is never edited")
             raise VetError(f"module {name!r} is not elaborated under the top, so it cannot be edited")
         if instances is not None and instances != len(paths):
             raise VetError(
@@ -429,6 +505,191 @@ class Vet:
     def _record(self, op: str, target: str, status: str) -> None:
         self.log.append(OpRecord(op, target, status))
 
+    # --- checked operations, groups ---------------------------------------------------
+
+    def _begin(self, label: str) -> _VetState:
+        """Apply and load what is queued, then take a checkpoint.
+
+        So a checkpoint never has a queue: rolling back to it also means "nothing of this
+        Vet is waiting for a re-load", which is what the dirty marks say after a re-load.
+        """
+        try:
+            self.session.refresh()
+        except AdapterError as e:
+            raise VetError(f"{label}: the edits queued earlier cannot be loaded: {e}") from e
+        self._sync()
+        return _VetState(
+            self.session.checkpoint(),
+            len(self.log),
+            len(self.notes),
+            dict(self._checks),
+            {k: set(v) for k, v in self._swapped.items()},
+            len(self._drove),
+        )
+
+    def _rollback(self, st: _VetState) -> None:
+        self.session.rollback(st.session)
+        del self.log[st.log :]
+        del self.notes[st.notes :]
+        self._checks = dict(st.checks)
+        self._swapped = {k: set(v) for k, v in st.swapped.items()}
+        del self._drove[st.drove :]
+        self._dirty.clear()
+        self._all = False
+        self._added.clear()
+        self._seen = self.session.reloads
+
+    def _conclude(self, st: _VetState, prefix: str) -> None:
+        """Compare the edited design with the one at `st`: refuse (taking everything back) or note."""
+        try:
+            self.session.refresh()
+            self._sync()
+            found = self.session.compare_since(st.session, self._drove[st.drove :])
+        except AdapterError as e:
+            self._rollback(st)
+            raise VetError(f"{prefix}: the edited design cannot be loaded: {e}") from e
+        if found is None:
+            return
+        problems = [f"new {d.severity} {d.code}: {describe(d)}" for d in found.diagnostics]
+        problems += [f"left dangling: {describe(d)}" for d in found.dangling]
+        problems += [f"left partly undriven: {msg}" for msg in found.partial]
+        if problems:
+            self._rollback(st)
+            more = f" (and {len(problems) - 3} more)" if len(problems) > 3 else ""
+            raise VetError(f"{prefix}: " + "; ".join(problems[:3]) + more)
+        self.notes.extend(f"{prefix}: {describe(d)}" for d in found.unused)
+
+    def _checked(self, op: str, target: str, run: Callable[[], None], tried: bool = False) -> None:
+        """Run a checked operation: alone it is a group of its own, in a group it is part of it.
+
+        `tried`: the operation makes checks of its own on the edited design at the call,
+        so inside a group it still loads what is queued first and is taken back by itself.
+        """
+        prefix = f"{op} {target}"
+        if self._depth and not tried:
+            run()
+            return
+        st = self._begin(prefix)
+        outer = self._depth
+        self._depth += 1
+        try:
+            run()
+        except BaseException:
+            self._depth = outer
+            self._rollback(st)
+            raise
+        self._depth = outer
+        if not outer:
+            self._conclude(st, prefix)
+
+    @contextmanager
+    def group(self) -> Iterator[None]:
+        """`with vet.group():` the comparison of the checked operations is made once, at the end."""
+        if self._depth:
+            # Part of the outer group (compared at its end), but taken back on its own when it fails.
+            st = self._begin("group")
+            self._depth += 1
+            try:
+                yield
+            except BaseException:
+                self._depth -= 1
+                self._rollback(st)
+                raise
+            self._depth -= 1
+            return
+        st = self._begin("group")
+        self._depth = 1
+        try:
+            yield
+        except BaseException:
+            self._depth = 0
+            self._rollback(st)
+            raise
+        self._depth = 0
+        self._conclude(st, "group")
+
+    def add_file(self, path: Path | str) -> None:
+        """Bring a source file outside the design into it (loaded last, never edited)."""
+        name = Path(path).name
+
+        def run() -> None:
+            try:
+                added = self.session.add_file(path)
+            except SessionError as e:
+                raise VetError(f"add_file {name}: {e}") from e
+            self._sync()
+            if not added:
+                self._record("add_file", name, "skipped")
+                return
+            key = Path(path).resolve()
+
+            def check(design: Design) -> str | None:
+                mods = set(design.defined_in(key))
+                if any("." in p and s.module in mods for p, s in design.snapshot().items()):
+                    return None
+                return f"add_file {name}: none of its modules is instantiated"
+
+            self._set_check(("add_file", name), check)
+            self._record("add_file", name, "applied")
+
+        self._checked("add_file", name, run, tried=True)
+
+    def _driven_by(self, host: str, inst: InstanceInfo, only: str | None = None) -> list[tuple[str, str]]:
+        """(module, signal) pairs that the output connections of `inst` (in `host`) drive.
+
+        `only`: just the connection to that port.
+        """
+        try:
+            child = self._info(inst.module)
+        except VetError:
+            return []
+        out: list[tuple[str, str]] = []
+        for i, c in enumerate(inst.connections):
+            port = c.port
+            if port is None and i < len(child.ports):
+                port = child.ports[i].name
+            if port is None or port == "*" or (only is not None and port != only):
+                continue
+            info = next((p for p in child.ports if p.name == port), None)
+            if info is not None and info.direction in ("output", "inout"):
+                out.extend((host, base) for base in driven_bases(c.expr))
+        return out
+
+    def _drop_registered(self, module: str, name: str) -> None:
+        """Forget the post-conditions earlier operations registered for the instance `name` of `module`."""
+        for key in [
+            k for k in self._checks if len(k) >= 3 and k[0] in ("replace_module", "conn", "param") and k[1:3] == (module, name)
+        ]:
+            del self._checks[key]
+
+    def _refuse_disabled(self, op: str, mod: str, info: ModuleInfo, name: str) -> None:
+        """Refuse a name that conditional directives hide from this configuration but not from another."""
+        directive = info.disabled_names.get(name)
+        if directive is not None:
+            raise VetError(
+                f"{op} {mod}: {name!r} appears in text disabled by {directive}; in another configuration "
+                f"the module would no longer compile. Edit it by hand or with a raw splice."
+            )
+
+    def _refresh_all_dirty(self) -> None:
+        """Re-load when anything this Vet edited since the last load is still waiting."""
+        self._sync()
+        if self._all or self._dirty:
+            self.session.refresh()
+            self._sync()
+
+    def _instances_of(self, mod: str) -> list[tuple[str, InstanceInfo]]:
+        """Every instance of `mod` in any module of the design, as (the module it is in, its model)."""
+        design = self.session.loaded
+        out: list[tuple[str, InstanceInfo]] = []
+        for host in design.modules():
+            try:
+                info = design.module(host)
+            except AdapterError:
+                continue
+            out.extend((host, i) for i in info.instances if i.module == mod)
+        return out
+
     def _other_use(self, info: ModuleInfo, name: str, own: str) -> str | None:
         """What else, besides an item of kind `own`, already uses `name` in the module."""
         if own != "port" and any(p.name == name for p in info.ports):
@@ -466,7 +727,8 @@ class Vet:
             self.session.permit(kind, path, name, exact=True)
         if plan.check_key is not None and plan.check is not None:
             self._set_check(plan.check_key, plan.check)
-        self._record(plan.op, plan.target, "applied")
+        if not plan.quiet:
+            self._record(plan.op, plan.target, "applied")
 
     def _plan_add_port(self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str]) -> _Plan:
         if info.port_list_kind != "ansi":
@@ -1084,6 +1346,335 @@ class Module:
         info = v._info(mod)
         v._commit(v._plan_assign(mod, info, target, expr))
 
+    # --- removals (checked operations)
+
+    def _fresh(self) -> ModuleInfo:
+        v = self.vet
+        return v._info(self._name, [k for k in v._dirty if k[1] == self._name])
+
+    def remove_instance(self, name: str, module: str | None = None) -> None:
+        v, mod, op = self.vet, self._name, "remove_instance"
+        target = f"{mod}.{name}"
+        self._check_scope(op)
+
+        def run() -> None:
+            info = self._fresh()
+            found = [i for i in info.instances if i.name == name]
+            if not found:
+                v._record(op, target, "skipped")
+                return
+            if len(found) > 1:
+                raise VetError(f"{op} {target}: module {mod!r} has {len(found)} instances named {name!r}")
+            inst = found[0]
+            if module is not None and inst.module != module:
+                raise DriftError(f"{op} {target}: the instance instantiates {inst.module!r}, not {module!r}")
+            Instance(v, mod, name)._refuse_macro(op, inst)
+            sharing = [i.name for i in info.instances if i.path == inst.path and i.stmt_start == inst.stmt_start]
+            if len(sharing) > 1:
+                raise VetError(
+                    f"{op} {target}: the statement declares several instances ({', '.join(sharing)}); "
+                    f"edit it by hand or with a raw splice"
+                )
+            data = v.session.text(inst.path)
+            a, b = line_rule(data, inst.stmt_start, inst.stmt_end)
+            snap = v._snap()
+            where = [f"{base}.{name}" for base in self.paths if f"{base}.{name}" in snap]
+            # what earlier operations expected of this instance is moot now it is going
+            v.session.drop_expects(where)
+            v._drop_registered(mod, name)
+            v._drove.extend(v._driven_by(mod, inst))
+
+            def check(design: Design) -> str | None:
+                try:
+                    now = design.module(mod)
+                except AdapterError:
+                    return f"{op} {target}: module not found in the final design"
+                if any(i.name == name for i in now.instances):
+                    return f"{op} {target}: the instance is still there in the final design"
+                return None
+
+            v._commit_all(
+                op,
+                [
+                    _Plan(
+                        op,
+                        target,
+                        path=inst.path,
+                        splices=[(a, b, b"")],
+                        mark=("decls", mod),
+                        expects=[("instance-removed", p, "") for p in where],
+                        check_key=(op, mod, name),
+                        check=check,
+                    )
+                ],
+            )
+            for p in where:
+                v.session.permit("*", p, "*", below=True)
+
+        v._checked(op, target, run)
+
+    def remove_wire(self, name: str) -> None:
+        v, mod, op = self.vet, self._name, "remove_wire"
+        self._check_scope(op)
+
+        def run() -> None:
+            info = self._fresh()
+            found = [d for d in info.decls if d.name == name]
+            if not found:
+                if name in info.generate_decls:
+                    raise VetError(
+                        f"{op} {mod}: {name!r} is declared inside a generate block, which is not supported"
+                    )
+                other = v._other_use(info, name, "decl")
+                if other is not None:
+                    raise VetError(f"{op} {mod}: {name!r} is {other}, not a net or variable")
+                v._record(op, mod, "skipped")
+                return
+            decl = found[0]
+            if len(found) > 1:
+                raise VetError(f"{op} {mod}: {name!r} is declared {len(found)} times")
+            v._refuse_disabled(op, mod, info, name)
+            if decl.stmt_start < 0:
+                raise VetError(f"{op} {mod}: the declaration of {name!r} comes from a macro or an include")
+            if decl.stmt_count > 1:
+                raise VetError(
+                    f"{op} {mod}: the declaration of {name!r} declares {decl.stmt_count} names; "
+                    f"edit it by hand or with a raw splice"
+                )
+            data = v.session.text(info.path)
+            a, b = line_rule(data, decl.stmt_start, decl.stmt_end)
+
+            def check(design: Design) -> str | None:
+                try:
+                    now = design.module(mod)
+                except AdapterError:
+                    return f"{op} {mod} {name}: module not found in the final design"
+                if any(d.name == name for d in now.decls):
+                    return f"{op} {mod} {name}: the declaration is still there in the final design"
+                return None
+
+            v._commit_all(
+                op,
+                [
+                    _Plan(
+                        op,
+                        mod,
+                        path=info.path,
+                        splices=[(a, b, b"")],
+                        mark=("decls", mod),
+                        check_key=(op, mod, name),
+                        check=check,
+                    )
+                ],
+            )
+
+        v._checked(op, mod, run)
+
+    def remove_assign(self, target: str, was: object | None = None) -> None:
+        v, mod, op = self.vet, self._name, "remove_assign"
+        self._check_scope(op)
+
+        def run() -> None:
+            info = self._fresh()
+            found = [a for a in info.assigns if a.left == target]
+            if not found:
+                if any(b in info.generate_assigned for b in driven_bases(target)):
+                    raise VetError(
+                        f"{op} {mod}: {target!r} is assigned inside a generate block, which is not supported"
+                    )
+                v._record(op, mod, "skipped")
+                return
+            if len(found) > 1:
+                raise VetError(f"{op} {mod}: {len(found)} assignments to {target!r}; edit them by hand")
+            assign = found[0]
+            if was is not None and not _same(was, assign.right):
+                raise DriftError(
+                    f"{op} {mod}: {target!r} is assigned {assign.right!r}, not {str(was)!r}"
+                )
+            if assign.stmt_start < 0:
+                raise VetError(f"{op} {mod}: the assignment to {target!r} comes from a macro or an include")
+            if assign.stmt_count > 1:
+                raise VetError(
+                    f"{op} {mod}: the statement assigning {target!r} holds {assign.stmt_count} assignments; "
+                    f"edit it by hand or with a raw splice"
+                )
+            data = v.session.text(info.path)
+            a, b = line_rule(data, assign.stmt_start, assign.stmt_end)
+            v._drove.extend((mod, base) for base in driven_bases(assign.left))
+
+            def check(design: Design) -> str | None:
+                try:
+                    now = design.module(mod)
+                except AdapterError:
+                    return f"{op} {mod} {target}: module not found in the final design"
+                if any(x.left == target for x in now.assigns):
+                    return f"{op} {mod} {target}: the assignment is still there in the final design"
+                return None
+
+            v._commit_all(
+                op,
+                [
+                    _Plan(
+                        op,
+                        mod,
+                        path=info.path,
+                        splices=[(a, b, b"")],
+                        mark=("decls", mod),
+                        check_key=(op, mod, "assign", target),
+                        check=check,
+                    )
+                ],
+            )
+
+        v._checked(op, mod, run)
+
+    def remove_port(self, name: str) -> None:
+        v, mod, op = self.vet, self._name, "remove_port"
+        paths = self._check_scope(op)
+
+        def run() -> None:
+            v._refresh_all_dirty()
+            info = v._info(mod)
+            port = next((p for p in info.ports if p.name == name), None)
+            if port is None:
+                v._record(op, mod, "skipped")
+                return
+            if info.port_list_kind != "ansi":
+                what = "a non-ANSI" if info.port_list_kind == "nonansi" else "no"
+                raise VetError(f"{op} {mod}: the module has {what} port list; only ANSI port lists can be edited")
+            if info.header_has_macros:
+                raise VetError(f"{op} {mod}: the module header contains macros, so it cannot be edited safely")
+            _refuse_directive(f"{op} {mod}", "port", info.ports_directive)
+            if info.ports_close is None:
+                raise VetError(f"{op} {mod}: cannot find the end of the port list")
+            v._refuse_disabled(op, mod, info, name)
+            data = v.session.text(info.path)
+            at = info.ports.index(port)
+            if at + 1 < len(info.ports):
+                nxt = info.ports[at + 1]
+                if tokens(data[nxt.start : nxt.end].decode("utf-8", errors="replace"))[:1] == [nxt.name]:
+                    raise VetError(
+                        f"{op} {mod}: port {nxt.name!r} takes its direction and type from {name!r}; "
+                        f"remove or declare it first"
+                    )
+            items = [(p.start, p.end) for p in info.ports]
+            splices = edit_list(data, items, {at}, info.ports_close, _eol(data))
+            if splices is None:
+                splices = [remove_all(data, items)]
+            hosts = v._instances_of(mod)
+            v._refuse_generate_copies(op, [mod])
+            plans = [
+                _Plan(
+                    op,
+                    mod,
+                    path=info.path,
+                    splices=splices,
+                    mark=("ports", mod),
+                    expects=[("port-removed", p, name) for p in paths],
+                    permits=[("connection-changed", p, name) for p in paths],
+                    check_key=(op, mod, name),
+                    check=lambda design: self._gone(design, op, "port", name, lambda m: m.ports),
+                )
+            ]
+            for host, inst in hosts:
+                handle = Instance(v, host, inst.name)
+                handle._refuse_connection_list(op, inst)
+                conns = [(c.start, c.end) for c in inst.connections]
+                drop = {i for i, c in enumerate(inst.connections) if c.port == name}
+                if not drop:
+                    continue
+                idata = v.session.text(inst.path)
+                sp = edit_list(idata, conns, drop, inst.ports_close, _eol(idata))
+                if sp is None:
+                    sp = [remove_all(idata, conns)]
+                if port.direction in ("output", "inout"):
+                    v._drove.extend((host, base) for c in inst.connections if c.port == name for base in driven_bases(c.expr))
+                plans.append(
+                    _Plan(op, mod, path=inst.path, splices=sp, mark=("conns", host, inst.name), quiet=True)
+                )
+            v._commit_all(op, plans)
+
+        v._checked(op, mod, run)
+
+    def remove_param(self, name: str) -> None:
+        v, mod, op = self.vet, self._name, "remove_param"
+        paths = self._check_scope(op)
+
+        def run() -> None:
+            v._refresh_all_dirty()
+            info = v._info(mod)
+            param = next((p for p in info.params if p.name == name), None)
+            if param is None:
+                if name in info.param_kinds:
+                    raise VetError(
+                        f"{op} {mod}: parameter {name!r} is declared in the module body, not in the "
+                        f"parameter port list"
+                    )
+                v._record(op, mod, "skipped")
+                return
+            if info.header_has_macros:
+                raise VetError(f"{op} {mod}: the module header contains macros, so it cannot be edited safely")
+            _refuse_directive(f"{op} {mod}", "parameter", info.params_directive)
+            if info.params_close is None or info.params_open is None or param.decl_start < 0:
+                raise VetError(f"{op} {mod}: cannot find the parameter port list")
+            if param.decl_count > 1:
+                raise VetError(
+                    f"{op} {mod}: the declaration of {name!r} declares {param.decl_count} names; "
+                    f"edit it by hand or with a raw splice"
+                )
+            v._refuse_disabled(op, mod, info, name)
+            data = v.session.text(info.path)
+            decls: list[tuple[int, int]] = []
+            for p in info.params:
+                if (p.decl_start, p.decl_end) not in decls:
+                    decls.append((p.decl_start, p.decl_end))
+            at = decls.index((param.decl_start, param.decl_end))
+            splices = edit_list(data, decls, {at}, info.params_close, _eol(data))
+            if splices is None:
+                if data[info.name_end : info.params_open].strip(b" \t\r\n") == b"":
+                    splices = [(info.name_end, info.params_close + 1, _list_gap(data, info.params_close))]
+                else:
+                    splices = [remove_all(data, decls)]
+            hosts = v._instances_of(mod)
+            plans = [
+                _Plan(
+                    op,
+                    mod,
+                    path=info.path,
+                    splices=splices,
+                    mark=("params", mod),
+                    expects=[("param-changed", p, name) for p in paths],
+                    check_key=(op, mod, name),
+                    check=lambda design: self._gone(design, op, "parameter", name, lambda m: m.params),
+                )
+            ]
+            for host, inst in hosts:
+                handle = Instance(v, host, inst.name)
+                handle._guard_overrides(op, inst)
+                drop = {i for i, o in enumerate(inst.param_overrides) if o.name == name}
+                if not drop:
+                    continue
+                idata = v.session.text(inst.path)
+                items = [(o.start, o.end) for o in inst.param_overrides]
+                sp = edit_list(idata, items, drop, inst.params_close, _eol(idata))  # type: ignore[arg-type]
+                if sp is None:
+                    sp = [(inst.module_end, inst.params_close + 1, _list_gap(idata, inst.params_close))]  # type: ignore[operator]
+                plans.append(
+                    _Plan(op, mod, path=inst.path, splices=sp, mark=("overrides", host, inst.name), quiet=True)
+                )
+            v._commit_all(op, plans)
+
+        v._checked(op, mod, run)
+
+    def _gone(self, design: Design, op: str, what: str, name: str, items: Callable[[ModuleInfo], Any]) -> str | None:
+        try:
+            now = design.module(self._name)
+        except AdapterError:
+            return f"{op} {self._name} {name}: module not found in the final design"
+        if any(i.name == name for i in items(now)):
+            return f"{op} {self._name} {name}: the {what} is still there in the final design"
+        return None
+
 
 # --- Instance handle ---------------------------------------------------------------
 
@@ -1120,11 +1711,12 @@ class Instance:
         v = self.vet
         inst = v._instance_info(self._mod, self._name)
         snap = v._snap()
+        swapped = v._swapped.get((self._mod, self._name), ())
         out = []
         for base in v.module_paths(self._mod):
             p = f"{base}.{self._name}"
             found = snap.get(p)
-            if found is not None and found.module == inst.module:
+            if found is not None and (found.module == inst.module or found.module in swapped):
                 out.append(p)
         return sorted(out)
 
@@ -1390,3 +1982,365 @@ class Instance:
             check_key=("param", self._mod, self._name, name),
             check=check,
         )
+
+    # --- replace_module (a checked operation)
+
+    def replace_module(
+        self,
+        module: str,
+        *,
+        ports: dict[str, str] | None = None,
+        params: dict[str, str] | None = None,
+        connect: dict[str, object] | None = None,
+        set_params: dict[str, object] | None = None,
+        drop_ports: Iterable[str] = (),
+        drop_params: Iterable[str] = (),
+        unconnected: Iterable[str] = (),
+        was: str | None = None,
+    ) -> None:
+        """Instantiate `module` instead of the current one; see `tests/test_instances.py`."""
+        args = (
+            module,
+            dict(ports or {}),
+            dict(params or {}),
+            {k: str(v) for k, v in (connect or {}).items()},
+            {k: str(v) for k, v in (set_params or {}).items()},
+            list(drop_ports),
+            list(drop_params),
+            list(unconnected),
+            was,
+        )
+        self.vet._checked("replace_module", self.target, lambda: self._replace(*args), tried=True)
+
+    def _replace(
+        self,
+        module: str,
+        ports: dict[str, str],
+        params: dict[str, str],
+        connect: dict[str, str],
+        set_params: dict[str, str],
+        drop_ports: list[str],
+        drop_params: list[str],
+        unconnected: list[str],
+        was: str | None,
+    ) -> None:
+        v, op, target = self.vet, "replace_module", self.target
+        inst = v._instance_info(self._mod, self._name)
+        self._refuse_connection_list(op, inst)
+        host = v._info(self._mod)
+        if sum(1 for i in host.instances if i.path == inst.path and i.stmt_start == inst.stmt_start) > 1:
+            raise VetError(
+                f"{op} {target}: the statement declares several instances, which would all change module; "
+                f"edit it by hand or with a raw splice"
+            )
+        if any(o.name is None for o in inst.param_overrides):
+            raise VetError(f"{op} {target}: the instance uses positional parameter overrides")
+        _refuse_directive(f"{op} {target}", "parameter override", inst.override_directive)
+        known = v.session.loaded.modules()
+        if module not in known:
+            raise VetError(f"{op} {target}: no module {module!r} in the design{_did_you_mean(module, known)}")
+        cur = inst.module
+
+        if cur == module:
+            # Only the new side is compared: the maps describe the module that is gone.
+            for port, expr in connect.items():
+                c = self._conn(inst, port)
+                if c is None:
+                    raise DriftError(
+                        f"{op} {target}: the instance already instantiates {module!r} but has no connection for "
+                        f"{port!r} (expected {expr!r})"
+                    )
+                if not _same(c.expr, expr):
+                    raise DriftError(
+                        f"{op} {target}: connection {port!r} is {c.expr!r}, not {expr!r}"
+                    )
+            for name, value in set_params.items():
+                o = next((o for o in inst.param_overrides if o.name == name), None)
+                if o is None:
+                    raise DriftError(
+                        f"{op} {target}: the instance already instantiates {module!r} but does not override "
+                        f"{name!r} (expected {value!r})"
+                    )
+                if not _same(o.value, value):
+                    raise DriftError(f"{op} {target}: override {name!r} is {o.value!r}, not {value!r}")
+            v._record(op, target, "skipped")
+            return
+        if was is not None and cur != was:
+            raise DriftError(f"{op} {target}: the instance instantiates {cur!r}, not {was!r} (or {module!r})")
+        paths = self._paths(op)
+
+        old_info, new_info = v._info(cur), v._info(module)
+        for mi in (old_info, new_info):
+            if mi.port_list_kind == "nonansi":
+                raise VetError(f"{op} {target}: module {mi.name!r} has a non-ANSI port list")
+            odd = [p.name for p in mi.ports if p.direction not in _DIRECTIONS]
+            if odd:
+                raise VetError(
+                    f"{op} {target}: module {mi.name!r} has an interface or ref port "
+                    f"({', '.join(repr(n) for n in odd)})"
+                )
+
+        old_conns = {c.port: c for c in inst.connections if c.port is not None}
+        old_ovr = {o.name: o for o in inst.param_overrides if o.name is not None}
+        new_ports = {p.name: p for p in new_info.ports}
+        new_values = [n for n, k in new_info.param_kinds.items() if k == "value"]
+        problems: list[str] = []
+
+        for what, names, pool in (
+            ("ports", ports, old_conns),
+            ("drop_ports", drop_ports, old_conns),
+            ("params", params, old_ovr),
+            ("drop_params", drop_params, old_ovr),
+        ):
+            for n in names:
+                if n not in pool:
+                    kind = "connection" if "port" in what else "parameter override"
+                    problems.append(f"{what} names {n!r}, which is not a {kind} of {target}{_did_you_mean(n, pool)}")
+        for n in ports:
+            if n in drop_ports:
+                problems.append(f"connection {n!r} is both renamed and dropped")
+        for n in params:
+            if n in drop_params:
+                problems.append(f"override {n!r} is both renamed and dropped")
+        for old, new in ports.items():
+            if new not in new_ports:
+                problems.append(
+                    f"ports maps {old!r} to {new!r}, which is not a port of module {module!r}"
+                    f"{_did_you_mean(new, new_ports)}"
+                )
+        for old, new in params.items():
+            if new not in new_values:
+                problems.append(
+                    f"params maps {old!r} to {new!r}, which is not an overridable value parameter of module "
+                    f"{module!r}{_did_you_mean(new, new_values)}"
+                )
+        for n, expr in connect.items():
+            if n not in new_ports:
+                problems.append(f"connect names {n!r}, which is not a port of module {module!r}{_did_you_mean(n, new_ports)}")
+            elif not tokens(expr):
+                problems.append(f"connect gives port {n!r} an empty expression; use unconnected= for an output")
+        for n in unconnected:
+            if n not in new_ports:
+                problems.append(
+                    f"unconnected names {n!r}, which is not a port of module {module!r}{_did_you_mean(n, new_ports)}"
+                )
+            elif new_ports[n].direction == "input":
+                problems.append(f"unconnected names {n!r}, an input port, which cannot be left unconnected")
+        for n in set_params:
+            if n not in new_values:
+                kind = new_info.param_kinds.get(n)
+                why = "is not a parameter" if kind is None else "is not an overridable value parameter"
+                problems.append(f"set_params names {n!r}, which {why} of module {module!r}{_did_you_mean(n, new_values)}")
+
+        landing: dict[str, list[str]] = {}
+        for n in old_conns:
+            if n in drop_ports:
+                continue
+            if n in ports:
+                landing.setdefault(ports[n], []).append(f"connection {n!r}")
+            elif n in new_ports:
+                landing.setdefault(n, []).append(f"connection {n!r}")
+            else:
+                problems.append(
+                    f"connection {n!r} is not accounted for: module {module!r} has no port {n!r} "
+                    f"(rename it with ports= or remove it with drop_ports=)"
+                )
+        for n in connect:
+            landing.setdefault(n, []).append("connect")
+        for n in unconnected:
+            landing.setdefault(n, []).append("unconnected")
+        for t, who in landing.items():
+            if len(who) > 1:
+                problems.append(f"{' and '.join(who)} both land on port {t!r}")
+        for n in new_ports:
+            if n not in landing:
+                problems.append(
+                    f"port {n!r} of module {module!r} is not accounted for: connect it with connect= "
+                    f"(an output or inout may be listed in unconnected=)"
+                )
+
+        carried: dict[str, list[tuple[str, str]]] = {}  # new parameter -> [(how, old name)]
+        for n in old_ovr:
+            if n in drop_params:
+                continue
+            if n in params:
+                carried.setdefault(params[n], []).append(("renamed", n))
+            elif n in new_values:
+                carried.setdefault(n, []).append(("kept", n))
+            else:
+                problems.append(
+                    f"override {n!r} is not accounted for: module {module!r} has no overridable parameter {n!r} "
+                    f"(rename it with params= or remove it with drop_params=)"
+                )
+        for t, who in carried.items():
+            if len(who) > 1:
+                problems.append(f"overrides {' and '.join(repr(n) for _, n in who)} both land on parameter {t!r}")
+        for n in set_params:
+            if any(how == "renamed" for how, _ in carried.get(n, [])):
+                problems.append(f"set_params and the renamed override both land on parameter {n!r}")
+        if problems:
+            raise VetError(f"{op} {target}: " + "; ".join(problems))
+
+        data = v.session.text(inst.path)
+        eol = _eol(data)
+        splices: list[tuple[int, int, bytes]] = []
+        if data[inst.module_start : inst.module_end] != cur.encode():
+            raise VetError(f"{op} {target}: cannot find the module name in the text")
+        splices.append((inst.module_start, inst.module_end, module.encode()))
+
+        # connections
+        conns = inst.connections
+        drop = {i for i, c in enumerate(conns) if c.port in drop_ports}
+        w = _common_width(
+            _renamed_field(c.start, c.open, c.port or "", ports.get(c.port or ""))
+            for i, c in enumerate(conns)
+            if i not in drop
+        )
+        fresh = [f".{n:<{w}}({e})".encode() for n, e in connect.items()]
+        fresh += [f".{n:<{w}}()".encode() for n in unconnected]
+        items = [(c.start, c.end) for c in conns]
+        if conns:
+            sp = edit_list(data, items, drop, inst.ports_close, eol, fresh)
+            if sp is None:
+                sp = [(items[0][0], items[-1][1], b", ".join(fresh))] if fresh else [remove_all(data, items)]
+            splices += sp
+        elif fresh:
+            splices.append((inst.ports_open + 1, inst.ports_open + 1, b", ".join(fresh)))
+        for i, c in enumerate(conns):
+            if i in drop or c.port not in ports:
+                continue
+            assert c.port is not None
+            if c.open is None:
+                splices.append((c.start, c.end, f".{ports[c.port]}({c.port})".encode()))
+                continue
+            a = c.start + 1
+            if data[a : a + len(c.port)] != c.port.encode():
+                raise VetError(f"{op} {target}: cannot find the name of connection {c.port!r} in the text")
+            splices.append((a, a + len(c.port), ports[c.port].encode()))
+
+        # parameter overrides, then the added ones
+        ovs = inst.param_overrides
+        odrop = {i for i, o in enumerate(ovs) if o.name in drop_params}
+        replaced = {
+            o.name: o for i, o in enumerate(ovs) if i not in odrop and o.name not in params and o.name in set_params
+        }
+        w = _common_width(
+            _renamed_field(o.start, o.open, o.name or "", params.get(o.name or ""))
+            for i, o in enumerate(ovs)
+            if i not in odrop
+        )
+        fresh = [f".{n:<{w}}({x})".encode() for n, x in set_params.items() if n not in replaced]
+        oitems = [(o.start, o.end) for o in ovs]
+        if ovs:
+            assert inst.params_close is not None
+            sp = edit_list(data, oitems, odrop, inst.params_close, eol, fresh)
+            if sp is None:
+                whole = b" #(" + b", ".join(fresh) + b")" if fresh else _list_gap(data, inst.params_close)
+                sp = [(inst.module_end, inst.params_close + 1, whole)]
+            splices += sp
+        elif fresh:
+            if inst.params_close is None:
+                splices.append((inst.module_end, inst.module_end, b" #(" + b", ".join(fresh) + b")"))
+            else:
+                splices.append((inst.params_close, inst.params_close, b", ".join(fresh)))
+        for i, o in enumerate(ovs):
+            if i in odrop:
+                continue
+            assert o.name is not None
+            if o.name in replaced:
+                text = set_params[o.name].encode()
+                splices.append((o.open + 1, o.end - 1, text) if o.open is not None else (o.start, o.end, f".{o.name}({set_params[o.name]})".encode()))
+            elif o.name in params:
+                if o.open is None:
+                    splices.append((o.start, o.end, f".{params[o.name]}({o.name})".encode()))
+                    continue
+                a = o.start + 1
+                if data[a : a + len(o.name)] != o.name.encode():
+                    raise VetError(f"{op} {target}: cannot find the name of override {o.name!r} in the text")
+                splices.append((a, a + len(o.name), params[o.name].encode()))
+
+        mod_name, inst_name = self._mod, self._name
+
+        def check(design: Design) -> str | None:
+            try:
+                found = design.module(mod_name).instance(inst_name).module
+            except AdapterError:
+                return f"{op} {mod_name}.{inst_name}: instance not found in the final design"
+            if found != module:
+                return f"{op} {mod_name}.{inst_name}: expected module {module!r}, found {found!r}"
+            return None
+
+        before = v.session.loaded
+        v._commit_all(
+            op,
+            [
+                _Plan(
+                    op,
+                    target,
+                    path=inst.path,
+                    splices=splices,
+                    mark=("conns", mod_name, inst_name),
+                    expects=[("module-changed", p, "*") for p in paths],
+                    permits=[("*", p, "*") for p in paths],
+                    check_key=(op, mod_name, inst_name),
+                    check=check,
+                )
+            ],
+        )
+        v._mark("overrides", mod_name, inst_name)
+        for p in paths:
+            v.session.permit("*", p, "*", below=True)
+        v._swapped.setdefault((mod_name, inst_name), set()).add(cur)
+
+        # The checks of this operation alone, on the edited design (slang's own
+        # PortWidthExpand and PortWidthTruncate do not name the port).
+        try:
+            v.session.refresh()
+        except AdapterError as e:
+            raise VetError(f"{op} {target}: the edited design cannot be loaded: {e}") from e
+        v._sync()
+        after = v.session.loaded
+        for p in paths:
+            a, b = before.instance_snap(p), after.instance_snap(p)
+            if b is None:
+                raise VetError(f"{op} {target}: there is no instance at {p} in the edited design")
+            if a is None:
+                continue
+            wrong: list[str] = []
+            for old in old_conns:
+                if old in drop_ports:
+                    continue
+                new = ports.get(old, old)
+                x, y = a.ports.get(old), b.ports.get(new)
+                if x is None or y is None:
+                    continue
+                tx, ty = a.port_types.get(old), b.port_types.get(new)
+                if x[0] != y[0]:
+                    wrong.append(f"port {old!r} of {cur!r} is an {x[0]} but port {new!r} of {module!r} is an {y[0]}")
+                elif x[1] != y[1] and x[1] > 0 and y[1] > 0:
+                    wrong.append(
+                        f"port {old!r} of {cur!r} is {x[1]} bits wide but port {new!r} of {module!r} "
+                        f"is {y[1]} bits wide"
+                    )
+                elif tx is not None and ty is not None and _type_key(tx) != _type_key(ty):
+                    wrong.append(f"port {old!r} of {cur!r} has type {tx} but port {new!r} of {module!r} has type {ty}")
+            if wrong:
+                raise VetError(f"{op} {target}: " + "; ".join(wrong))
+            for n in new_values:
+                if n in set_params:
+                    continue
+                src = carried[n][0][1] if n in carried else n  # the parameter it takes over from
+                if src == n and old_info.param_kinds.get(n) != "value":
+                    continue
+                x, y = a.params.get(src), b.params.get(n)
+                if x is not None and y is not None and not _same_value(x, y):
+                    raise VetError(
+                        f"{op} {target}: parameter {n!r} would change from {x} to {y}: {module!r} takes "
+                        f"the value differently from {cur!r}; keep the value with set_params={{{n!r}: ...}} "
+                        f"or accept the new one with an explicit set_params"
+                    )
+        for old in drop_ports:
+            conn = old_conns[old]
+            direction = next((q.direction for q in old_info.ports if q.name == old), None)
+            if direction in ("output", "inout"):
+                v._drove.extend((self._mod, base) for base in driven_bases(conn.expr))

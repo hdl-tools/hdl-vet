@@ -17,18 +17,23 @@ This module does not import pyslang; it talks to `hdl_vet.slang_adapter`.
 
 from __future__ import annotations
 
+import copy
 import os
 import re
+from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from hdl_vet.filelist import Filelist, read_filelist
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
 from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
 
-__all__ = ["HEADER_MARK", "Result", "Session", "SessionError"]
+__all__ = ["ADDED_DIR", "HEADER_MARK", "Comparison", "Result", "Session", "SessionError", "describe"]
+
+ADDED_DIR = "hdl_vet_added"  # where the output tree keeps the files a script adds
 
 HEADER_MARK = b"// Modified by hdl-vet"
 _BOM = b"\xef\xbb\xbf"
@@ -55,6 +60,7 @@ class Result:
     new_files: list[Path] = field(default_factory=list)
     load_error: str | None = None
     failed_checks: list[str] = field(default_factory=list)
+    added: dict[str, bytes] = field(default_factory=dict)  # output-relative POSIX path -> bytes
 
     def _rel(self, path: Path | None) -> str:
         if path is None:
@@ -83,6 +89,69 @@ class Result:
         for msg in self.failed_checks:
             lines.append(f"  failed check: {msg}")
         return "\n".join(lines) + "\n"
+
+
+def describe(d: Diag) -> str:
+    """One diagnostic as a refusal or a note quotes it: slang's message, its module and the file's name."""
+    bits: list[str] = []
+    if d.module is not None:
+        bits.append(f"module {d.module}")
+    if d.path is not None:
+        bits.append(d.path.name + (f":{d.line}" if d.line is not None else ""))
+    return f"{d.message} [{', '.join(bits)}]" if bits else d.message
+
+
+def _subtract(a: Sequence[tuple[int, int]], b: Sequence[tuple[int, int]]) -> list[tuple[int, int]]:
+    """The inclusive integer ranges of `a` that no range of `b` covers (both sorted and merged)."""
+    out: list[tuple[int, int]] = []
+    for lo, hi in a:
+        cur = lo
+        for blo, bhi in b:
+            if bhi < cur or blo > hi:
+                continue
+            if blo > cur:
+                out.append((cur, blo - 1))
+            cur = max(cur, bhi + 1)
+            if cur > hi:
+                break
+        if cur <= hi:
+            out.append((cur, hi))
+    return out
+
+
+@dataclass(frozen=True)
+class Comparison:
+    """What an edited design has that the design at a checkpoint did not."""
+
+    diagnostics: list[Diag]  # new errors and warnings, as sign-off counts them
+    dangling: list[Diag]
+    unused: list[Diag]
+    partial: list[str] = field(default_factory=list)  # signals that lost the driver of some of their bits
+
+
+@dataclass(frozen=True)
+class _Checkpoint:
+    text: dict[Path, bytes]
+    queue: dict[Path, Any]
+    maps: dict[Path, list[OffsetMap]]
+    expects: list[Expect]
+    added: dict[str, tuple[Path, bytes]]
+    added_base: dict[Path, Counter[tuple[str, str]]]
+    load_fl: Filelist
+    design: Design
+
+
+def _grown(before: Sequence[Diag], after: Sequence[Diag]) -> list[Diag]:
+    """The entries of `after` that `before` does not have, as multisets of (code, module, file, message)."""
+    pool = Counter((d.code, d.module, d.path, d.message) for d in before)
+    out: list[Diag] = []
+    for d in after:
+        key = (d.code, d.module, d.path, d.message)
+        if pool[key] > 0:
+            pool[key] -= 1
+        else:
+            out.append(d)
+    return out
 
 
 def _has_header(data: bytes) -> bool:
@@ -143,6 +212,10 @@ class Session:
         # File-system answers (which file an include resolves to) cannot change
         # between this session's loads: it re-loads from its own bytes.
         self._load_cache = LoadCache()
+        self._load_fl: Filelist = self._fl  # what the design is loaded from: `_fl` plus the added files
+        self._added: dict[str, tuple[Path, bytes]] = {}  # output name -> (real path, bytes), in the order added
+        # what each added file showed right after it was added: (code, message) of its diagnostics
+        self._added_base: dict[Path, Counter[tuple[str, str]]] = {}
         self._design: Design = load(self._fl, top=top, overrides=dict(self._orig), cache=self._load_cache)
         self._baseline = self._design
         for p, data in self._baseline.included_bytes.items():
@@ -220,16 +293,31 @@ class Session:
         return path if path in self._text else path.resolve()
 
     def text(self, path: Path) -> bytes:
+        key = self._key(path)
         try:
-            return self._text[self._key(path)]
+            return self._text[key]
         except KeyError:
+            for added, data in self._added.values():
+                if added == key:
+                    return data
             raise SessionError(f"{path}: not a source or included file of this design") from None
+
+    @property
+    def added(self) -> dict[str, bytes]:
+        """The files scripts have added: output-relative POSIX path -> bytes, in the order added."""
+        return {name: data for name, (_, data) in self._added.items()}
+
+    def is_added(self, path: Path) -> bool:
+        key = self._key(path)
+        return any(added == key for added, _ in self._added.values())
 
     # --- edits ---------------------------------------------------------------
 
     def splice(self, path: Path, start: int, end: int, text: bytes, old: bytes | None = None) -> None:
         key = Path(path).resolve()
         if key not in self._text:
+            if self.is_added(key):
+                raise SessionError(f"{path}: is an added file; hdl-vet never edits added files")
             raise SessionError(f"{path}: not a source or included file of this design")
         if self._editable is not None and key not in self._editable:
             raise SessionError(f"{path}: is not editable in this session")
@@ -284,9 +372,16 @@ class Session:
         """The structural snapshot of the baseline design (cached; sign-off needs it too)."""
         return self._baseline.snapshot()
 
+    def _overrides(self) -> dict[Path, bytes]:
+        """Every byte the design is built from: the text of each file, and each added file."""
+        out = dict(self._text)
+        for path, data in self._added.values():
+            out[path] = data
+        return out
+
     def _reload(self) -> None:
         self._design = load(
-            self._fl, top=self._top, overrides=dict(self._text), check_overrides=False, cache=self._load_cache
+            self._load_fl, top=self._top, overrides=self._overrides(), check_overrides=False, cache=self._load_cache
         )
         self.reloads += 1
 
@@ -308,6 +403,181 @@ class Session:
     def _dirty(self, path: Path) -> bool:
         q = self._queue.get(path)
         return q is not None and len(q) > 0
+
+    # --- checkpoint and rollback ----------------------------------------------
+
+    def checkpoint(self) -> object:
+        """Everything a rollback restores: text, queue, stages, expectations, added files, the loaded design."""
+        return _Checkpoint(
+            dict(self._text),
+            copy.deepcopy(self._queue),
+            {p: list(stages) for p, stages in self._maps.items()},
+            list(self._expects),
+            dict(self._added),
+            dict(self._added_base),
+            self._load_fl,
+            self._design,
+        )
+
+    def rollback(self, cp: object) -> None:
+        """Go back to `cp`. `reloads` keeps counting. A checkpoint may be rolled back to more than once."""
+        if not isinstance(cp, _Checkpoint):
+            raise SessionError("not a checkpoint of this session")
+        self._text = dict(cp.text)
+        self._queue = copy.deepcopy(cp.queue)
+        self._maps = {p: list(stages) for p, stages in cp.maps.items()}
+        self._expects = list(cp.expects)
+        self._added = dict(cp.added)
+        self._added_base = dict(cp.added_base)
+        self._load_fl = cp.load_fl
+        self._design = cp.design
+
+    def drop_expects(self, paths: Collection[str]) -> None:
+        """Forget the required expectations at `paths` and below them (their instance is being removed)."""
+        mine = tuple(paths)
+        self._expects = [
+            e
+            for e in self._expects
+            if not (e.required and (e.path in mine or any(e.path.startswith(p + ".") for p in mine)))
+        ]
+
+    def compare_since(self, cp: object, drove: Sequence[tuple[str, str]] = ()) -> Comparison | None:
+        """What the loaded design has that the design at `cp` did not; None if it is that design.
+
+        The diagnostics are compared by location through the edits made since `cp`, as
+        sign-off does against the baseline; warnings inside an added file never count.
+        The dangling and unused entries are compared as multisets of (code, module, file, message);
+        dangling entries inside an added file never count. `drove` are the (module, signal) pairs that
+        something removed used to drive: the bits driven afterwards must cover the bits driven before.
+        """
+        if not isinstance(cp, _Checkpoint):
+            raise SessionError("not a checkpoint of this session")
+        before, after = cp.design, self._design
+        if before is after:
+            return None
+        maps = {p: stages[len(cp.maps.get(p, ())) :] for p, stages in self._maps.items()}
+        new = new_diagnostics(before.diagnostics(), after.diagnostics(), {p: m for p, m in maps.items() if m})
+        paths = {path for path, _ in self._added.values()}
+        dangling = [d for d in _grown(before.dangling(), after.dangling()) if d.path not in paths]
+        return Comparison(
+            self._without_added_warnings(new),
+            dangling,
+            _grown(before.unused(), after.unused()),
+            self._lost_bits(before, after, drove),
+        )
+
+    @staticmethod
+    def _lost_bits(before: Design, after: Design, drove: Sequence[tuple[str, str]]) -> list[str]:
+        pairs = list(dict.fromkeys(drove))
+        if not pairs:
+            return []
+        was, now = before.driven_bits(pairs), after.driven_bits(pairs)
+        unused = after.unused()
+        out: list[str] = []
+        for module, signal in pairs:
+            old, new = was[(module, signal)], now[(module, signal)]
+            if old is None or new is None:
+                continue  # the signal or its module is gone
+            if any(u.module == module and f"'{signal}'" in u.message for u in unused):
+                continue  # nothing reads it any more
+            for key, ranges in old.items():
+                after_ranges = new.get(key)
+                if not after_ranges:
+                    continue  # no driver left at all: slang reports that itself
+                lost = _subtract(ranges, after_ranges)
+                if lost:
+                    bits = ", ".join(str(lo) if lo == hi else f"{lo}-{hi}" for lo, hi in lost)
+                    out.append(f"signal {signal!r} of module {module} loses the driver of bit(s) {bits}")
+        return out
+
+    def _without_added_warnings(self, diags: list[Diag]) -> list[Diag]:
+        """Drop what an added file showed when it was added; anything else located in it counts."""
+        if not self._added_base:
+            return diags
+        left = {p: Counter(c) for p, c in self._added_base.items()}
+        out: list[Diag] = []
+        for d in diags:
+            pool = left.get(d.path) if d.path is not None else None
+            if pool is not None and d.severity != "error" and pool[(d.code, d.message)] > 0:
+                pool[(d.code, d.message)] -= 1
+                continue
+            out.append(d)
+        return out
+
+    # --- added files ---------------------------------------------------------
+
+    def add_file(self, path: Path | str) -> bool:
+        """Add a source file outside the design: it is loaded with the design, last in the file list.
+
+        Returns False (nothing done) when the file is already part of the design. Raises
+        SessionError, leaving the session as it was, when the file cannot be read, when
+        its name is taken by another added file, when the input tree already has an
+        `hdl_vet_added` directory, when it includes a header that is not a file of the
+        design, or when the design with the file has a diagnostic the design did not have.
+        """
+        key = Path(path).resolve()
+        if key in self._load_fl.files:
+            return False
+        out = f"{ADDED_DIR}/{key.name}"
+        for name, (other, _) in self._added.items():
+            if other == key:
+                return False
+            if name.casefold() == out.casefold():
+                raise SessionError(
+                    f"another added file ({other}) has the same name, which would collide in the output tree"
+                    + ("" if name == out else f" ({name.rsplit('/', 1)[-1]!r} differs only in case)")
+                )
+        if (self.layout_root / ADDED_DIR).exists():
+            raise SessionError(
+                f"the input tree already has a {ADDED_DIR!r} at {self.layout_root}, where added files are written"
+            )
+        try:
+            data = key.read_bytes()
+        except OSError as e:
+            raise SessionError(f"cannot read it ({e})") from e
+        if _has_header(data):
+            raise SessionError("it already carries the hdl-vet header; an added file must be an unmodified input")
+        fl = self._load_fl
+        trial = Filelist([*fl.files, key], fl.incdirs, fl.defines, fl.root)
+        added = dict(self._added)
+        self._added = {**added, out: (key, data)}
+        try:
+            design = load(
+                trial, top=self._top, overrides=self._overrides(), check_overrides=False, cache=self._load_cache
+            )
+            self.reloads += 1
+            known = set(self._text) | {p for p, _ in self._added.values()}
+            extra = [h for h in design.included if h not in known]
+            if extra:
+                raise SessionError(
+                    f"it includes {extra[0]}, which is not a file of the design; "
+                    f"an added file may include only headers the design already reads"
+                )
+            new = self._without_added_warnings(
+                [
+                    d
+                    for d in new_diagnostics(self._design.diagnostics(), design.diagnostics(), {})
+                    if not (d.path == key and d.severity != "error")  # the file's own warnings are its baseline
+                ]
+            )
+            if new:
+                more = f" (and {len(new) - 3} more)" if len(new) > 3 else ""
+                raise SessionError(
+                    "the design with it has " + "; ".join(f"{d.severity} {describe(d)}" for d in new[:3]) + more
+                )
+        except AdapterError as e:
+            self._added = added
+            raise SessionError(f"the design with it cannot be loaded: {e}") from e
+        except SessionError:
+            self._added = added
+            raise
+        self._added_base = {
+            **self._added_base,
+            key: Counter((d.code, d.message) for d in design.diagnostics() if d.path == key),
+        }
+        self._load_fl = trial
+        self._design = design
+        return True
 
     # --- queries -------------------------------------------------------------
 
@@ -349,10 +619,10 @@ class Session:
             self._maps.setdefault(p, []).append(OffsetMap([hs]))
         if not changed:
             unexpected, unmatched = check_changes([], self._expects)
-            failed = self._run_checks(checks, self._baseline)
+            failed = self._run_checks(checks, self._design if self._added else self._baseline)
             return Result(
                 not unmatched and not failed, [], [], unexpected, unmatched, {}, "", self.layout_root,
-                failed_checks=failed,
+                failed_checks=failed, added=self.added,
             )
 
         files = {p: self._text[p] for p in changed}
@@ -363,16 +633,18 @@ class Session:
         try:
             self._reload()
         except AdapterError as e:
-            return Result(False, [], [], [], [], files, diff, self.layout_root, [], str(e))
+            return Result(False, [], [], [], [], files, diff, self.layout_root, [], str(e), added=self.added)
         new_files = sorted((p for p in self._design.included if p not in self._text), key=lambda p: p.as_posix())
-        new = new_diagnostics(self._baseline.diagnostics(), self._design.diagnostics(), self._maps)
+        new = self._without_added_warnings(
+            new_diagnostics(self._baseline.diagnostics(), self._design.diagnostics(), self._maps)
+        )
         changes = diff_snapshots(self._baseline.snapshot(), self._design.snapshot())
         unexpected, unmatched = check_changes(changes, self._expects)
         failed = self._run_checks(checks, self._design)
         ok = not new and not unexpected and not unmatched and not new_files and not failed
         return Result(
             ok, new, changes, unexpected, unmatched, files, diff, self.layout_root, new_files,
-            failed_checks=failed,
+            failed_checks=failed, added=self.added,
         )
 
     def _run_checks(self, checks: Sequence[Callable[[Design], str | None]], design: Design) -> list[str]:

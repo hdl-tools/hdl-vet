@@ -162,6 +162,7 @@ def test_untouched_design_gives_an_identical_tree(kit, tmp_path: Path):
         "filelist": "design.f",
         "scripts": [],
         "changed": {},
+        "added": {},
     }
 
 

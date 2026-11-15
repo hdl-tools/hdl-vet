@@ -38,6 +38,7 @@ __all__ = [
     "PortInfo",
     "load",
     "syntax_equivalent",
+    "driven_bases",
     "is_simple_identifier",
     "tokens",
 ]
@@ -53,6 +54,20 @@ _DIRECTIONS = {
     "Ref": "ref",
 }
 _WS_RE = re.compile(r"\s+")
+_IDENT_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+# What the separate unused / undriven analysis reports (Design.dangling / Design.unused).
+_DANGLING_CODES = frozenset({"UndrivenNet", "UndrivenPort", "UnassignedVariable"})
+_UNUSED_CODES = frozenset(
+    {
+        "UnusedNet",
+        "UnusedVariable",
+        "UnusedPort",
+        "UnusedButSetNet",
+        "UnusedButSetVariable",
+        "UnusedButSetPort",
+        "UnusedImplicitNet",
+    }
+)
 
 _BOM = b"\xef\xbb\xbf"
 _SEVERITY = {
@@ -84,6 +99,7 @@ class Diag:
     line: int | None
     offset: int | None
     in_macro: bool = False
+    module: str | None = None  # the module the diagnostic is located in (set for dangling / unused entries)
 
 
 @dataclass(frozen=True)
@@ -103,6 +119,9 @@ class ParamInfo:
     start: int
     end: int
     type_text: str = ""  # the declared data type as written ("" when implicit)
+    decl_start: int = -1  # the whole declaration (`parameter int X = 1`), which may hold several names
+    decl_end: int = -1
+    decl_count: int = 1  # names the declaration declares
 
 
 @dataclass(frozen=True)
@@ -132,6 +151,9 @@ class DeclInfo:
     type_text: str  # data type (with the net type for a net) and unpacked dimensions
     start: int
     end: int
+    stmt_start: int = -1  # the whole declaration statement; -1 when it cannot be edited as text
+    stmt_end: int = -1
+    stmt_count: int = 1  # names the statement declares
 
 
 @dataclass(frozen=True)
@@ -142,6 +164,9 @@ class AssignInfo:
     right: str
     start: int
     end: int
+    stmt_start: int = -1  # the whole `assign ...;` statement; -1 when it cannot be edited as text
+    stmt_end: int = -1
+    stmt_count: int = 1  # assignments the statement holds
 
 
 @dataclass(frozen=True)
@@ -207,6 +232,9 @@ class ModuleInfo:
     imports_end: int | None = None  # end of the last package import in the header
     ports_directive: str | None = None  # a conditional directive inside the port list
     params_directive: str | None = None  # ... inside the parameter port list
+    disabled_names: dict[str, str] = field(default_factory=dict)  # identifier in directive-disabled text -> directive
+    generate_decls: frozenset[str] = frozenset()  # nets and variables declared inside generate constructs
+    generate_assigned: frozenset[str] = frozenset()  # base names assigned inside generate constructs
 
     def port(self, name: str) -> PortInfo:
         for p in self.ports:
@@ -329,10 +357,18 @@ class LoadCache:
         self._shared: _Shared | None = None
 
     def bind(self, fl: Filelist) -> None:
-        """Tie the cache to one file list: its answers depend on the include directories."""
+        """Tie the cache to one file list: its answers depend on the include directories.
+
+        What the cache keeps depends on the include directories, the defines and the
+        root, not on which sources there are: a session adds a source file (or takes
+        it back), and the parse trees of the others stay valid.
+        """
         if self._filelist is None:
             self._filelist = fl
-        elif self._filelist is not fl and self._filelist != fl:
+        elif self._filelist is not fl and (
+            (self._filelist.incdirs, self._filelist.defines, self._filelist.root)
+            != (fl.incdirs, fl.defines, fl.root)
+        ):
             raise AdapterError("a LoadCache belongs to one file list and cannot be shared with another")
 
     def bind_top(self, top: str | None) -> None:
@@ -781,6 +817,8 @@ class Design:
         self._included = included
         self._diags: list[Diag] | None = None
         self._analysis: Any = None
+        self._unused: list[Diag] | None = None
+        self._spans: list[tuple[Path, int, int, str]] | None = None
         self._snap: dict[str, InstanceSnap] | None = None
         self._instance_cache: tuple[Any, ...] | None = None
         self._modules: dict[str, ModuleInfo] = {}
@@ -881,25 +919,135 @@ class Design:
             severity = _SEVERITY.get(engine.getSeverity(diag.code, diag.location))
             if severity is None:
                 continue
-            in_macro = bool(self._sm.isMacroLoc(diag.location))
-            loc = self._original(diag.location)
-            path: Path | None = None
-            line: int | None = None
-            offset: int | None = None
-            if loc.buffer.id != 0 and loc != pyslang.SourceLocation.NoLocation:
-                path = self._buffer_path(loc.buffer)
-                line = self._sm.getLineNumber(loc)
-                offset = loc.offset
-            code = _CODE_NAMES.get(diag.code, str(diag.code))
-            message = engine.formatMessage(diag)
-            out.append(
-                (
-                    (str(path or ""), offset or 0, code, message),
-                    Diag(severity, code, message, path, line, offset, in_macro),
-                )
-            )
+            made = self._make_diag(diag, severity)
+            out.append(((str(made.path or ""), made.offset or 0, made.code, made.message), made))
         out.sort(key=lambda item: item[0])
         return [d for _, d in out]
+
+    def _module_spans(self) -> list[tuple[Path, int, int, str]]:
+        if self._spans is None:
+            dk = pyslang.ast.DefinitionKind
+            kinds = (dk.Module, dk.Interface, dk.Program)
+            spans: list[tuple[Path, int, int, str]] = []
+            for d in self._comp.getDefinitions():
+                if d.definitionKind not in kinds or d.syntax is None:
+                    continue
+                first = d.syntax.getFirstToken()
+                if not first:
+                    continue
+                loc = self._original(first.location)
+                path = self._buffer_path(loc.buffer)
+                if path is not None:
+                    spans.append((path, loc.offset, d.syntax.getLastToken().range.end.offset, d.name))
+            self._spans = spans
+        return self._spans
+
+    def _module_at(self, path: Path | None, offset: int | None) -> str | None:
+        if path is None or offset is None:
+            return None
+        for p, a, b, name in self._module_spans():
+            if p == path and a <= offset <= b:
+                return name
+        return None
+
+    def driven_bits(
+        self, signals: Sequence[tuple[str, str]]
+    ) -> dict[tuple[str, str], dict[str, tuple[tuple[int, int], ...]] | None]:
+        """Which bits of module-level signals have a driver, per elaborated body of the module.
+
+        For each (module, name): the merged inclusive bit ranges that some driver covers
+        (a continuous assignment, an output port connection, a procedural block, the
+        initialiser), keyed by the canonical body's hierarchical path; None when the
+        module is not elaborated or has no such signal. slang reports a signal with no
+        driver at all, but is silent when only some of its bits lose theirs.
+        """
+        wanted = {m for m, _ in signals}
+        bodies: dict[str, dict[str, Any]] = {m: {} for m in wanted}
+
+        def one(sym: Any) -> None:
+            name = sym.body.definition.name
+            if name in wanted:
+                body = sym.canonicalBody or sym.body
+                bodies[name].setdefault(str(body.hierarchicalPath), body)
+
+        self._visit_instances(one)
+        analysis = self._analyze()
+        out: dict[tuple[str, str], dict[str, tuple[tuple[int, int], ...]] | None] = {}
+        for module, name in signals:
+            found: dict[str, tuple[tuple[int, int], ...]] = {}
+            for key, body in bodies[module].items():
+                sym = body.find(name)
+                if sym is None:
+                    continue
+                try:
+                    drivers = analysis.getDrivers(sym)
+                except TypeError:
+                    continue
+                spans = [tuple(d.bounds) for d in drivers]
+                if getattr(sym, "initializer", None) is not None:
+                    spans.append((0, max(int(sym.type.bitWidth) - 1, 0)))
+                found[key] = _merge_ranges(spans)
+            out[(module, name)] = found or None
+        return out
+
+    def _make_diag(self, diag: Any, severity: str, with_module: bool = False) -> Diag:
+        in_macro = bool(self._sm.isMacroLoc(diag.location))
+        loc = self._original(diag.location)
+        path: Path | None = None
+        line: int | None = None
+        offset: int | None = None
+        if loc.buffer.id != 0 and loc != pyslang.SourceLocation.NoLocation:
+            path = self._buffer_path(loc.buffer)
+            line = self._sm.getLineNumber(loc)
+            offset = loc.offset
+        code = _CODE_NAMES.get(diag.code, str(diag.code))
+        module = self._module_at(path, offset) if with_module else None
+        return Diag(severity, code, self._engine.formatMessage(diag), path, line, offset, in_macro, module)
+
+    def _unused_pass(self) -> list[Diag]:
+        """Every diagnostic of the dangling and unused codes, from an analysis of its own.
+
+        slang reports these only when its unused checking is on. That analysis is a
+        separate manager over the same (frozen) compilation, so `diagnostics()` and
+        what sign-off counts are untouched by it.
+        """
+        if self._unused is None:
+            self._comp.getAllDiagnostics()
+            self._comp.freeze()
+            opts = pyslang.analysis.AnalysisOptions()
+            opts.flags = pyslang.analysis.AnalysisFlags.CheckUnused
+            manager = pyslang.analysis.AnalysisManager(opts)
+            manager.analyze(self._comp)
+            out: list[tuple[tuple[str, int, str, str], Diag]] = []
+            for diag in manager.getDiagnostics():
+                if _CODE_NAMES.get(diag.code) not in _DANGLING_CODES | _UNUSED_CODES:
+                    continue
+                made = self._make_diag(diag, "warning", with_module=True)
+                out.append(((str(made.path or ""), made.offset or 0, made.code, made.message), made))
+            out.sort(key=lambda item: item[0])
+            self._unused = [d for _, d in out]
+        return self._unused
+
+    def dangling(self) -> list[Diag]:
+        """What slang reports as driverless: UndrivenNet, UndrivenPort, UnassignedVariable."""
+        return [d for d in self._unused_pass() if d.code in _DANGLING_CODES]
+
+    def unused(self) -> list[Diag]:
+        """What slang reports as unused or set but never read (nets, variables, ports)."""
+        return [d for d in self._unused_pass() if d.code in _UNUSED_CODES]
+
+    def defined_in(self, path: Path) -> list[str]:
+        """Names of the modules, interfaces and programs whose definition lies in the file `path`."""
+        dk = pyslang.ast.DefinitionKind
+        kinds = (dk.Module, dk.Interface, dk.Program)
+        out: set[str] = set()
+        for d in self._comp.getDefinitions():
+            if d.definitionKind not in kinds or d.syntax is None:
+                continue
+            first = d.syntax.getFirstToken()
+            if first and self._buffer_path(self._original(first.location).buffer) == path:
+                out.add(d.name)
+        return sorted(out)
 
     # --- elaborated structure ----------------------------------------------
 
@@ -956,31 +1104,45 @@ class Design:
         return dict(self._snap)
 
     def _build_snapshot(self) -> dict[str, InstanceSnap]:
-        sk = pyslang.ast.SymbolKind
         tops = {t.hierarchicalPath for t in self._comp.getRoot().topInstances}
         out: dict[str, InstanceSnap] = {}
 
         def one(sym: Any) -> None:
-            body = sym.body
-            params: dict[str, str] = {}
-            for p in body.parameters:
-                params[p.name] = str(p.value) if p.kind == sk.Parameter else str(p.targetType.type)
-            ports: dict[str, tuple[str, int]] = {}
-            port_types: dict[str, str] = {}
-            conns: dict[str, str] = {}
-            is_top = sym.hierarchicalPath in tops
-            for port in body.portList:
-                if port.kind == sk.Port:
-                    ports[port.name] = (_DIRECTIONS[port.direction.name], port.type.bitWidth)
-                    port_types[port.name] = str(port.type)
-                else:
-                    ports[port.name] = ("interface", 0)
-                if not is_top:
-                    conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
-            out[sym.hierarchicalPath] = InstanceSnap(body.definition.name, params, ports, conns, port_types)
+            out[sym.hierarchicalPath] = self._snap_of(sym, sym.hierarchicalPath in tops)
 
         self._visit_instances(one)
         return out
+
+    def _snap_of(self, sym: Any, is_top: bool) -> InstanceSnap:
+        sk = pyslang.ast.SymbolKind
+        body = sym.body
+        params: dict[str, str] = {}
+        for p in body.parameters:
+            params[p.name] = str(p.value) if p.kind == sk.Parameter else str(p.targetType.type)
+        ports: dict[str, tuple[str, int]] = {}
+        port_types: dict[str, str] = {}
+        conns: dict[str, str] = {}
+        for port in body.portList:
+            if port.kind == sk.Port:
+                ports[port.name] = (_DIRECTIONS[port.direction.name], port.type.bitWidth)
+                port_types[port.name] = str(port.type)
+            else:
+                ports[port.name] = ("interface", 0)
+            if not is_top:
+                conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
+        return InstanceSnap(body.definition.name, params, ports, conns, port_types)
+
+    def instance_snap(self, path: str) -> InstanceSnap | None:
+        """The snapshot of the one instance at `path`, without building the whole snapshot.
+
+        None when there is no instance at that path. Equal to `snapshot().get(path)`.
+        """
+        if self._snap is not None:
+            return self._snap.get(path)
+        sym = self._comp.getRoot().lookupName(path)
+        if sym is None or sym.kind != pyslang.ast.SymbolKind.Instance:
+            return None
+        return self._snap_of(sym, "." not in path)
 
     def _connection_text(self, port: Any, conn: Any) -> str:
         ek = pyslang.ast.ExpressionKind
@@ -1108,7 +1270,7 @@ class Design:
                 from_macro=from_macro,
             )
             for i in inst.instances
-            if i.kind == pyslang.syntax.SyntaxKind.HierarchicalInstance
+            if i.kind == pyslang.syntax.SyntaxKind.HierarchicalInstance and i.decl is not None
         ]
 
 
@@ -1152,7 +1314,8 @@ class Design:
         if hdr.parameters is not None:
             for decl in _items(hdr.parameters.declarations):
                 kind = _param_kind(decl)
-                for d in _items(decl.declarators):
+                declarators = _items(decl.declarators)
+                for d in declarators:
                     param_kinds[d.name.valueText] = kind
                     check(d.getFirstToken(), f"parameter {d.name.valueText!r}")
                     init = getattr(d, "initializer", None) or getattr(d, "assignment", None)
@@ -1164,6 +1327,9 @@ class Design:
                             start=d.getFirstToken().location.offset,
                             end=d.getLastToken().range.end.offset,
                             type_text=_param_type_text(decl),
+                            decl_start=decl.getFirstToken().location.offset,
+                            decl_end=decl.getLastToken().range.end.offset,
+                            decl_count=len(declarators),
                         )
                     )
         instances: list[InstanceInfo] = []
@@ -1176,7 +1342,8 @@ class Design:
                 instances.extend(self._instances_of(node, path))
 
         syn.visit(visit)
-        decls, assigns = self._body_items(syn, param_kinds, hdr.parameters is None)
+        decls, assigns = self._body_items(syn, param_kinds, hdr.parameters is None, path)
+        gen_decls, gen_assigned = _generate_names(syn)
         return ModuleInfo(
             name=name,
             path=path,
@@ -1211,6 +1378,9 @@ class Design:
             params_directive=None
             if plain or hdr.parameters is None
             else _conditional_directive(hdr.parameters),
+            disabled_names={} if plain else _disabled_names(syn),
+            generate_decls=gen_decls,
+            generate_assigned=gen_assigned,
         )
 
     def _body_indent(self, syn: Any) -> str:
@@ -1225,8 +1395,20 @@ class Design:
         line = text[start:off]
         return line[: len(line) - len(line.lstrip(b" \t"))].decode()
 
+    def _stmt_range(self, node: Any, path: Path) -> tuple[int, int]:
+        """Byte range of a whole statement in `path`, or (-1, -1) when it is not plain text of that file."""
+        first, last = node.getFirstToken(), node.getLastToken()
+        if not first or not last:
+            return -1, -1
+        a, b = first.location, last.location
+        if self._sm.isMacroLoc(a) or self._sm.isMacroLoc(b) or a.buffer != b.buffer:
+            return -1, -1
+        if self._buffer_path(a.buffer) != path:
+            return -1, -1
+        return a.offset, last.range.end.offset
+
     def _body_items(
-        self, syn: Any, param_kinds: dict[str, str], body_params_overridable: bool
+        self, syn: Any, param_kinds: dict[str, str], body_params_overridable: bool, path: Path
     ) -> tuple[list[DeclInfo], list[AssignInfo]]:
         sk = pyslang.syntax.SyntaxKind
         decls: list[DeclInfo] = []
@@ -1237,7 +1419,9 @@ class Design:
                 base = _clean_text(mem.type)
                 if is_net:
                     base = (mem.netType.valueText + " " + base).strip()
-                for d in _items(mem.declarators):
+                s0, s1 = self._stmt_range(mem, path)
+                names = _items(mem.declarators)
+                for d in names:
                     dims = " ".join(_clean_text(x) for x in d.dimensions)
                     decls.append(
                         DeclInfo(
@@ -1246,10 +1430,15 @@ class Design:
                             (base + " " + dims).strip(),
                             d.getFirstToken().location.offset,
                             d.getLastToken().range.end.offset,
+                            s0,
+                            s1,
+                            len(names),
                         )
                     )
             elif mem.kind == sk.ContinuousAssign:
-                for a in _items(mem.assignments):
+                s0, s1 = self._stmt_range(mem, path)
+                items = _items(mem.assignments)
+                for a in items:
                     if a.kind != sk.AssignmentExpression:
                         continue
                     assigns.append(
@@ -1258,6 +1447,9 @@ class Design:
                             _clean_text(a.right),
                             a.getFirstToken().location.offset,
                             a.getLastToken().range.end.offset,
+                            s0,
+                            s1,
+                            len(items),
                         )
                     )
             elif mem.kind == sk.ParameterDeclarationStatement:
@@ -1353,7 +1545,8 @@ class Design:
         plain = self._plain(node)
         from_macro = False if plain else _has_macro_tokens(node, self._sm)
         module = node.type.valueText
-        hier = [i for i in node.instances if i.kind == sk.HierarchicalInstance]
+        # An instantiation whose instance has no name (text an edit glued together) is not an instance.
+        hier = [i for i in node.instances if i.kind == sk.HierarchicalInstance and i.decl is not None]
         try:
             sites: list[InstanceSite | None] = list(self._sites_of(node, plain))
         except AdapterError:
@@ -1502,6 +1695,97 @@ def _other_names(syn: Any) -> frozenset[str]:
 
     members(syn.members)
     return frozenset(names)
+
+
+def _merge_ranges(spans: Sequence[tuple[int, int]]) -> tuple[tuple[int, int], ...]:
+    """Inclusive integer ranges, sorted, with overlapping and adjacent ones joined."""
+    out: list[list[int]] = []
+    for lo, hi in sorted((min(a, b), max(a, b)) for a, b in spans):
+        if out and lo <= out[-1][1] + 1:
+            out[-1][1] = max(out[-1][1], hi)
+        else:
+            out.append([lo, hi])
+    return tuple((lo, hi) for lo, hi in out)
+
+
+def driven_bases(text: object) -> list[str]:
+    """Base names an assignment target or output connection expression drives.
+
+    Through selects and concatenations: `y[3:0]` is `y`, `{a, b[i]}` is `a` and `b`.
+    Names inside a select (`i` in `b[i]`) are read, not driven.
+    """
+    out: list[str] = []
+    depth = 0
+    prev = ""
+    for t in tokens(text):
+        if t == "[":
+            depth += 1
+        elif t == "]":
+            depth = max(depth - 1, 0)
+        elif (
+            depth == 0
+            and _IDENT_TOKEN.fullmatch(t)
+            and prev not in (".", "::")
+            and t not in out
+            and is_simple_identifier(t)
+        ):
+            out.append(t)
+        prev = t
+    return out
+
+
+def _disabled_names(syn: Any) -> dict[str, str]:
+    """Identifiers in text a conditional directive disables inside `syn`, with the directive."""
+    out: dict[str, str] = {}
+    ident = pyslang.parsing.TokenKind.Identifier
+
+    first = True
+
+    def scan(n: Any) -> None:
+        nonlocal first
+        if not isinstance(n, pyslang.parsing.Token):
+            return
+        if first:  # the trivia of the first token lies before the module
+            first = False
+            return
+        for t in n.trivia:
+            if t.kind != pyslang.parsing.TriviaKind.Directive:
+                continue
+            node = t.syntax()
+            disabled = getattr(node, "disabledTokens", None)
+            if node is None or not disabled:
+                continue
+            kind = _DIRECTIVES.get(str(node.kind).rsplit(".", 1)[-1], "a conditional directive")
+            expr = getattr(node, "expr", None)
+            label = kind if expr is None else f"{kind} {str(expr).strip()}"
+            for tok in disabled:
+                if tok.kind == ident:
+                    out.setdefault(tok.rawText, label)
+
+    syn.visit(scan)
+    return out
+
+
+def _generate_names(syn: Any) -> tuple[frozenset[str], frozenset[str]]:
+    """Names declared, and base names assigned, inside the generate constructs of a module."""
+    sk = pyslang.syntax.SyntaxKind
+    decls: set[str] = set()
+    assigned: set[str] = set()
+
+    def scan(n: Any) -> None:
+        if isinstance(n, pyslang.parsing.Token):
+            return
+        if n.kind in (sk.DataDeclaration, sk.NetDeclaration):
+            decls.update(d.name.valueText for d in _items(n.declarators))
+        elif n.kind == sk.ContinuousAssign:
+            for a in _items(n.assignments):
+                if a.kind == sk.AssignmentExpression:
+                    assigned.update(driven_bases(_clean_text(a.left)))
+
+    for mem in syn.members:
+        if mem.kind in (sk.IfGenerate, sk.LoopGenerate, sk.CaseGenerate, sk.GenerateRegion):
+            mem.visit(scan)
+    return frozenset(decls), frozenset(assigned)
 
 
 def _tokens_of(node: Any) -> list[Any]:
