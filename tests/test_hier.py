@@ -282,6 +282,8 @@ WIDTHS = (
     b"  logic [p_pkg::W-1:0] bus;\n  logic [1:0][7:0] grid;\n  logic [N-1:0] loc;\n  logic arr [2];\n  logic one;\n"
     b"  p_pkg::mode_t mode;\n  logic signed [7:0] sgn;\n  wire [2:0] wnet;\n  local_t lt;\n"
     b"  assign bus = '0;\n  assign grid = '0;\n  assign loc = '0;\n  assign one = clk;\n"
+    # every signal a test punches out has a driver: sign-off refuses an undriven one that is read
+    b"  assign mode = '0;\n  assign sgn = '0;\n  assign wnet = '0;\n  assign lt = '0;\n"
     b"endmodule\n"
     b"module mid(input logic clk);\n  bus_if u_if ();\n  leaf u_leaf (.clk(clk), .b(u_if));\nendmodule\n"
     b"module t(input logic clk);\n  mid u_mid (.clk(clk));\nendmodule\n"

@@ -46,7 +46,7 @@ __all__ = [
 # Warnings slang leaves off by default but that a port-level edit can trigger:
 # an undeclared name in a port connection becomes an implicit net, and a wrong
 # width is only truncated or extended. Deliberately not -Wextra / -Wconversion.
-_ALWAYS_WARN = ("ImplicitNet", "PortWidthTruncate", "PortWidthExpand", "WidthTruncate")
+_ALWAYS_WARN = ("ImplicitNet", "PortWidthTruncate", "PortWidthExpand", "WidthTruncate", "EmptyInputPortConn")
 _DIRECTIONS = {
     "In": "input",
     "Out": "output",
@@ -100,6 +100,12 @@ class Diag:
     offset: int | None
     in_macro: bool = False
     module: str | None = None  # the module the diagnostic is located in (set for dangling / unused entries)
+    # the name of the signal the entry is about, slang's first argument (set for dangling / unused entries); not part of equality
+    symbol: str | None = field(default=None, compare=False, repr=False)
+    # UndrivenPort entries: the port's external name and whether its module reads it; None / False when
+    # the symbol could not be resolved (not part of equality)
+    port: str | None = field(default=None, compare=False, repr=False)
+    read: bool = field(default=False, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -1001,8 +1007,57 @@ class Design:
             line = self._sm.getLineNumber(loc)
             offset = loc.offset
         code = _CODE_NAMES.get(diag.code, str(diag.code))
-        module = self._module_at(path, offset) if with_module else None
-        return Diag(severity, code, self._engine.formatMessage(diag), path, line, offset, in_macro, module)
+        body = self._body_of(getattr(diag, "symbol", None)) if with_module else None
+        module = self._module_at(path, offset) if with_module and body is None else None
+        port: str | None = None
+        read = False
+        args = list(diag.args) if with_module else []
+        name = args[0] if args and isinstance(args[0], str) else None  # the signal's name
+        if body is not None:
+            module = str(body.definition.name)
+            if code == "UndrivenPort" and name:
+                port, read = self._port_reads(body, str(name))
+        return Diag(
+            severity, code, self._engine.formatMessage(diag), path, line, offset, in_macro, module,
+            str(name) if name else None, port, read,
+        )
+
+    @staticmethod
+    def _body_of(sym: Any) -> Any:
+        """The instance body a diagnostic's symbol belongs to (an instance's own, else the one holding its scope), or None."""
+        if sym is None:
+            return None
+        try:
+            if sym.kind == pyslang.ast.SymbolKind.Instance:
+                body = sym.body
+            else:
+                scope = sym.parentScope
+                body = scope.containingInstance if scope is not None else None
+            return body if body is not None and body.definition is not None else None
+        except AttributeError:
+            return None
+
+    @staticmethod
+    def _port_reads(body: Any, signal: str) -> tuple[str | None, bool]:
+        """The external name of the port of `body` whose internal signal is `signal`, and whether the body reads it.
+
+        (None, True) when no port matches: an entry that cannot be identified is treated as read.
+        """
+        for port in body.portList:
+            if port.kind != pyslang.ast.SymbolKind.Port:
+                continue
+            inner = port.internalSymbol
+            if inner is None or inner.name != signal:
+                continue
+            hits: list[int] = []
+
+            def visit(node: Any) -> None:
+                if isinstance(node, pyslang.ast.NamedValueExpression) and node.symbol == inner:
+                    hits.append(1)
+
+            body.visit(visit)
+            return str(port.name), bool(hits)
+        return None, True
 
     def _unused_pass(self) -> list[Diag]:
         """Every diagnostic of the dangling and unused codes, from an analysis of its own.

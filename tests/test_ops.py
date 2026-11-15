@@ -472,6 +472,20 @@ def test_disconnect(vet):
     r = vet.finish()
     assert edits(r.diff) == ["-    .q   (y1)", "+    .q   ()"]
     assert r.changes == [Change("connection-changed", "top.u_mid.u_l1", "q", "y1", "")]
+    # The operation did what was asked, but `y1` of mid is still read by top and now
+    # has no driver: sign-off refuses that (tests/test_dangling_signoff.py).
+    assert r.unexpected_changes == [] and r.new_diagnostics == [] and r.failed_checks == []
+    assert [d.message for d in r.dangling] == ["undriven output port 'y1'"]
+    assert not r.ok
+
+
+def test_disconnect_of_an_output_nobody_reads_signs_off(vet):
+    vet.module("top").instance("u_spare").disconnect("q", was="spare_q")
+    r = vet.finish()
+    assert edits(r.diff) == [
+        "-  leaf u_spare (.clk(clk), .d(spare_d), .q(spare_q));",
+        "+  leaf u_spare (.clk(clk), .d(spare_d), .q());",
+    ]
     assert r.ok, r.report()
 
 
