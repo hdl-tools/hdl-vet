@@ -61,6 +61,7 @@ class Result:
     load_error: str | None = None
     failed_checks: list[str] = field(default_factory=list)
     added: dict[str, bytes] = field(default_factory=dict)  # output-relative POSIX path -> bytes
+    dangling: list[Diag] = field(default_factory=list)  # dangling entries the baseline did not have
 
     def _rel(self, path: Path | None) -> str:
         if path is None:
@@ -81,6 +82,9 @@ class Result:
         for d in self.new_diagnostics:
             where = self._rel(d.path) + (f":{d.line}" if d.line is not None else "")
             lines.append(f"  new diagnostic: {d.severity} {d.code} at {where}: {d.message}")
+        for d in self.dangling:
+            where = self._rel(d.path) + (f":{d.line}" if d.line is not None else "")
+            lines.append(f"  left dangling: {d.message} in module {d.module} ({where})")
         for c in self.unexpected_changes:
             name = f" {c.name}" if c.name else ""
             lines.append(f"  unexpected change: {c.kind} {c.path}{name}: {c.before!r} -> {c.after!r}")
@@ -152,6 +156,20 @@ def _grown(before: Sequence[Diag], after: Sequence[Diag]) -> list[Diag]:
         else:
             out.append(d)
     return out
+
+
+def dangling_set(design: Design, added: Collection[Path] = ()) -> list[Diag]:
+    """What counts as dangling in `design`: its driverless nets and variables, and its driverless
+    output ports that some instance connects to a non-empty expression or that their own module reads
+    (an output nobody reads, such as one every instance leaves open or one of a top module, is allowed;
+    an entry whose module or port cannot be identified counts). Entries inside the `added` files never count."""
+    raw = [d for d in design.dangling() if d.path not in added]
+    if not any(d.code == "UndrivenPort" for d in raw):
+        return raw
+    connected: set[tuple[str, str]] = set()
+    for snap in design.snapshot().values():
+        connected.update((snap.module, port) for port, text in snap.connections.items() if text)
+    return [d for d in raw if d.code != "UndrivenPort" or d.port is None or d.read or (d.module, d.port) in connected]
 
 
 def _has_header(data: bytes) -> bool:
@@ -446,8 +464,8 @@ class Session:
 
         The diagnostics are compared by location through the edits made since `cp`, as
         sign-off does against the baseline; warnings inside an added file never count.
-        The dangling and unused entries are compared as multisets of (code, module, file, message);
-        dangling entries inside an added file never count. `drove` are the (module, signal) pairs that
+        The dangling (see `dangling_set`) and unused entries are compared as multisets of
+        (code, module, file, message); dangling entries inside an added file never count. `drove` are the (module, signal) pairs that
         something removed used to drive: the bits driven afterwards must cover the bits driven before.
         """
         if not isinstance(cp, _Checkpoint):
@@ -458,7 +476,7 @@ class Session:
         maps = {p: stages[len(cp.maps.get(p, ())) :] for p, stages in self._maps.items()}
         new = new_diagnostics(before.diagnostics(), after.diagnostics(), {p: m for p, m in maps.items() if m})
         paths = {path for path, _ in self._added.values()}
-        dangling = [d for d in _grown(before.dangling(), after.dangling()) if d.path not in paths]
+        dangling = _grown(dangling_set(before, paths), dangling_set(after, paths))
         return Comparison(
             self._without_added_warnings(new),
             dangling,
@@ -641,10 +659,12 @@ class Session:
         changes = diff_snapshots(self._baseline.snapshot(), self._design.snapshot())
         unexpected, unmatched = check_changes(changes, self._expects)
         failed = self._run_checks(checks, self._design)
-        ok = not new and not unexpected and not unmatched and not new_files and not failed
+        added_paths = {path for path, _ in self._added.values()}
+        dangling = _grown(dangling_set(self._baseline, added_paths), dangling_set(self._design, added_paths))
+        ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling
         return Result(
             ok, new, changes, unexpected, unmatched, files, diff, self.layout_root, new_files,
-            failed_checks=failed, added=self.added,
+            failed_checks=failed, added=self.added, dangling=dangling,
         )
 
     def _run_checks(self, checks: Sequence[Callable[[Design], str | None]], design: Design) -> list[str]:
