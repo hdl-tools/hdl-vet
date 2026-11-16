@@ -1,0 +1,136 @@
+\documentclass[11pt,a4paper,oneside]{report}
+
+% Only packages that TeX Live (CI) and MiKTeX both ship. tests/test_manual.py checks the list.
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{textcomp}
+\usepackage{microtype}
+\DisableLigatures[-]{encoding = T1, family = tt*}
+\usepackage[a4paper,margin=25mm]{geometry}
+\usepackage{parskip}
+\usepackage{xcolor}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{fancyhdr}
+\usepackage{upquote}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\input{version}
+
+\setlist{itemsep=2pt,topsep=4pt}
+\setlist[description]{font=\bfseries,leftmargin=1.5em,labelindent=0pt}
+\emergencystretch=3em
+\raggedright
+\setcounter{tocdepth}{1}
+\setcounter{secnumdepth}{2}
+\raggedbottom
+
+\hypersetup{pdftitle={hdl-vet user manual},pdfauthor={hdl-vet}}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small hdl-vet \hdlvetversion}
+\fancyhead[R]{\small\nouppercase{\leftmark}}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.3pt}
+\fancypagestyle{plain}{\fancyhf{}\fancyfoot[C]{\small\thepage}\renewcommand{\headrulewidth}{0pt}}
+
+% Listings: every example of the manual is a file under examples/, shown with \lstinputlisting.
+\definecolor{ruleblue}{RGB}{70,90,140}
+\definecolor{notegray}{RGB}{110,110,110}
+\lstdefinelanguage{transcript}{morecomment=[l]{\$\ }}
+\lstdefinestyle{base}{%
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  breakatwhitespace=true,
+  postbreak=\mbox{\textcolor{notegray}{\(\hookrightarrow\)}\space},
+  keepspaces=true,
+  columns=fullflexible,
+  upquote=true,
+  showstringspaces=false,
+  frame=leftline,
+  framerule=1.2pt,
+  rulecolor=\color{ruleblue},
+  xleftmargin=1.2em,
+  xrightmargin=0pt,
+  aboveskip=0.8em,
+  belowskip=0.8em,
+  extendedchars=false}
+\lstdefinestyle{script}{style=base,language=Python,keywordstyle=\bfseries,commentstyle=\color{notegray}\itshape}
+\lstdefinestyle{console}{style=base,language=transcript,commentstyle=\bfseries}
+\lstdefinestyle{source}{style=base,commentstyle=\color{notegray}\itshape,morecomment=[l]{//}}
+\lstset{style=base}
+% The file name stands above each listing and stays with it.
+\let\lstinputlistingorig\lstinputlisting
+\renewcommand{\lstinputlisting}[2][]{%
+  \par
+  \ifdim\pagegoal=\maxdimen\else\ifdim\dimexpr\pagegoal-\pagetotal\relax<7\baselineskip\newpage\fi\fi
+  \addvspace{0.9em}\noindent
+  {\footnotesize\bfseries\ttfamily\detokenize{#2}}\par\nobreak\vskip0.2em
+  \lstinputlistingorig[#1,aboveskip=0pt]{#2}}
+\captionsetup{font=small,labelfont=bf}
+
+% Names of commands, options and code in running text.
+\newcommand{\cmd}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\opt}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\file}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\term}[1]{\emph{#1}}
+\newcommand{\apiname}[1]{\texttt{\detokenize{#1}}}
+
+% The scripting API: api.tex has one \apisig{Class.name}{signature} for every public name.
+% \sig{Class.name} prints the name and its signature; a property prints without a parameter list.
+\newcommand{\apisig}[2]{\expandafter\def\csname apisig@\detokenize{#1}\endcsname{\detokenize{#2}}}
+\newcommand{\sig}[1]{%
+  \ifcsname apisig@\detokenize{#1}\endcsname
+    \begingroup
+    \edef\sigtext{\csname apisig@\detokenize{#1}\endcsname}%
+    \edef\sigprop{\detokenize{property}}%
+    \texttt{\detokenize{#1}}%
+    \ifx\sigtext\sigprop\else\texttt{\sigtext}\fi
+    \endgroup
+  \else
+    \PackageError{hdl-vet}{Unknown API name #1}{Run the manual test with HDL_VET_MANUAL_UPDATE=1.}%
+  \fi}
+\input{api}
+
+% One reference entry: the name and signature, then labelled points.
+\definecolor{headbg}{RGB}{226,231,244}
+\makeatletter
+\newenvironment{entry}[1]{%
+  \par\addvspace{1.8ex}\noindent
+  \colorbox{headbg}{\begin{minipage}{\dimexpr\linewidth-2\fboxsep\relax}\raggedright\bfseries #1\end{minipage}}%
+  \par\nobreak\vskip0.4ex
+  \@beginparpenalty=10000
+  \begin{description}[leftmargin=2.2em,labelindent=0.4em,itemsep=1pt,topsep=2pt]}%
+  {\end{description}}
+\makeatother
+
+\title{hdl-vet\\[0.4em]\large User manual}
+\author{Version \hdlvetversion}
+\date{}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+
+\input{chapters/intro}
+\input{chapters/install}
+\input{chapters/first}
+\input{chapters/scripts}
+\input{chapters/operations}
+\input{chapters/signoff}
+\input{chapters/cli}
+\input{chapters/project}
+\input{chapters/session}
+\input{chapters/python}
+\input{chapters/limits}
+
+\end{document}

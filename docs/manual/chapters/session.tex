@@ -1,0 +1,85 @@
+\chapter{Saving and resuming a session}
+\label{ch:session}
+
+On a big design, loading takes time, and you may want to try a new script again and
+again after the same first two. A \term{session} is the state of a run: the text of every
+file with the edits so far, the expectations and checks of the operations, the log, the
+notes, the added files and the scripts that ran. You can save it and continue later,
+without the input tree and without running the first scripts again.
+
+\section{Saving}
+
+\opt{--save} \code{FILE} writes the session to a zip archive after all scripts have run. The
+archive holds plain data, and nothing in it is code: loading it never runs anything.
+You can open it with any zip tool. It has \file{session.json} (the index),
+\file{original/} (every source file as it was loaded), \file{current/} (the files that
+differ) and \file{added/} (the files that scripts added). The same state gives the same
+bytes. An existing archive is replaced.
+
+\begin{itemize}
+\item Without \opt{-o}, hdl-vet saves, prints \code{saved FILE} and the summary, and then
+  one line, \code{sign-off so far: ok} or \code{sign-off so far: FAILED}. After
+  \code{FAILED} the report follows on the error output. The exit status is 0 in both
+  cases: saving a state that does not pass is not an error. The state is saved as it is.
+\item With \opt{-o} or \opt{--dry-run} too, the archive is written once every script has
+  run, before the sign-off. The run then goes on as usual: it can still exit with
+  status 1, and the archive exists either way. The line \code{sign-off so far} is not
+  printed.
+\item A script that fails writes no archive.
+\item hdl-vet refuses a \opt{--save} file that lies inside the input tree or inside the
+  \opt{-o} folder, or that is a script, the project file or a file list that the design
+  reads: the top-level one, or one that it reads with \code{-f} or \code{-F}, wherever
+  that list lies. A resumed session refuses the same file lists.
+  The scripts are then not run: \code{apply} is not called. The code at the top level of
+  every script has already run by then, because hdl-vet reads each script before it
+  checks \opt{--save}.
+\end{itemize}
+
+\section{Resuming}
+
+\opt{--resume} \code{FILE} continues from a saved session instead of reading a file list. Do
+not give \opt{-f}, \opt{--top} or \opt{--base}: the session has them, and hdl-vet refuses
+them. You add scripts with \opt{-s}, and you may save again with \opt{--save}; that
+replaces the old archive when it names the same file.
+
+\begin{itemize}
+\item A script that the session has applied already (same name, same content) is
+  refused.
+\item The summary counts only the operations since the resume, and only the notes since
+  the resume are printed.
+\item The sign-off covers every script, the old ones and the new. The header line and the
+  manifest list all scripts, the saved ones first. If you save the state and resume it
+  with one more script, the output tree is byte for byte the tree of one run of all the
+  scripts.
+\item The session reports and lays out files exactly as the first run did. It needs the
+  same folders: it records where the input tree was.
+\end{itemize}
+
+With a project file, the project's scripts are compared with the saved list from the
+start, by name and content. If the project's script number $n$ is not the saved script
+number $n$, hdl-vet stops and says that the project has changed since the save.
+\opt{--no-project} resumes regardless. Project scripts that the session does not have
+yet run first, then the scripts of \opt{-s}.
+
+\lstinputlisting[style=console]{examples/console/session.txt}
+
+\section{What is and is not detected}
+
+A saved session is used as it is. hdl-vet does not check whether the file list, the
+sources or the scripts changed after the save. In the transcript, the command \cmd{cp}
+puts a regenerated \file{soc_top.sv} into the design after the save. The resume does not
+notice. It continues from the text that it saved, so the output has no \code{busy_o}.
+If your generator ran again, start from the beginning.
+
+What hdl-vet does detect:
+
+\begin{itemize}
+\item A script that has been applied already (above).
+\item An archive that is not a session archive, is damaged, or has another format
+  version. The message names the file.
+\item A project whose scripts differ from the saved ones (above).
+\item \opt{-f}, \opt{--top} or \opt{--base} together with \opt{--resume}.
+\end{itemize}
+
+A scope or a group that is open cannot be saved (chapter~\ref{ch:scripts}). Nothing about
+scopes is kept in a session.

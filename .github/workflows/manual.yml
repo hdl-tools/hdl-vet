@@ -1,0 +1,55 @@
+name: manual
+
+on:
+  pull_request:
+    paths:
+      - "docs/manual/**"
+      - ".github/workflows/manual.yml"
+  push:
+    branches: [main]
+    paths:
+      - "docs/manual/**"
+      - ".github/workflows/manual.yml"
+  workflow_dispatch:
+  # The release workflow calls this one to build the PDF it publishes.
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: manual-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pdf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install TeX Live
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            latexmk \
+            lmodern \
+            texlive-latex-base \
+            texlive-latex-recommended \
+            texlive-latex-extra \
+            texlive-fonts-recommended
+      - name: Build the PDF
+        working-directory: docs/manual
+        run: latexmk -pdf -interaction=nonstopmode -halt-on-error hdl-vet.tex
+      - name: Check the log for broken references
+        working-directory: docs/manual
+        run: |
+          if grep -E "undefined references|multiply[ -]defined|Reference .* undefined|Label .* multiply defined" hdl-vet.log; then
+            echo "The log reports an undefined or multiply defined reference." >&2
+            exit 1
+          fi
+      - name: Upload the PDF
+        uses: actions/upload-artifact@v4
+        with:
+          name: hdl-vet-manual
+          path: docs/manual/hdl-vet.pdf
+          if-no-files-found: error

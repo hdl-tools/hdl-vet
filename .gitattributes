@@ -1,0 +1,4 @@
+# A script's hash is printed into hdl-vet's output, so the manual's examples must have
+# the same bytes on every machine.
+docs/manual/examples/** text eol=lf
+*.tex text eol=lf

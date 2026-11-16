@@ -1,0 +1,129 @@
+\chapter{Introduction}
+\label{ch:intro}
+
+\section{What hdl-vet is for}
+
+A generator writes your SystemVerilog. You need a few changes in its output:
+a new port on the top module, a tie-off that is no longer a constant, a
+technology cell in place of a generic module. If you edit the generated files
+by hand, you lose the edits the next time the generator runs.
+
+hdl-vet keeps the edits in \term{scripts}. A script is a short Python file. When the
+generator runs again, you run the scripts again, and you get the same edits on
+the new files. Each edit is checked. If the result is not what the script
+asked for, hdl-vet writes nothing.
+
+hdl-vet uses \texttt{pyslang}, the Python binding of the slang compiler, to
+understand the design: its modules, instances, ports, parameters and
+connections. It makes each edit as a replacement of a range of bytes in the
+source text. After the edits, it loads the edited design again and compares it
+with the design you started from. This last step is the \term{sign-off}.
+
+\section{The words used in this manual}
+
+Each word has one meaning in this manual.
+
+\begin{description}
+\item[input tree] The folder that holds the design as the generator wrote it. It is
+  the deepest folder that contains every source file, every include folder and the
+  \emph{base} of the file list (the folder that relative file names in the file list start
+  from; chapter~\ref{ch:first}). hdl-vet never changes the input tree. The file list
+  itself may lie outside the input tree.
+\item[output tree] A new folder that hdl-vet writes. It has the same layout as the
+  input tree. It holds the files with your edits, and the files without edits as
+  exact copies. A file list that lies outside the input tree is written at the top of
+  the output tree.
+\item[file and path] A \emph{file} is a file on disk. A \emph{path} is a place in the
+  design: a chain of instance names that starts with the top module, for example
+  \code{soc_top.u_periph.u_timer0}. This manual uses \emph{file} for the first and
+  \emph{path} only for the second.
+\item[script] A Python file that defines the function \code{apply(vet)}. It names the
+  edits you want.
+\item[operation] One edit that hdl-vet knows, for example \apiname{Module.add_port}
+  or \apiname{Instance.connect}. A script is a list of calls to operations.
+\item[applied] An operation is \term{applied} when it changes the text.
+\item[skipped] An operation is \term{skipped} when the design already shows the
+  result it asks for. A skipped operation changes nothing. This is why you can
+  run a script a second time.
+\item[drift] The design is in a state that the operation does not expect: it
+  is neither the state before the edit nor the state after it. The operation
+  stops with an error. Chapter~\ref{ch:scripts} explains how \code{was=} detects drift.
+\item[queued] An operation does not change the text at once. It records the edit in a
+  \term{queue}. hdl-vet applies the queue to the text when it next loads the design.
+\item[baseline] The design as the compiler first loaded it, before any edit. The
+  sign-off compares the final design with the baseline.
+\item[elaborated, copy] The compiler builds the design from the top module
+  downwards. A module is \term{elaborated} once for each place where it is
+  instantiated, and each of these is a \term{copy} of the module. \code{timer} is
+  instantiated twice in the example design, so it has two copies. A module that
+  nothing instantiates below the top module is not elaborated.
+\item[session] The state of a run: the text of every file with the edits so far, the
+  queue, the expectations, the checks, the log, the notes, the added files and the
+  scripts that ran. You can save a session and continue it later
+  (chapter~\ref{ch:session}).
+\item[checked operation] An operation that tries its edit on the design before it
+  returns, and is refused if the result is wrong (chapter~\ref{ch:scripts}).
+\item[expectation] A statement that a structural change must happen
+  (\code{expect}) or may happen (\code{permit}) during the run. Operations
+  register their expectations themselves. You write one by hand only when you
+  edit the text yourself.
+\item[sign-off] The final check of a run. hdl-vet loads the edited design and
+  compares it with the baseline. If anything is wrong, it writes no output tree.
+  Chapter~\ref{ch:signoff} lists everything that it checks.
+\end{description}
+
+\section{What you can rely on}
+
+\begin{itemize}
+\item The input tree is never changed.
+\item The output tree is a copy of the input tree with your edits.
+\item Text that no operation edits stays byte-identical. hdl-vet does not
+  reformat anything. An operation inserts new text with the line ending of the
+  file it edits.
+\item Every file that changes gets one extra comment line,
+  \code{// Modified by hdl-vet; scripts: ...}, with the names and the hashes
+  of the scripts that ran.
+\item The sign-off decides whether the output tree is written. If it fails,
+  the exit status is 1 and no output tree is written.
+\item The same input and the same scripts give the same output, byte for byte.
+\end{itemize}
+
+\section{What hdl-vet does not do}
+
+\begin{itemize}
+\item It does not check what your logic does. The sign-off compares the
+  structure of the design (instances, ports, parameters, connections) and the
+  diagnostics of the compiler. It does not simulate. A change of logic that
+  you make with \apiname{Vet.splice} passes the sign-off unless you declare it.
+  Chapter~\ref{ch:limits} gives an example.
+\item It does not edit instances in generate blocks, instance arrays, or
+  instances that come from a macro.
+\item It sees one configuration of the design: the defines of your file list.
+\item It does not write the design from nothing. It edits what a generator
+  wrote.
+\end{itemize}
+
+Chapter~\ref{ch:limits} collects what is missing and what is known to be wrong.
+No other chapter hints at the future.
+
+\section{How to read this manual}
+
+Chapter~\ref{ch:first} takes you through a first project, from start to end.
+Read it first. Chapters~\ref{ch:scripts} to~\ref{ch:signoff} explain scripts,
+operations and the sign-off. Chapters~\ref{ch:cli} to~\ref{ch:session} describe
+the command line, the project file and saved sessions. Chapter~\ref{ch:python}
+lists the functions you use when you call hdl-vet from your own Python code.
+
+Every example in this manual is a file, and a test runs it. There are two kinds.
+A \term{script} is shown with its file name. A \term{transcript} shows commands
+that you type, and what they print. In a transcript, a line that starts with
+\texttt{\$ } is a command. The lines below it are its output. A last line
+\code{[exit status 2]} shows a non-zero exit status.
+A transcript runs in a copy of the folder \file{examples}, which holds the
+example design. Where a file name of your own machine would appear, the transcript
+shows \code{<examples>}. The program prints its own version as
+\code{<version>}.
+
+The example design is small: \code{soc_top} instantiates a reset synchroniser
+\code{rst_sync} and a block \code{periph_wrap}, which instantiates the counter
+\code{timer} twice. Chapter~\ref{ch:first} shows its files.

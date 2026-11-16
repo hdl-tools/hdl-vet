@@ -1,0 +1,41 @@
+% Generated. Checked by tests/test_manual.py against hdl_vet.ops; rewrite it with HDL_VET_MANUAL_UPDATE=1.
+\apisig{Instance.allow_changes_below}{()}
+\apisig{Instance.connect}{(port, expr, was=None)}
+\apisig{Instance.disconnect}{(port, was=None)}
+\apisig{Instance.info}{property}
+\apisig{Instance.name}{property}
+\apisig{Instance.paths}{property}
+\apisig{Instance.replace_module}{(module, *, ports=None, params=None, connect=None, set_params=None, drop_ports=(), drop_params=(), unconnected=(), was=None)}
+\apisig{Instance.set_param}{(name, value, was=None)}
+\apisig{Instance.target}{property}
+\apisig{Module.add_assign}{(target, expr)}
+\apisig{Module.add_param}{(name, default, type="int")}
+\apisig{Module.add_port}{(name, direction, type="logic", width=None)}
+\apisig{Module.add_wire}{(name, width=None, type="logic")}
+\apisig{Module.info}{property}
+\apisig{Module.instance}{(name)}
+\apisig{Module.instances}{(module=None, name=None, *, count)}
+\apisig{Module.name}{property}
+\apisig{Module.paths}{property}
+\apisig{Module.remove_assign}{(target, was=None)}
+\apisig{Module.remove_instance}{(name, module=None)}
+\apisig{Module.remove_param}{(name)}
+\apisig{Module.remove_port}{(name)}
+\apisig{Module.remove_wire}{(name)}
+\apisig{Vet.add_file}{(path)}
+\apisig{Vet.check}{(scripts=())}
+\apisig{Vet.design}{property}
+\apisig{Vet.expect}{(kind, path="*", name="*", *, exact=False)}
+\apisig{Vet.finish}{(scripts=())}
+\apisig{Vet.group}{()}
+\apisig{Vet.module}{(name, instances=None)}
+\apisig{Vet.module_paths}{(module)}
+\apisig{Vet.open_block}{()}
+\apisig{Vet.permit}{(kind, path="*", name="*", *, exact=False)}
+\apisig{Vet.propagate_param}{(name, to, *, default=None)}
+\apisig{Vet.punch_port}{(name, direction, to, *, signal=None, width=None, type=None, all_instances=False)}
+\apisig{Vet.restore}{(path)}
+\apisig{Vet.save}{(path, scripts=())}
+\apisig{Vet.scope}{(module)}
+\apisig{Vet.splice}{(path, start, end, text, old=None)}
+\apisig{Vet.text}{(path)}

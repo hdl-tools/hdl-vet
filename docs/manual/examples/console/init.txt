@@ -1,0 +1,47 @@
+$ vet init myproj -f design/design.f --top soc_top
+created myproj
+wrote hdl-vet.toml
+wrote scripts/01_example.py
+wrote cells/README.md
+wrote README.md
+wrote .gitignore
+$ ls myproj
+.gitignore
+README.md
+cells/
+hdl-vet.toml
+scripts/
+$ cat myproj/hdl-vet.toml
+# hdl-vet project. Paths are relative to this file.
+[design]
+filelist = "../design/design.f"
+top = "soc_top"
+
+[apply]
+scripts = ["scripts/01_example.py"]
+output = "out"
+$ cat myproj/scripts/01_example.py
+"""Starter edit script. It changes nothing yet: put your edits in apply().
+
+Run `vet apply --dry-run` to see what a script does, `vet apply` to write the verified copy.
+"""
+
+
+def apply(vet):
+    top = vet.module("soc_top")  # the top-level module of the design
+
+    # "soc_top" instantiates:
+    #   "u_rst_sync": "rst_sync"
+    #   "u_periph": "periph_wrap"
+    #
+    # Examples; remove the leading `# ` of one to use it:
+    #   top.add_port("dft_en", "input")
+    #   top.add_wire("spare_wire", 4)
+    #   top.instance("u_rst_sync").connect("clk_i", "expression")
+    #   top.instance("u_rst_sync").set_param("PARAM", 8)
+    #   top.instance("u_rst_sync").replace_module("other_module")
+    #   top.remove_instance("u_rst_sync")
+    #
+    # A file that is not part of the design is named relative to this script, so that the script
+    # works from any directory (put `from pathlib import Path` at the top):
+    #   vet.add_file(Path(__file__).parent.parent / "cells" / "NAME.sv")

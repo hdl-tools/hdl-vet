@@ -1,0 +1,56 @@
+$ vet init myproj -f design/design.f --top soc_top
+created myproj
+wrote hdl-vet.toml
+wrote scripts/01_example.py
+wrote cells/README.md
+wrote README.md
+wrote .gitignore
+$ cp scripts/first.py myproj/scripts/01_example.py
+$ cd myproj
+$ vet apply
+project: <examples>/myproj/hdl-vet.toml
+wrote <examples>/myproj/out
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ cd ..
+$ ls myproj/out
+design.f
+hdl-vet.json
+rtl/
+$ ls myproj/out/rtl
+periph_wrap.sv
+rst_sync.sv
+soc_top.sv
+timer.sv
+$ cat myproj/out/design.f
+rtl/rst_sync.sv
+rtl/timer.sv
+rtl/periph_wrap.sv
+rtl/soc_top.sv
+$ cat myproj/out/hdl-vet.json
+{
+  "added": {},
+  "changed": {
+    "rtl/soc_top.sv": {
+      "after": "f67b57e1fba50929d69bf2242ec0467a920425d8d25391cadf6c049677e2a9d1",
+      "before": "7084fbd053841b11ec50fb6de4beecd141312c30e39526a05b9e2c78ead7ac83"
+    }
+  },
+  "filelist": "design.f",
+  "files": [
+    "design.f",
+    "rtl/periph_wrap.sv",
+    "rtl/rst_sync.sv",
+    "rtl/soc_top.sv",
+    "rtl/timer.sv"
+  ],
+  "scripts": [
+    {
+      "name": "01_example.py",
+      "sha256": "1ed8008abb9a42f8fc93befc4ef2c67230c250e8939e8babcc783355823320b7"
+    }
+  ],
+  "tool": "hdl-vet",
+  "top": "soc_top",
+  "version": "<version>"
+}

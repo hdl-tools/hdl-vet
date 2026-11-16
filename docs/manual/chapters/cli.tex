@@ -1,0 +1,138 @@
+\chapter{The command line}
+\label{ch:cli}
+
+The program is \cmd{vet}. It has two commands, \cmd{vet apply} and \cmd{vet init}, and
+one option for itself, \opt{--version}. \cmd{python -m hdl_vet} is the same program.
+The options \code{-h} and \code{--help} of \cmd{vet}, \cmd{vet apply} and \cmd{vet init}
+print a short usage text. This chapter describes every option in full.
+
+The file list, the base and the input tree are explained in chapter~\ref{ch:first}.
+
+\section{vet apply}
+
+\cmd{vet apply} runs scripts on a design. These are its options.
+
+\begin{description}
+\item[\opt{-f}, \opt{--filelist} FILE] The top-level file list. It is required,
+  unless you give \opt{--resume} or the project file names one. It replaces the
+  project's file list and its base.
+\item[\opt{-o}, \opt{--outdir} DIR] The folder for the output tree. DIR must be a
+  new folder or an empty one, unless you give \opt{--force}. It must not lie inside
+  the input tree or contain it, and it must not contain a script that runs or the
+  project file.
+\item[\opt{-s}, \opt{--script} FILE] A script. You may give it many times. The scripts run
+  in the order given, after the scripts of the project file. A file named twice is an
+  error.
+\item[\opt{--top} MODULE] The top module. It replaces the project's. Always name
+  it (chapter~\ref{ch:signoff}).
+\item[\opt{--base} DIR] The base of the file list (chapter~\ref{ch:first}). It replaces
+  the project's.
+\item[\opt{--dry-run}] Print the diff of the changed files and write no output tree.
+  The sign-off runs. An archive named by \opt{--save} is still written.
+\item[\opt{--force}] Replace an output folder that exists (below).
+\item[\opt{--save} FILE] After the scripts have run, save the session to a zip archive
+  (chapter~\ref{ch:session}).
+\item[\opt{--resume} FILE] Continue from a saved session instead of reading a file
+  list. Do not give \opt{-f}, \opt{--top} or \opt{--base} with it.
+\item[\opt{--project} FILE] Use this project file instead of \file{hdl-vet.toml} in
+  the current folder (chapter~\ref{ch:project}).
+\item[\opt{--no-project}] Ignore the project file. It cannot be combined with
+  \opt{--project}.
+\end{description}
+
+You need at least one of \opt{-o}, \opt{--save} and \opt{--dry-run}. The exception
+is a project file that names an output folder (chapter~\ref{ch:project}). All file and folder names
+on the command line start from the current folder.
+
+\subsection*{What it prints}
+
+\begin{itemize}
+\item With an output tree: the line \code{wrote DIR}; the line
+  \code{saved FILE} if you saved; \code{N applied, M skipped}; one line
+  \code{changed PATH} for each changed file, with the name relative to the tree;
+  \code{added NAME} for each file that a script added; then \code{note:} lines.
+\item With \opt{--dry-run}: the diff on the standard output, and everything else on
+  the error output.
+\item If a project file is used, the first line, on the error output, is
+  \code{project: PATH}.
+\item On failure, the message goes to the error output.
+\end{itemize}
+
+\subsection*{Exit statuses}
+
+This table is the one place that defines the exit statuses.
+
+\begin{center}
+\begin{tabular}{@{}lp{0.75\textwidth}@{}}
+\toprule
+Status & Meaning \\
+\midrule
+0 & The run worked. Without \opt{--dry-run}, the output tree is written. With \opt{--save}
+  and no output, the run ends with 0 also when the sign-off so far has failed
+  (chapter~\ref{ch:session}). \\
+1 & The sign-off failed (chapter~\ref{ch:signoff}). The report is on the error output, and
+  no output tree is written. This holds with \opt{--dry-run} too. \\
+2 & The request cannot be carried out: a wrong command line, a file that cannot be read,
+  a design that cannot be loaded at the start, a script that fails, a refusal of an
+  operation, or drift. Nothing is written. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Messages of the command line have two forms. If the command line itself is wrong in a
+way that the argument parser sees (an unknown option, a missing value, no command at
+all), \cmd{vet} prints a usage line and then \code{vet: error: ...}, and exits with
+status 2. Every other error prints one line, \code{vet: ...}, and exits with status 2.
+
+\lstinputlisting[style=console]{examples/console/cli.txt}
+
+In the transcript, look at these things.
+\begin{itemize}
+\item \cmd{vet --version} prints the program name and the version (here \code{<version>}).
+\item The file list \file{flow.f} is outside the folder of the sources, so the
+  command gives \opt{--base} \code{design}. The output tree has the file list at its top.
+\item The second run is refused, because \file{out/flow} exists. The message names
+  \opt{--force}. The third run uses it.
+\item Five errors, each with exit status 2: no file list; no output; a file list
+  that is not there; a top module that is not in the design; a script that cannot
+  be read.
+\end{itemize}
+
+\subsection*{What replacing an output folder means}
+
+\opt{--force} replaces the output folder. The new tree is built next to it and
+renamed into place, so a failed run never leaves half a tree. This is the one place that
+describes the limits.
+
+\begin{itemize}
+\item With \opt{-o}, \opt{--force} replaces \emph{any} folder that you name,
+  also one that holds files of yours. Check the name.
+\item It never replaces a folder inside the input tree, the input tree itself, or a
+  folder that holds the input tree. Nor does it replace a folder that holds a script
+  of the run or the project file.
+\item If the output folder comes from the project file, \opt{--force} replaces it only
+  when it is empty, or when it is the output of an earlier run and holds nothing else:
+  \file{hdl-vet.json} must be a manifest of hdl-vet with a list of files, and every
+  file in the folder must be that manifest or be in the list. Otherwise hdl-vet
+  refuses, and the message names a file that it cannot account for. Output trees from
+  before the list existed have no such list, so \opt{--force} refuses them.
+\end{itemize}
+
+\section{vet init}
+
+\cmd{vet init DIR -f FILELIST} writes a starter project into \file{DIR}
+(chapter~\ref{ch:first} and chapter~\ref{ch:project}).
+
+\begin{description}
+\item[\opt{-f}, \opt{--filelist} FILE] The file list of the design. It is required.
+\item[\opt{--top} MODULE] The top module. Without it, \cmd{vet init} takes the only
+  top-level module of the design. If there are several, it lists them (at most ten,
+  the biggest hierarchy first) and asks for \opt{--top}.
+\item[\opt{--base} DIR] The base of the file list.
+\end{description}
+
+\cmd{vet init} loads the design first, so it refuses a design that has errors. It
+refuses a \file{DIR} that exists and is not empty, and a \file{DIR} inside the input
+tree, because the next run of the generator would delete it. Nothing is written when
+it refuses. It prints \code{created DIR}, exactly as you typed it, and one line
+\code{wrote PATH} for each file.

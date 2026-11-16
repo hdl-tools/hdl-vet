@@ -1,0 +1,40 @@
+\chapter{Installing}
+\label{ch:install}
+
+hdl-vet needs Python 3.11 or newer. It needs one other package, \code{pyslang}
+version 12.1.0. The installer fetches it for you.
+
+hdl-vet is not on a package index yet, so you install it from a checkout of its
+repository or from a wheel file. Use a virtual environment so that
+\code{pyslang} does not mix with other packages.
+
+\section{From a checkout}
+
+\begin{enumerate}
+\item Create and enter a virtual environment:
+  \cmd{python -m venv .venv}, then activate it as your shell requires.
+\item Go to the folder of the checkout, the one that holds \file{pyproject.toml}.
+\item Install it: \cmd{pip install .}
+\end{enumerate}
+
+For work on hdl-vet itself, \cmd{pip install -e .} makes an editable install.
+
+\section{From a wheel}
+
+A wheel is one file with the extension \file{.whl}. If you have one,
+install it with \cmd{pip install FILE.whl}. To make a wheel from a checkout,
+use any build tool that reads \file{pyproject.toml}, for example
+\cmd{uv build --wheel}. The wheel appears in the folder \file{dist}.
+
+\section{Check the installation}
+
+Both of these print the program name and the version, for example
+\code{hdl-vet 1.2.3}, and nothing else:
+
+\begin{itemize}
+\item \cmd{vet --version}
+\item \cmd{python -m hdl_vet --version}
+\end{itemize}
+
+The command \cmd{vet} and \cmd{python -m hdl_vet} are the same program. The
+transcripts in this manual use \cmd{vet}.

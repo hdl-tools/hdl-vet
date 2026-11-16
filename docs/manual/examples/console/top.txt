@@ -1,0 +1,9 @@
+$ vet apply --no-project -f design/design.f -s scripts/swap_cell.py --dry-run
+hdl-vet sign-off: FAILED
+  unexpected change: instance-added rst_sync: None -> 'rst_sync'
+[exit status 1]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/swap_cell.py -o out/swap
+wrote out/swap
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+added hdl_vet_added/tech_rst_sync.sv

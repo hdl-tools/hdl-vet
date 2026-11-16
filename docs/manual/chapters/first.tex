@@ -1,0 +1,212 @@
+\chapter{A first project}
+\label{ch:first}
+
+This chapter takes you from an empty project to a verified output tree. It uses
+the example design that comes with the manual.
+
+\section{Before you start}
+
+You can run every command of this chapter yourself. Work in a copy of the example
+folder, because one step overwrites a file of the design. The example folder is
+\file{docs/manual/examples} in the repository. In a POSIX shell, copy it with
+\cmd{cp -r docs/manual/examples /tmp/vet-examples}, then \cmd{cd /tmp/vet-examples}.
+In PowerShell, use \texttt{Copy-Item -Recurse docs\textbackslash manual\textbackslash examples
+\$env:TEMP\textbackslash vet-examples}, then \texttt{cd \$env:TEMP\textbackslash vet-examples}.
+You need \cmd{vet} installed (chapter~\ref{ch:install}).
+
+The transcripts below are one session, shown in parts. A test replays each part in a
+fresh copy of the folder, so each part starts with the commands of the parts before it
+that it needs (\cmd{vet init}, \cmd{cp}, \cmd{cd}). If you follow along in one copy,
+skip the commands that you have already typed. Every part that enters the folder
+\file{myproj} leaves it again with \cmd{cd ..}, so you are back in the example folder.
+
+\section{The example design}
+
+The design has four source files and a file list. The file list names the
+sources, one per line.
+
+\lstinputlisting[style=source]{examples/design/design.f}
+
+The top module is \code{soc_top}. It has a reset synchroniser and a peripheral
+block. The reset synchroniser is a hand-written module.
+
+\lstinputlisting[style=source]{examples/design/rtl/rst_sync.sv}
+
+The peripheral block is generated. It instantiates the counter \code{timer}
+twice. \code{timer} is a hand-written module too.
+
+\lstinputlisting[style=source]{examples/design/rtl/periph_wrap.sv}
+\lstinputlisting[style=source]{examples/design/rtl/timer.sv}
+
+The top module is generated. It ties the input \code{test_i} of the
+synchroniser to the constant \code{1'b0}.
+
+\lstinputlisting[style=source]{examples/design/rtl/soc_top.sv}
+
+Suppose you want a new input port \code{test_en_i} on \code{soc_top}, and you
+want it to drive \code{test_i} of the synchroniser instead of the constant. This
+is the job of the first script.
+
+\section{The file list and the input tree}
+
+hdl-vet reads the design from a \emph{file list}, a text file of the kind that
+simulators read. It understands these elements:
+
+\begin{itemize}
+\item a source file, one per line;
+\item \code{+incdir+a+b} for include folders, and \code{+define+A=1+B} for defines;
+\item \code{-f FILE}, a nested list whose file names start from the base of the top-level
+  list, and \code{-F FILE}, a nested list whose file names start from its own folder;
+\item comments, from \code{//} to the end of the line, and lines that start with \texttt{\#};
+\item environment variables, as \texttt{\$VAR}, \texttt{\$\{VAR\}} or \texttt{\$(VAR)}.
+  A variable that is not set is an error.
+\end{itemize}
+
+Any other option is an error, so that nothing is dropped without notice.
+
+Relative file names in the file list start from the \term{base}. The base is the folder of
+the top-level file list, unless you give \opt{--base}. Use \opt{--base} when your tool
+flow writes file lists for the folder where the simulator runs.
+
+The \term{input tree} is the deepest folder that contains every source file, every
+include folder and the base. In the example it is the folder \file{design}. The output
+tree has the same layout. If the file list lies outside the input tree, hdl-vet writes
+it at the top of the output tree, and the tree is not made wider by it. A file list that
+sits far from its sources can still make the tree wider than you expect, when the base
+is far from the sources too. Then give \opt{--base} with the folder that the sources are
+relative to.
+
+\section{Make a project}
+
+A \term{project} is a folder with a project file, \file{hdl-vet.toml}, and your
+scripts. The project file names the design, the scripts and the output folder, so
+that you can run hdl-vet with no arguments. Chapter~\ref{ch:project} describes it
+in full. You make a project with \cmd{vet init}.
+
+\cmd{vet init} needs the file list (\opt{--filelist}, short \opt{-f}) and, if the
+design has more than one top-level module, the name of the top module
+(\opt{--top}). The example design has one, but we name it anyway. Always name the top
+module in your own work. Chapter~\ref{ch:signoff} shows why.
+
+\lstinputlisting[style=console]{examples/console/init.txt}
+
+Read the transcript from the top.
+
+\begin{itemize}
+\item \cmd{vet init} loads the design. If the design has errors, \cmd{vet init}
+  refuses. Otherwise it writes five files into the new folder \file{myproj}, and
+  prints one line for each:
+  the project file, a starter script, a \file{README.md}, a \file{.gitignore} and
+  a note in the folder \file{cells}, where you keep the Verilog files that your scripts
+  add (chapter~\ref{ch:operations}).
+\item The project file names the file list relative to itself:
+  \code{../design/design.f}.
+\item The starter script changes nothing. It names the top module, lists the
+  instances of the top module in comments, and shows operations that you can
+  copy. It is a valid script: if you run \cmd{vet apply --dry-run} right after
+  \cmd{vet init}, the answer is \code{0 applied, 0 skipped}.
+\end{itemize}
+
+\section{Write the first script}
+
+A script is a Python file with one function, \code{apply}. hdl-vet calls it with
+one argument, the \code{vet} object, which you use to find modules and to call
+operations (chapter~\ref{ch:scripts}). Here is the first script.
+
+\lstinputlisting[style=script]{examples/scripts/first.py}
+
+The script does three things.
+
+\begin{enumerate}
+\item \code{vet.module("soc_top")} finds the module \code{soc_top} and gives
+  you a handle for it.
+\item \code{top.add_port("test_en_i", "input")} adds an input port. The type
+  defaults to \code{logic}.
+\item \code{connect("test_i", "test_en_i", was="1'b0")} connects the port
+  \code{test_i} of the instance \code{u_rst_sync} to the new signal. The
+  argument \code{was} says what you expect to find there now. If the design shows
+  something else, for example after the generator changed, the operation stops
+  with an error and changes nothing. This protects you from editing a design
+  that is not the one you wrote the script for.
+\end{enumerate}
+
+In the next transcripts, the command \cmd{cp} puts this script in place of the starter
+script, \file{myproj/scripts/01_example.py}. In your own project you edit that file, or
+you add scripts to the list \code{scripts} in the project file.
+
+\section{Look before you write}
+
+The command \cmd{vet apply --dry-run} runs the scripts and the sign-off, and
+prints what would change, as a unified diff. It writes no output tree.
+
+\lstinputlisting[style=console]{examples/console/dry_run.txt}
+
+The first line of the output is \code{project: ...}. Whenever hdl-vet uses a project
+file, it says so first, so that you always know which project runs. The diff follows.
+The last line, \code{2 applied, 0 skipped}, says that two operations changed the text.
+
+Look at the diff. There is one line that you did not ask for. It is the header
+line, \code{// Modified by hdl-vet; scripts: ...}. hdl-vet puts it into every
+file that it changes, directly after the comment block at the top of the file. It
+names each script and the first 12 hexadecimal digits of its hash. Look
+also at the new port. It is not aligned with the other ports. hdl-vet never
+reformats existing text, and the text it inserts is plain.
+
+\section{Write the output tree}
+
+\cmd{vet apply} without \opt{--dry-run} writes the output tree to the folder that
+the project file names (\file{out}).
+
+\lstinputlisting[style=console]{examples/console/run.txt}
+
+The output is the folder, the counts, and one line for each changed file. The folder is
+shown with its full name, because it comes from the project file.
+
+If the output folder exists and is not empty, hdl-vet refuses to replace it,
+unless you give \opt{--force}. Chapter~\ref{ch:cli} has the details.
+
+\section{Look at the output tree}
+
+The output tree has the same layout as the input tree.
+
+\lstinputlisting[style=console]{examples/console/tree.txt}
+
+\begin{itemize}
+\item Files that no operation changed are exact copies.
+\item The file list is written again, in \file{design.f}. It has one source per
+  line. Nested lists are flattened into it, and it also carries the \code{+incdir+}
+  and \code{+define+} lines. Its file names are relative to itself.
+\item \file{hdl-vet.json} records what happened: the version, the top module,
+  the scripts with their hashes, and for every changed file the hash before and
+  after. \code{files} lists every file of the tree except \file{hdl-vet.json}.
+  \code{added} lists files that scripts brought in (chapter~\ref{ch:operations}).
+  There is no time stamp and no file name of your machine in it.
+\end{itemize}
+
+\section{Run it again on a regenerated design}
+
+Next week the generator runs again. It writes a new \file{soc_top.sv}. In the
+example, the new file has one more output, \code{busy_o}. You run the same
+script on the new files.
+
+\lstinputlisting[style=console]{examples/console/regenerated.txt}
+
+The second command in the transcript, \cmd{cp}, does the work of the generator: it copies
+the file \file{regenerated/rtl/soc_top.sv} over the design. This is why you work in a
+copy. The same script runs again and gives the same edits, now on the new file. The
+output tree has the new port \code{busy_o} and your new port \code{test_en_i}.
+
+Two more things in the transcript.
+
+\begin{itemize}
+\item The output tree is not a valid input. Its files carry the header line, and
+  hdl-vet refuses to read a file that carries it: \emph{the input must be an
+  unmodified tree}. Always start from the generator's files.
+\item The last command repeats the third command. The output folder
+  \file{out/second} exists, so hdl-vet stops. The message names the option
+  \opt{--force}, which replaces the folder.
+\end{itemize}
+
+The transcript uses \opt{--no-project}, which tells hdl-vet to ignore a project
+file. The example folder has none. It is better to be explicit when you write
+commands that other people run.

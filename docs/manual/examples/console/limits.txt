@@ -1,0 +1,12 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/logic_change.py -o out/logic
+wrote out/logic
+0 applied, 0 skipped
+changed rtl/timer.sv
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/partial.py -o out/partial
+wrote out/partial
+1 applied, 0 skipped
+changed rtl/periph_wrap.sv
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/cancel.py --dry-run
+hdl-vet sign-off: FAILED
+  failed check: add_wire soc_top tmp: declaration not found in the final design
+[exit status 1]

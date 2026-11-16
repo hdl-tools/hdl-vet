@@ -1,0 +1,32 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py --save work.session.zip
+saved work.session.zip
+2 applied, 0 skipped
+sign-off so far: ok
+$ ls
+cells/
+console/
+design/
+regenerated/
+scripts/
+work.session.zip
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/dangling.py --save bad.session.zip
+saved bad.session.zip
+1 applied, 0 skipped
+sign-off so far: FAILED
+hdl-vet sign-off: FAILED
+  left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:13)
+$ cp regenerated/rtl/soc_top.sv design/rtl/soc_top.sv
+$ vet apply --resume work.session.zip -s scripts/skipped.py -o out/resumed
+wrote out/resumed
+1 applied, 1 skipped
+changed rtl/soc_top.sv
+$ vet apply --resume work.session.zip -s scripts/first.py -o out/again
+vet: script first.py: already applied by the session saved in work.session.zip
+[exit status 2]
+$ vet apply --resume bad.session.zip -s scripts/skipped.py --dry-run
+hdl-vet sign-off: FAILED
+  left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:15)
+[exit status 1]
+$ vet apply --resume work.session.zip -f design/design.f -s scripts/skipped.py --dry-run
+vet: -f must not be given with --resume: the saved session has them
+[exit status 2]

@@ -1,0 +1,15 @@
+$ vet init myproj -f design/design.f --top soc_top
+created myproj
+wrote hdl-vet.toml
+wrote scripts/01_example.py
+wrote cells/README.md
+wrote README.md
+wrote .gitignore
+$ cp scripts/first.py myproj/scripts/01_example.py
+$ cd myproj
+$ vet apply
+project: <examples>/myproj/hdl-vet.toml
+wrote <examples>/myproj/out
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ cd ..

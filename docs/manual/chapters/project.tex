@@ -1,0 +1,96 @@
+\chapter{The project file}
+\label{ch:project}
+
+A project file names the design, the scripts and the output folder, so that you can
+run \cmd{vet apply} with no arguments. The file is called \file{hdl-vet.toml}. It is
+a TOML file. \cmd{vet init} writes one for you (chapter~\ref{ch:first}).
+
+\section{The keys}
+
+\begin{description}
+\item[\code{[design]} \code{filelist}] The top-level file list. It is required when
+  the project supplies the design.
+\item[\code{[design]} \code{top}] The top module. Optional, but name it
+  (chapter~\ref{ch:signoff}).
+\item[\code{[design]} \code{base}] The base of the file list, as \opt{--base}. It is
+  allowed only together with \code{filelist}.
+\item[\code{[apply]} \code{scripts}] A list of script files, in the order they
+  run. Optional.
+\item[\code{[apply]} \code{output}] The output folder. Optional.
+\end{description}
+
+File names in the project file are relative to the folder of the project file, and use
+\code{/}. An absolute name is taken as it is. Here is the file that \cmd{vet init} wrote in
+chapter~\ref{ch:first}:
+
+\begin{itemize}
+\item \code{filelist = "../design/design.f"}
+\item \code{top = "soc_top"}
+\item \code{scripts = ["scripts/01_example.py"]}
+\item \code{output = "out"}
+\end{itemize}
+
+hdl-vet reads the file strictly. An unknown table or key, a value of the wrong
+type, an empty string, a nested table, or text that is not TOML is an error. The
+error names the file and the key. Nothing is guessed. The file must be UTF-8.
+
+\section{Where it is looked for}
+
+\cmd{vet apply} uses \file{hdl-vet.toml} in the current folder, or the file that
+\opt{--project} names. It does not look in parent folders. \opt{--no-project} ignores
+the file. \opt{--project} and \opt{--no-project} together are an error, and so is an
+\opt{--project} file that does not exist, or a name that is a folder.
+
+Whenever a project file is used, the first line on the error output is
+\code{project: FILE}, with the full name. A project is never run unnoticed.
+
+\section{What the command line replaces}
+
+\begin{itemize}
+\item \opt{--top} replaces the project's \code{top}.
+\item \opt{-f} replaces the project's \code{filelist} and its \code{base} together,
+  because a base belongs to its file list. \opt{--base} replaces only the base.
+\item \opt{-s} adds scripts. The project's scripts run first, then those of the
+  command line. When you give \opt{-f} and the project has scripts, hdl-vet says so:
+  \code{note: the project's scripts run first: ...}.
+\item The project's \code{output} is used only when you give none of \opt{-o},
+  \opt{--save} and \opt{--dry-run}. \cmd{vet apply --save FILE} saves and writes no
+  tree, as without a project.
+\item With \opt{--resume}, the project's design is not used: the saved session has
+  its own. The project's scripts are compared with the scripts that the session
+  applied (chapter~\ref{ch:session}).
+\end{itemize}
+
+Everything else is as without a project. All checks of \opt{--save} and
+\opt{--resume} apply to the combined settings. The project file counts as a file that
+\opt{--save} must not replace. Paths on the command line are relative to the current
+folder, also when \opt{--project} names a file elsewhere. The \code{wrote} line shows
+an absolute name when the output folder comes from the project file. A folder that you give
+with \opt{-o} is shown as you typed it.
+
+\section{Safety}
+
+Writing an output tree replaces its folder. So the output folder, wherever it comes
+from, must not contain a script of the run or the project file, and a project's
+\code{output} must not be the project's folder or contain it. The rules for
+\opt{--force} on an output folder from the project file are in chapter~\ref{ch:cli}.
+
+\cmd{vet init} also writes a \file{.gitignore} with \code{/out/} and
+\code{*.session.zip}, a \file{README.md} with the commands, and a \file{cells}
+folder with a note about where to keep files for \apiname{Vet.add_file}.
+
+\lstinputlisting[style=console]{examples/console/project.txt}
+
+The transcript shows these steps.
+
+\begin{itemize}
+\item \cmd{vet init} twice. The second time, the folder is not empty, and hdl-vet refuses.
+\item A run in the project with an extra script. The script \file{skipped.py} runs
+  after \file{01_example.py}, and the header line lists both.
+\item \cmd{vet apply} writes \file{out}. The same command again is refused because
+  \file{out} exists. With \opt{--force}, it is replaced. This works because the old
+  \file{out} is an earlier output of hdl-vet with nothing else in it.
+\item \opt{-f} on the command line: hdl-vet prints the note about the project's scripts.
+\item \opt{--project} from another folder, then the conflicting options, then a run
+  without a project and without a file list.
+\end{itemize}
