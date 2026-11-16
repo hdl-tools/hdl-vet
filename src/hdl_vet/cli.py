@@ -285,11 +285,11 @@ def _apply(args: argparse.Namespace) -> int:
         session = Session(plan.filelist, top=plan.top, base=plan.base)
         vet = Vet(session)
     if args.save is not None:
-        if within(args.save, session.layout_root):
-            raise _InputError(f"--save {args.save} is inside the input tree {session.layout_root}")
         for owned, what in session.owned_paths().items():
             if _same_file(args.save, owned):
                 raise _InputError(f"--save {args.save} is {what}; it would be overwritten")
+        if within(args.save, session.layout_root):
+            raise _InputError(f"--save {args.save} is inside the input tree {session.layout_root}")
     first_record, first_note = len(vet.log), len(vet.notes)  # what the saved session did is not reported again
     for name, _, func in scripts:
         try:
