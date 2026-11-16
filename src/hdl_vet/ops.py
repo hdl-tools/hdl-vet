@@ -44,11 +44,13 @@ from hdl_vet.archive import (
 )
 from hdl_vet.listedit import append_items, edit_list, line_rule, remove_all
 from hdl_vet.session import Result, Session, SessionError, describe
+from hdl_vet.signoff import diff_snapshots
 from hdl_vet.slang_adapter import (
     AdapterError,
     ConnInfo,
     Design,
     InstanceInfo,
+    InstanceSnap,
     ModuleInfo,
     ParamOverride,
     driven_bases,
@@ -549,6 +551,79 @@ class _VetState:
     drove: int
 
 
+# Directives a splice in a scope may not hold: each reaches text outside the module.
+_REACHING = [
+    "include",
+    "define",
+    "undef",
+    "undefineall",
+    "celldefine",
+    "endcelldefine",
+    "line",
+    "default_nettype",
+    "unconnected_drive",
+    "nounconnected_drive",
+    "timescale",
+    "resetall",
+    "pragma",
+    "begin_keywords",
+    "end_keywords",
+]
+_DIRECTIVE = re.compile(r"`\s*(" + "|".join(_REACHING) + r")\b")
+# comments and string literals are text, whatever they contain
+_QUOTED = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"', re.DOTALL)
+
+
+def _under(path: str, roots: Iterable[str]) -> bool:
+    """True when `path` is one of `roots` or lies below one."""
+    return any(path == r or path.startswith(r + ".") for r in roots)
+
+
+_Walk = tuple[list[str], list[str], list[str]]  # modules, paths, instance names (see `Vet._walk_path`)
+
+
+@dataclass(frozen=True)
+class _Scope:
+    """A declared scope (see `Vet.scope`): what the design looked like when the block was entered."""
+
+    name: str
+    roots: tuple[str, ...]  # the paths of the instances of the scope module
+    paths: dict[str, list[str]]  # module -> its instance paths on entry
+    inside: frozenset[str]  # the modules all of whose instances are under a root
+    snap: dict[str, InstanceSnap]
+    outside: dict[Path, bytes]  # each file's text on entry, the inside modules cut out
+
+
+def _module_ranges(
+    design: Design, names: Iterable[str], files: Iterable[Path]
+) -> dict[Path, list[tuple[int, int, str]]]:
+    """Per file: the byte ranges (from `module` to the end of `endmodule`) of the modules `names`."""
+    known = set(files)
+    out: dict[Path, list[tuple[int, int, str]]] = {}
+    for name in sorted(names):
+        try:
+            info = design.module(name)
+        except AdapterError:
+            continue
+        key = info.path if info.path in known else info.path.resolve()
+        out.setdefault(key, []).append((info.start, info.end, name))
+    return out
+
+
+def _outside_text(design: Design, names: Iterable[str], text: dict[Path, bytes]) -> dict[Path, bytes]:
+    """Each file's text with the modules `names` cut out (a marker keeps their place)."""
+    ranges = _module_ranges(design, names, text)
+    out: dict[Path, bytes] = {}
+    for path, data in text.items():
+        pieces: list[bytes] = []
+        at = 0
+        for start, end, name in sorted(ranges.get(path, [])):
+            pieces += [data[at:start], b"\x00" + name.encode() + b"\x00"]
+            at = end
+        out[path] = b"".join(pieces) + data[at:]
+    return out
+
+
 # --- Vet ---------------------------------------------------------------------------
 
 
@@ -558,6 +633,7 @@ class Vet:
         self.log: list[OpRecord] = []
         self.notes: list[str] = []
         self._depth = 0  # open `group` blocks (a checked operation counts as one while it runs)
+        self._scope: _Scope | None = None  # the open `scope` block, if any
         # (module, instance) -> modules the instance's baseline path had before `replace_module`
         self._swapped: dict[tuple[str, str], set[str]] = {}
         # (module, signal) pairs that a removed connection or assignment used to drive
@@ -575,6 +651,8 @@ class Vet:
     # --- raw escape hatch ----------------------------------------------------------
 
     def splice(self, path: Path, start: int, end: int, text: bytes, old: bytes | None = None) -> None:
+        if self._scope is not None:
+            self._refuse_splice(self._scope, Path(path), start, end, text)
         self.session.splice(path, start, end, text, old=old)
         self._sync()
         self._all = True
@@ -595,12 +673,16 @@ class Vet:
         return design
 
     def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
+        if self._scope is not None:
+            raise VetError("finish: not allowed inside a scope")
         return self.session.finish([*self.session.scripts, *scripts], self._evaluators())
 
     def _idle(self, op: str) -> None:
         """Refuse `op` inside a `group` block and after `finish`."""
         if self._depth:
             raise VetError(f"{op}: not allowed inside a group")
+        if self._scope is not None:
+            raise VetError(f"{op}: not allowed inside a scope")
         if self.session.finished:
             raise VetError(f"{op}: the session is already finished")
 
@@ -955,6 +1037,134 @@ class Vet:
         self._depth = 0
         self._conclude(st, "group")
 
+    @contextmanager
+    def scope(self, module: str) -> Iterator[None]:
+        """`with vet.scope("blk"):` edits are refused outside `blk` and what is instantiated only below it.
+
+        See `tests/test_scope.py` for the rules.
+        """
+        self._idle("scope")
+        st = self._begin("scope")
+        self.module(module)  # the errors of `vet.module`
+        design = self.session.loaded
+        snap = design.snapshot()
+        roots = tuple(sorted(p for p, s in snap.items() if s.module == module))
+        if not roots:  # the baseline knows an instance that an earlier operation took away
+            raise VetError(f"module {module!r} is not elaborated under the top, so it cannot be edited")
+        paths: dict[str, list[str]] = {}
+        for p in sorted(snap):
+            paths.setdefault(snap[p].module, []).append(p)
+        inside = frozenset(m for m, ps in paths.items() if all(_under(p, roots) for p in ps))
+        text = {p: self.session.text(p) for p in self.session.files}
+        scope = _Scope(module, roots, paths, inside, snap, _outside_text(design, inside, text))
+        self._scope = scope
+        try:
+            yield
+        except BaseException:
+            self._scope = None
+            self._rollback(st)
+            raise
+        self._scope = None
+        try:
+            self.session.refresh()
+            self._sync()
+            problem = self._left_scope(scope)
+        except AdapterError as e:
+            self._rollback(st)
+            raise VetError(f"scope {module!r}: the edited design cannot be loaded: {e}") from e
+        except BaseException:
+            self._rollback(st)
+            raise
+        if problem is not None:
+            self._rollback(st)
+            raise VetError(f"scope {module!r}: {problem}")
+
+    def _left_scope(self, scope: _Scope) -> str | None:
+        """What changed outside the scope since it was entered, or None."""
+        now = self.session.loaded
+        after = _outside_text(now, scope.inside, {p: self.session.text(p) for p in scope.outside})
+        for path in sorted(after, key=lambda p: p.as_posix()):
+            if scope.outside[path] != after[path]:
+                return f"{path.name} changed outside the scope (its text beside the modules that are inside)"
+        for change in diff_snapshots(scope.snap, now.snapshot()):
+            if not _under(change.path, scope.roots):
+                return f"the design changed outside the scope: {change.kind} at {change.path}"
+        return None
+
+    def open_block(self) -> str | None:
+        """What is still open: "scope 'name'", "group", or None."""
+        if self._scope is not None:
+            return f"scope {self._scope.name!r}"
+        return "group" if self._depth else None
+
+    def _refuse_scope(self, op: str, *mods: str, because: str | None = None) -> None:
+        """Inside a scope: refuse `op` when it would edit the text of a module that is not inside."""
+        sc = self._scope
+        if sc is None:
+            return
+        for m in mods:
+            if m in sc.inside:
+                continue
+            where = [p for p in sc.paths.get(m, []) if not _under(p, sc.roots)]
+            at = (
+                "not elaborated under the top"
+                if not where
+                else "the top module"
+                if "." not in where[0]
+                else f"instantiated at {where[0]}"
+            )
+            why = "" if because is None else f"; {because}"
+            raise VetError(f"{op}: module {m!r} is outside scope {sc.name!r} ({at}){why}")
+
+    def _refuse_scope_with_hosts(self, op: str, mod: str) -> None:
+        """As `_refuse_scope`, for an operation that edits `mod` and every module that instantiates it."""
+        if self._scope is None:
+            return
+        self._refuse_scope(op, mod)
+        for host in sorted({h for h, _ in self._instances_of(mod)}):
+            self._refuse_scope(op, host, because=f"it instantiates {mod!r}, which {op} edits too")
+
+    def _refuse_splice(self, scope: _Scope, path: Path, start: int, end: int, text: bytes) -> None:
+        sc = scope.name
+        key = path.resolve()
+        ranges = _module_ranges(self.session.loaded, scope.inside, self.session.files).get(key, [])
+        if not any(a <= start and end <= b for a, b, _ in ranges):
+            raise VetError(
+                f"splice {path.name}[{start}:{end}]: not inside the text of one module of scope {sc!r} "
+                f"(from its `module` keyword to the end of its `endmodule`)"
+            )
+        found = _DIRECTIVE.search(_QUOTED.sub(" ", text.decode("utf-8", errors="replace")))
+        if found is not None:
+            raise VetError(
+                f"splice {path.name}: the new text has a `{found.group(1)} directive, which would reach "
+                f"files outside scope {sc!r}"
+            )
+
+    def _scoped_walk(self, op: str, to: str) -> tuple[str, _Walk | None]:
+        """Inside a scope: the path from the top and its walk from the scope module down; else `to`, None.
+
+        `to` starts at the scope module; the modules on the walk must all be inside.
+        """
+        sc = self._scope
+        if sc is None:
+            return to, None
+        if len(sc.roots) != 1:
+            raise VetError(
+                f"{op}: scope {sc.name!r}: the scope module is elaborated {len(sc.roots)} times "
+                f"({', '.join(sc.roots)}); hierarchical operations need it elaborated once"
+            )
+        segs = str(to).split(".")
+        if segs[0] != sc.name:
+            raise VetError(f"{op}: in scope {sc.name!r} the path {to!r} must start at the scope module {sc.name!r}")
+        if len(segs) == 1:
+            raise VetError(f"{op}: {to!r} is the scope module; the path must name an instance below it")
+        root = sc.roots[0]
+        full = ".".join([root, *segs[1:]])
+        cut = root.count(".")
+        mods, paths, names = self._walk_path(op, full)
+        self._refuse_scope(op, *mods[cut:])
+        return full, (mods[cut:], paths[cut:], names[cut:])
+
     def add_file(self, path: Path | str) -> None:
         """Bring a source file outside the design into it (loaded last, never edited)."""
         name = Path(path).name
@@ -1295,6 +1505,7 @@ class Vet:
         all_instances: bool = False,
     ) -> None:
         op = "punch_port"
+        to, walked = self._scoped_walk(op, to)
         if direction not in ("input", "output"):
             raise VetError(f"{op}: direction must be 'input' or 'output', not {direction!r}")
         if not is_simple_identifier(name):
@@ -1303,7 +1514,7 @@ class Vet:
             raise VetError(f"{op}: the signal must be a plain identifier, not {signal!r}")
         out = direction == "output"
         snap = self._snap()
-        mods, _paths, inames = self._walk_path(op, to)
+        mods, _paths, inames = walked or self._walk_path(op, to)
         n = len(mods) - 1
         for m in mods[1:]:
             where = self.module_paths(m)
@@ -1405,7 +1616,8 @@ class Vet:
 
     def propagate_param(self, name: str, to: str, *, default: object | None = None) -> None:
         op = "propagate_param"
-        mods, paths, inames = self._walk_path(op, to)
+        to, walked = self._scoped_walk(op, to)
+        mods, paths, inames = walked or self._walk_path(op, to)
         n = len(mods) - 1
         for m in mods[:-1]:
             where = self.module_paths(m)
@@ -1547,7 +1759,7 @@ class Module:
 
     # --- operations
 
-    def _check_scope(self, op: str) -> list[str]:
+    def _confirm_instances(self, op: str) -> list[str]:
         paths = self.paths
         if len(paths) > 1 and self._instances != len(paths):
             raise VetError(
@@ -1562,22 +1774,25 @@ class Module:
 
     def add_port(self, name: str, direction: str, type: str = "logic", width: int | str | None = None) -> None:
         v, mod = self.vet, self._name
+        v._refuse_scope("add_port", mod)
         if direction not in _DIRECTIONS:
             raise VetError(f"add_port {mod}: direction must be 'input', 'output' or 'inout', not {direction!r}")
-        paths = self._check_scope("add_port")
+        paths = self._confirm_instances("add_port")
         decl = f"{direction:<6} {type}{_range(width)} {name}"
         info = v._info(mod, [("ports", mod)])
         v._commit(v._plan_add_port(mod, name, decl, info, paths))
 
     def add_param(self, name: str, default: object, type: str = "int") -> None:
         v, mod = self.vet, self._name
-        paths = self._check_scope("add_param")
+        v._refuse_scope("add_param", mod)
+        paths = self._confirm_instances("add_param")
         info = v._info(mod, [("params", mod)])
         v._commit(v._plan_add_param(mod, name, type, default, info, paths))
 
     def add_wire(self, name: str, width: int | str | None = None, type: str = "logic") -> None:
         v, mod = self.vet, self._name
-        self._check_scope("add_wire")
+        v._refuse_scope("add_wire", mod)
+        self._confirm_instances("add_wire")
         if not is_simple_identifier(name):
             raise VetError(f"add_wire {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         type_text = f"{type}{_range(width)}"
@@ -1614,7 +1829,8 @@ class Module:
 
     def add_assign(self, target: str, expr: object) -> None:
         v, mod = self.vet, self._name
-        self._check_scope("add_assign")
+        v._refuse_scope("add_assign", mod)
+        self._confirm_instances("add_assign")
         if not _IDENT.fullmatch(target):
             raise VetError(f"add_assign {mod}: the target must be a plain identifier, not {target!r}")
         v.session.refresh()  # drivers depend on everything queued
@@ -1630,8 +1846,9 @@ class Module:
 
     def remove_instance(self, name: str, module: str | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_instance"
+        v._refuse_scope(op, mod)
         target = f"{mod}.{name}"
-        self._check_scope(op)
+        self._confirm_instances(op)
 
         def run() -> None:
             info = self._fresh()
@@ -1681,7 +1898,8 @@ class Module:
 
     def remove_wire(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_wire"
-        self._check_scope(op)
+        v._refuse_scope(op, mod)
+        self._confirm_instances(op)
 
         def run() -> None:
             info = self._fresh()
@@ -1726,7 +1944,8 @@ class Module:
 
     def remove_assign(self, target: str, was: object | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_assign"
-        self._check_scope(op)
+        v._refuse_scope(op, mod)
+        self._confirm_instances(op)
 
         def run() -> None:
             info = self._fresh()
@@ -1772,7 +1991,8 @@ class Module:
 
     def remove_port(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_port"
-        paths = self._check_scope(op)
+        v._refuse_scope_with_hosts(op, mod)
+        paths = self._confirm_instances(op)
 
         def run() -> None:
             v._refresh_all_dirty()
@@ -1839,7 +2059,8 @@ class Module:
 
     def remove_param(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_param"
-        paths = self._check_scope(op)
+        v._refuse_scope_with_hosts(op, mod)
+        paths = self._confirm_instances(op)
 
         def run() -> None:
             v._refresh_all_dirty()
@@ -2021,6 +2242,7 @@ class Instance:
 
     def connect(self, port: str, expr: object, was: object | None = None) -> None:
         v = self.vet
+        v._refuse_scope("connect", self._mod)
         inst, im = self._lookup(("conns",), ("ports",))
         self._refuse_connection_list("connect", inst)
         paths = self._paths("connect")
@@ -2073,6 +2295,7 @@ class Instance:
 
     def disconnect(self, port: str, was: object | None = None) -> None:
         v = self.vet
+        v._refuse_scope("disconnect", self._mod)
         inst, im = self._lookup(("conns",), ("ports",))
         self._refuse_connection_list("disconnect", inst)
         paths = self._paths("disconnect")
@@ -2104,6 +2327,7 @@ class Instance:
 
     def set_param(self, name: str, value: object, was: object | None = None) -> None:
         v = self.vet
+        v._refuse_scope("set_param", self._mod)
         inst, im = self._lookup(("overrides",), ("params",))
         self._guard_overrides("set_param", inst)
         paths = self._paths("set_param")
@@ -2193,6 +2417,7 @@ class Instance:
         was: str | None = None,
     ) -> None:
         """Instantiate `module` instead of the current one; see `tests/test_instances.py`."""
+        self.vet._refuse_scope("replace_module", self._mod)
         args = (
             module,
             dict(ports or {}),
