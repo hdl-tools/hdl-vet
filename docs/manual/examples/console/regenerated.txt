@@ -1,0 +1,15 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py -o out/first
+wrote out/first
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ cp regenerated/rtl/soc_top.sv design/rtl/soc_top.sv
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py -o out/second
+wrote out/second
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ vet apply --no-project -f out/first/design.f --top soc_top --dry-run
+vet: <examples>/out/first/rtl/soc_top.sv: already carries the hdl-vet header; the input must be an unmodified tree
+[exit status 2]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py -o out/second
+vet: out/second: exists and is not empty (use --force to replace it)
+[exit status 2]

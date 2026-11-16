@@ -1,0 +1,25 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/cannot_load.py --dry-run
+hdl-vet sign-off: FAILED
+  the edited design cannot be loaded: top module 'soc_top' not found
+[exit status 1]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/new_file.py --dry-run
+hdl-vet sign-off: FAILED
+  new file read by the edited design, not in the baseline: <examples>/cells/tech_rst_sync.sv
+[exit status 1]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/wide_port.py --dry-run
+hdl-vet sign-off: FAILED
+  new diagnostic: warning PortWidthExpand at rtl/soc_top.sv:25: implicit conversion of port connection expands from 1 to 2 bits
+[exit status 1]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/dangling.py --dry-run
+hdl-vet sign-off: FAILED
+  left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:13)
+[exit status 1]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/wide_port.py -s scripts/dangling.py --dry-run
+hdl-vet sign-off: FAILED
+  new diagnostic: warning PortWidthExpand at rtl/soc_top.sv:25: implicit conversion of port connection expands from 1 to 2 bits
+  left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:13)
+[exit status 1]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/add_cell.py --dry-run
+hdl-vet sign-off: FAILED
+  failed check: add_file tech_rst_sync.sv: none of its modules is instantiated
+[exit status 1]

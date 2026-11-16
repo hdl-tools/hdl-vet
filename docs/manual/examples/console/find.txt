@@ -1,0 +1,14 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/find.py --dry-run
+soc_top paths: ['soc_top']
+soc_top ports: ['clk_i', 'rst_ni', 'en_i', 'count0_o', 'count1_o', 'irq_o']
+u_rst_sync is a rst_sync at ['soc_top.u_rst_sync']
+timer paths: ['soc_top.u_periph.u_timer0', 'soc_top.u_periph.u_timer1']
+periph_wrap.u_timer0 -> ['soc_top.u_periph.u_timer0']
+periph_wrap.u_timer1 -> ['soc_top.u_periph.u_timer1']
+0 applied, 0 skipped
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/typo.py --dry-run
+vet: script typo.py: no module 'soc_tp' in the design; did you mean 'soc_top'?
+[exit status 2]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/needs_count.py --dry-run
+vet: script needs_count.py: add_wire timer: the module is elaborated 2 times (soc_top.u_periph.u_timer0, soc_top.u_periph.u_timer1) and a module-level edit changes every instance; pass instances=2 to confirm
+[exit status 2]

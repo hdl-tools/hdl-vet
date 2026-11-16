@@ -1,0 +1,126 @@
+\chapter{Limits and known problems}
+\label{ch:limits}
+
+This chapter lists what hdl-vet does not do, and what is known to go wrong. Every
+item was checked against the code of this version. Items with a transcript were run.
+Items that say so were not checked by a test.
+
+\section{What the sign-off does not see}
+
+\begin{itemize}
+\item \textbf{Logic.} The sign-off compares the structure (instances, ports,
+  parameters, connections) and the diagnostics of the compiler. A raw edit that changes
+  only logic passes without an \code{expect}. The first transcript below changes
+  \code{count_o + 1'b1} into \code{count_o + 2'd2} in \code{timer}, and the sign-off
+  says nothing.
+
+  Use the operations where you can. They never write such an edit. If you
+  use \apiname{Vet.splice}, you are responsible for the logic. The same holds for
+  declarations, because \apiname{Module.add_wire} has no structural expectation.
+\item \textbf{Partly undriven signals.} A signal can lose the driver of only some of
+  its bits. This can happen through an operation that is not a checked operation (here
+  \apiname{Instance.disconnect}), or through a splice. The sign-off passes such a run.
+
+  The second transcript disconnects the interrupt of the second timer. Bit 1 of
+  \code{irq_o} of \code{periph_wrap} has no driver, and the top module reads it. The
+  sign-off accepts the run. Checked operations see this case (chapter~\ref{ch:operations},
+  \file{remove\_timer.py}).
+\item \textbf{Operations that cancel each other.} If one operation undoes another
+  operation of the same script, the sign-off fails. An example is
+  \apiname{Module.add_wire} and then \apiname{Module.remove_wire} of the same name. The
+  check of the first operation does not find its result. The third transcript shows it.
+  Remove both operations from the script.
+\item \textbf{Gate primitives, user-defined primitives and checkers.} The sign-off does
+  not compare them. A splice that changes \code{and g1 (z, a, b)} into
+  \code{and g1 (z, a, a)} passes. hdl-vet writes the output tree, with exit status 0.
+  The gate primitive was run. The other two follow from the same rule and were not checked
+  by a test.
+\item \textbf{More that the dangling check does not see.} The dangling check does not see
+  these things:
+  \begin{itemize}
+  \item a parameter change that switches off a driver in a generate branch
+  \item an inout port
+  \item a new reader of a signal that had no driver already in the baseline
+  \end{itemize}
+  These cases were not checked by a test. The specification of the check lists them.
+\item \textbf{One configuration.} The sign-off sees the design with the defines of the
+  file list. An operation refuses a list that holds a conditional compilation directive,
+  because it cannot check another configuration.
+\end{itemize}
+
+\lstinputlisting[style=script]{examples/scripts/logic_change.py}
+\lstinputlisting[style=script]{examples/scripts/partial.py}
+\lstinputlisting[style=script]{examples/scripts/cancel.py}
+
+\lstinputlisting[style=console]{examples/console/limits.txt}
+
+\section{What the operations refuse}
+
+hdl-vet refuses to edit these things, and it prints a message. You can edit them by hand,
+or with a raw splice.
+
+\begin{itemize}
+\item instances in generate blocks and instance arrays, and instances that come from a
+  macro
+\item hierarchical paths with an index
+\item connection lists with positional or \code{.*} connections, and parameter lists
+  with positional overrides
+\item modules with a non-ANSI port list (for port operations), and module headers with
+  a macro
+\item ports and parameters inside conditional compilation directives
+\item modules that are not instantiated under the top module
+\item modules that come from an added file. hdl-vet never edits an added file.
+\item interface ports. \apiname{Vet.punch_port} refuses them and
+  \apiname{Instance.replace_module} refuses a module that has one. There is no operation
+  that adds an interface port.
+\item a replacement (\apiname{Instance.replace_module}) by a module whose port has another
+  direction, width or type than the port that it replaces. There is no option to accept
+  such a difference.
+\item type parameters. \apiname{Instance.replace_module} does not carry an override of a
+  type parameter to the new module. This holds even if the new module has a type parameter
+  of that name. The message says that the new module has \emph{no overridable parameter}.
+  Edit such an instance by hand.
+\end{itemize}
+
+\section{Known problems}
+
+\begin{itemize}
+\item \textbf{Escaped names.} \apiname{Module.remove_instance} cannot remove an instance
+  with an escaped identifier, such as \texttt{\textbackslash u/esc}. If you give the name
+  with the backslash, hdl-vet skips the call without a message, although the instance
+  exists. If you give the name without the backslash, hdl-vet applies the call, but the
+  sign-off fails with
+  \code{unexpected change: instance-removed}.
+\item \textbf{Names that the operations do not check.} \apiname{Module.add_port} and
+  \apiname{Module.add_param} do not check the name that you give. They write
+  \code{"a b"} or a keyword into the text, and the sign-off fails with errors of the
+  compiler or with \code{the edited design cannot be loaded}. \apiname{Module.add_wire}
+  does check its name.
+\item \textbf{Time.} An operation that reads a list that an earlier operation edited
+  loads the whole design again. On a large design, a script with many such operations takes
+  a long time. The load count rose after a \code{connect} that follows an
+  \code{add_port}. The times were not measured.
+\item \textbf{Paths after a replacement.} After \apiname{Instance.replace_module}, a
+  hierarchical operation (\apiname{Vet.punch_port}, \apiname{Vet.propagate_param}) still
+  resolves its path against the original design. It edits the old module, and the sign-off
+  reports the result as errors or failed checks. Do such operations before the
+  replacement, or in another run.
+\item \textbf{Scopes and shared modules.} hdl-vet refuses \apiname{Vet.punch_port} and
+  \apiname{Vet.propagate_param} in a scope whose module the design instantiates more than
+  once. The scope takes the name of a module, not an instance path. The check for
+  references that reach outside a scope does not see a name in code that the compiler does
+  not elaborate. Its message names only one reference when a block adds several.
+\item \textbf{Added files.} A relative file name in \apiname{Vet.add_file} starts from the
+  current folder, not from the script. Use \code{Path(__file__).resolve().parent} as in the
+  example scripts.
+\item \textbf{Saved sessions of an older version.} A session that you saved before
+  hdl-vet recorded the nested file lists protects only the top-level file list when you
+  resume it. With such a session, \opt{--save} onto a nested file list outside the input
+  tree overwrites that list.
+\item \textbf{Replacing a folder.} \opt{--force} with \opt{-o} replaces any folder that is
+  not part of the input tree. This includes a folder with your own files in it. The rules
+  are in chapter~\ref{ch:cli}.
+\item \textbf{Old output trees.} An output tree that an older version wrote has no list
+  of files in \file{hdl-vet.json}. \opt{--force} refuses it when the folder comes from the
+  project file.
+\end{itemize}

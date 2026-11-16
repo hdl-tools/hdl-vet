@@ -1,0 +1,14 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py -o out/one
+wrote out/one
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py -s scripts/skipped.py -o out/two
+wrote out/two
+3 applied, 1 skipped
+changed rtl/soc_top.sv
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/first.py -s scripts/first.py -o out/three
+vet: script scripts/first.py is named twice
+[exit status 2]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/drift.py --dry-run
+vet: script drift.py: connect soc_top.u_rst_sync test_i: currently connected to "1'b0", not 'test_en_i' (was="1'b1" does not match)
+[exit status 2]

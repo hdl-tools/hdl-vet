@@ -71,7 +71,7 @@ def write_tree(
             if not target.is_dir():
                 raise OutputError(f"{out}: exists and is not a directory")
             if any(target.iterdir()) and not force:
-                raise OutputError(f"{out}: exists and is not empty (use force to replace it)")
+                raise OutputError(f"{out}: exists and is not empty (use --force to replace it)")
 
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(prefix=".hdl-vet-", dir=target.parent))

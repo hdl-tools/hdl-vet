@@ -1,0 +1,33 @@
+$ vet --version
+hdl-vet <version>
+$ cp design/design.f flow.f
+$ vet apply --no-project -f flow.f --base design --top soc_top -s scripts/first.py -o out/flow
+wrote out/flow
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ ls out/flow
+flow.f
+hdl-vet.json
+rtl/
+$ vet apply --no-project -f flow.f --base design --top soc_top -s scripts/first.py -o out/flow
+vet: out/flow: exists and is not empty (use --force to replace it)
+[exit status 2]
+$ vet apply --no-project -f flow.f --base design --top soc_top -s scripts/first.py -o out/flow --force
+wrote out/flow
+2 applied, 0 skipped
+changed rtl/soc_top.sv
+$ vet apply --no-project -o out/flow
+vet: one of -f/--filelist and --resume is required
+[exit status 2]
+$ vet apply --no-project -f design/design.f
+vet: one of -o/--outdir, --save and --dry-run is required
+[exit status 2]
+$ vet apply --no-project -f design/missing.f --dry-run
+vet: <examples>/design/missing.f: cannot read file list: [Errno 2] No such file or directory: '<examples>/design/missing.f'
+[exit status 2]
+$ vet apply --no-project -f design/design.f --top soc_tp --dry-run
+vet: top module 'soc_tp' not found
+[exit status 2]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/missing.py --dry-run
+vet: scripts/missing.py: cannot read script ([Errno 2] No such file or directory: 'scripts/missing.py')
+[exit status 2]

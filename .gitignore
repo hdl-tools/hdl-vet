@@ -10,3 +10,20 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .hdl-bag/
+
+# LaTeX build products of the manual
+docs/manual/*.aux
+docs/manual/*.log
+docs/manual/*.pdf
+docs/manual/*.fdb_latexmk
+docs/manual/*.fls
+docs/manual/*.toc
+docs/manual/*.out
+docs/manual/*.lof
+docs/manual/*.lot
+docs/manual/*.synctex.gz
+docs/manual/*.bbl
+docs/manual/*.blg
+docs/manual/*.idx
+docs/manual/*.ilg
+docs/manual/*.ind

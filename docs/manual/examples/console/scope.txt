@@ -1,0 +1,13 @@
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/scope_periph.py -s scripts/scope_reset.py -o out/scopes
+wrote out/scopes
+10 applied, 0 skipped
+changed rtl/periph_wrap.sv
+changed rtl/rst_sync.sv
+changed rtl/soc_top.sv
+changed rtl/timer.sv
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/scope_leaves.py --dry-run
+vet: script scope_leaves.py: add_wire: module 'soc_top' is outside scope 'periph_wrap' (the top module)
+[exit status 2]
+$ vet apply --no-project -f design/design.f --top soc_top -s scripts/scope_reaches.py --dry-run
+vet: script scope_reaches.py: scope 'periph_wrap': module 'periph_wrap' names soc_top.u_rst_sync.rst_no, which is outside the scope
+[exit status 2]

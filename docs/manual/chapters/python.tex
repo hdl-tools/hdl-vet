@@ -1,0 +1,109 @@
+\chapter{Using hdl-vet from Python}
+\label{ch:python}
+
+\cmd{vet apply} is a short program that uses a Python interface. You can use the
+interface in your own code, for example in a test. This chapter is a reference. It has
+no example script, because the command line runs the scripts of the other chapters in
+the same way.
+
+\section{Building a \texttt{Vet}}
+
+The command line does this:
+
+\begin{enumerate}
+\item It builds a session with \code{hdl_vet.session.Session(filelist, top=None,
+  editable=None, base=None)}. The session loads the baseline design. The call raises
+  \code{SessionError} when the baseline has errors, or when a source file already
+  carries the hdl-vet header. It raises \code{FilelistError} for a file list that cannot
+  be read, and \code{AdapterError} when the compiler cannot load the design.
+\item It wraps the session in \code{hdl_vet.ops.Vet(session)}.
+\item It calls the function \code{apply(vet)} of each script.
+\item It calls \apiname{Vet.finish} with the names and hashes of the scripts. If the
+  result is \code{ok}, it writes the tree with \code{hdl_vet.output.write_tree}.
+\end{enumerate}
+
+The errors of the operations are \code{hdl_vet.ops.VetError}, and its subclass
+\code{DriftError}. A script can catch them (chapter~\ref{ch:operations} has an
+example). \code{vet.log} is the list of \code{OpRecord(op, target, status)}. The status is
+\code{"applied"} or \code{"skipped"}. \code{vet.notes} is the list of notes.
+
+\section{The calls}
+
+\begin{entry}{\sig{Vet.check}}
+\item[Returns] The \code{Result} that \apiname{Vet.finish} would return now. The call
+  leaves the session as it was. Text, queue and operations stay, and you can continue.
+  Pass the \code{scripts} (pairs of name and hash) that must appear in the header.
+\item[Refused] hdl-vet refuses the call inside a group or a scope, and after
+  \apiname{Vet.finish}.
+\end{entry}
+
+\begin{entry}{\sig{Vet.finish}}
+\item[Returns] The \code{Result} of the sign-off. The call applies the queue, adds the
+  header lines, loads the edited design, compares, and evaluates the checks. You can
+  finish a session once. The header lists the scripts that the session applied before,
+  then the scripts that you pass.
+\item[Result] The \code{Result} has these parts:
+  \begin{itemize}
+  \item \code{ok}
+  \item \code{new_diagnostics}
+  \item \code{dangling}
+  \item \code{changes}
+  \item \code{unexpected_changes}
+  \item \code{unmatched_expects}
+  \item \code{failed_checks}
+  \item \code{new_files}
+  \item \code{load_error}
+  \item \code{files} (new bytes of each changed file)
+  \item \code{added} (the files that scripts added)
+  \item \code{diff} (the unified diff)
+  \item the method \code{report()}, which prints the lines of chapter~\ref{ch:signoff}
+  \end{itemize}
+\end{entry}
+
+\begin{entry}{\sig{Vet.save}}
+\item[Writes] The call writes the session to the archive \code{path}. It first applies
+  and loads what is in the queue. \code{scripts} are the pairs of name and hash of the
+  scripts that the session applied since it began or resumed. The session stays usable.
+\item[Refused] hdl-vet refuses the call in these cases:
+  \begin{itemize}
+  \item inside a group or a scope
+  \item after \apiname{Vet.finish}
+  \item when it cannot load the edits in the queue
+  \item when \code{path} is inside the input tree or is a file that the session owns (the
+    file list, a source of an added file)
+  \end{itemize}
+\end{entry}
+
+\begin{entry}{\sig{Vet.restore}}
+\item[Returns] The call returns a new \code{Vet} in the state saved in \code{path}. It is
+  a class method. You call it as \code{Vet.restore(path)}. It raises \code{SessionError},
+  with the name of the file, when one of these is true:
+  \begin{itemize}
+  \item The file is not a session archive.
+  \item The file is damaged.
+  \item The file has another format version.
+  \item The file names a file outside its layout root.
+  \end{itemize}
+\end{entry}
+
+\begin{entry}{\sig{Vet.text}}
+\item[Returns] The current text of a file of the design, as bytes (chapter~\ref{ch:operations}).
+\end{entry}
+
+\begin{entry}{\sig{Vet.design}}
+\item[Returns] The loaded design with every edit in the queue applied. The call loads the
+  design again if something is in the queue. The returned design has the type \code{Design} of the
+  adapter. \code{Design} wraps the compiler. Only \code{hdl_vet.slang_adapter} imports
+  \code{pyslang}.
+\end{entry}
+
+\begin{entry}{\sig{Vet.module_paths}}
+\item[Returns] The sorted hierarchical paths of the module in the baseline design, as a
+  list. The list is empty for a module that the design does not instantiate.
+\end{entry}
+
+\begin{entry}{\sig{Vet.open_block}}
+\item[Returns] The call returns \code{"scope 'NAME'"} when a scope is open,
+  \code{"group"} when a group is open, and \code{None} in all other cases. The command
+  line uses it to refuse a script that leaves a block open.
+\end{entry}

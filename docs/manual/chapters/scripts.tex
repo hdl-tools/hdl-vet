@@ -1,0 +1,402 @@
+\chapter{Writing scripts}
+\label{ch:scripts}
+
+\section{What a script is}
+
+A script is a Python file. It defines one function, \code{apply}, with one
+parameter, the \code{vet} object. hdl-vet calls \code{apply(vet)} once.
+
+\lstinputlisting[style=script]{examples/scripts/first.py}
+
+hdl-vet reads the script as text and runs it. It does not import the script, so it
+leaves no \file{__pycache__} folder next to it. A script that does not define
+\code{apply} is an error. A script that you name twice is an error too.
+
+Everything that a script prints goes to the standard output of \cmd{vet}.
+Section~\ref{sec:program} says what this means for your safety.
+
+A script can fail in three ways. All of them exit with status 2 and write nothing
+(chapter~\ref{ch:cli} lists the exit statuses). The three ways are:
+
+\begin{itemize}
+\item An operation refuses, or finds drift. hdl-vet prints \code{vet: script NAME:} and the
+  reason. The error is a \code{VetError}, or a \code{DriftError}, which is a kind of
+  \code{VetError}.
+\item The script raises another Python exception. hdl-vet prints
+  \code{vet: script NAME raised TYPE: MESSAGE} and then a Python traceback.
+\item A raw edit with \apiname{Vet.splice} overlaps an earlier edit. The error is a
+  \code{SpliceError}. It is not a \code{VetError}. So \code{except VetError} in your script
+  does not catch it. The message is only \code{vet: [2, 7) overlaps [0, 5)}. It has the
+  two ranges and not the name of the script.
+\end{itemize}
+
+\section{Find modules and instances}
+
+You start with \sig{Vet.module}. It takes the name of a module and gives you a
+\term{module handle}. You edit a module through its handle. From a module handle
+you get \term{instance handles} with \sig{Module.instance} (one instance, by name)
+and \sig{Module.instances} (all instances that match a filter).
+
+\lstinputlisting[style=script]{examples/scripts/find.py}
+
+The next two scripts fail on purpose. The first has a spelling mistake in a module
+name. The second edits \code{timer} without \code{instances}. In the transcript, look at
+the output of \file{find.py}. It prints the paths and the names that the list below
+explains. Then look at the two error messages.
+
+\lstinputlisting[style=script]{examples/scripts/typo.py}
+\lstinputlisting[style=script]{examples/scripts/needs_count.py}
+
+\lstinputlisting[style=console]{examples/console/find.txt}
+
+\begin{itemize}
+\item \apiname{Vet.module} refuses a name that the design does not have, and suggests
+  the closest names. It also refuses a module that is not instantiated under the
+  top module. It also refuses a module that comes from an added file
+  (\apiname{Vet.add_file}, chapter~\ref{ch:operations}). Edits are possible only in
+  the modules that hdl-vet can see in the elaborated design.
+\item \apiname{Module.instance} takes the name of one instance in the module. It
+  refuses a name that is not there, with suggestions.
+\item \apiname{Module.instances} takes these arguments:
+  \begin{itemize}
+  \item \code{module}, optional: the module that the instances instantiate (an exact name)
+  \item \code{name}, optional: a pattern with \code{*} and \code{?}
+  \item \code{count}, required: you say how many instances you expect
+  \end{itemize}
+  A different number is an error that lists what matched. This protects you when a
+  generator changes the number of instances.
+\item \sig{Module.paths} is the list of the paths of the module in the
+  design, for example \code{soc_top.u_periph.u_timer0}. The first part is the
+  name of the top module. For one instance, \sig{Instance.paths} lists the paths, one
+  for each path of its module. For any module given by name, \sig{Vet.module_paths}
+  gives the paths. These paths describe the design as hdl-vet read it at the start
+  of the run. They do not change when your script edits the design.
+\item \code{top.path} is the \emph{file} that holds the module. It is not one of the
+  paths above. It is an attribute of the model that \code{top.info} returns, and the
+  handle forwards it (see the last item). Scripts use it to read and edit the text of the
+  module with \apiname{Vet.text} and \apiname{Vet.splice}.
+\item \sig{Module.name} and \sig{Instance.name} are the names. \sig{Instance.target}
+  is \code{module.instance}, the text that hdl-vet uses in its log and its
+  messages.
+\item \sig{Module.info} and \sig{Instance.info} give the model of the compiler for
+  the module or the instance, for example ports, instances and connections. The
+  handles forward attribute lookups to it, so \code{top.info.ports} and
+  \code{top.ports} are the same list. Read these models. Do not change them.
+  A handle gets the design again at each call, so it is never out of date.
+\end{itemize}
+
+\subsection*{A module that exists more than once}
+
+The design instantiates \code{timer} twice. So \code{periph_wrap} has two instances of
+\code{timer}, and the design has two copies of \code{timer}. When you edit a module, the
+edit changes every copy. hdl-vet makes you confirm this.
+
+\begin{itemize}
+\item \code{vet.module("timer", instances=2)} confirms that you expect exactly
+  two copies. Without \code{instances}, hdl-vet refuses an edit of \code{timer}, with a
+  message that lists the paths (the last command of the transcript above). If the
+  number is wrong, \apiname{Vet.module} refuses at once.
+\item The same holds for instance operations. If an instance is inside \code{timer},
+  it is inside two copies of \code{timer}. You get the handle through
+  \code{vet.module("timer", instances=2)}.
+\end{itemize}
+
+\section{Applied and skipped}
+
+Every operation looks at the design before it edits.
+
+\begin{enumerate}
+\item If the design already shows the result that the operation asks for, the
+  operation is \term{skipped}. It queues nothing, and it registers no
+  expectations.
+\item If the design is in the state that the operation expects before the edit, the
+  operation is \term{applied}. It queues the edit. It registers what it
+  expects of the sign-off.
+\item Otherwise there is \term{drift}. The operation stops with an error that
+  says what it found.
+\end{enumerate}
+
+Because of the first rule, you can run a script a second time on a design that
+the script already changed. Nothing happens twice. The summary line,
+\code{N applied, M skipped}, counts the operations of the run. A raw text edit
+with \apiname{Vet.splice} is not an operation, and the summary line does not count it.
+
+\lstinputlisting[style=script]{examples/scripts/skipped.py}
+
+In the next transcript, \file{skipped.py} runs after \file{first.py}. It asks
+for the port that \file{first.py} added, so that operation is skipped. The
+summary is \code{3 applied, 1 skipped}.
+
+\lstinputlisting[style=console]{examples/console/applied_skipped.txt}
+
+\subsection*{The argument \texttt{was}}
+
+An operation that \emph{replaces} something takes an optional argument \code{was}.
+It says what you expect to find. These are the operations:
+
+\begin{itemize}
+\item \apiname{Instance.connect}
+\item \apiname{Instance.set_param}
+\item \apiname{Instance.disconnect}
+\item \apiname{Module.remove_assign}
+\item \apiname{Instance.replace_module}
+\end{itemize}
+
+\apiname{Module.remove_instance} has the argument
+\code{module}, which works in the same way as \code{was}.
+
+\begin{itemize}
+\item If the design shows the new value already, the operation is skipped.
+  The operation does not look at \code{was}.
+\item If the design shows exactly the value in \code{was}, the operation
+  replaces it.
+\item If the design shows another value, and you give \code{was}, but it does not match,
+  the operation stops with a drift error. The error quotes the value that it found.
+  This holds for all of these operations.
+\item If the design shows another value and you do not give \code{was}, the
+  operations differ:
+  \begin{itemize}
+  \item \apiname{Instance.connect} and \apiname{Instance.set_param} stop
+    with a drift error. They stop because otherwise the edit overwrites a value
+    that you did not name.
+  \item \apiname{Instance.disconnect}, \apiname{Module.remove_assign},
+    \apiname{Instance.replace_module} and \apiname{Module.remove_instance} do not
+    check. Without \code{was} (or \code{module}) they make their edit on whatever they
+    find.
+  \end{itemize}
+\end{itemize}
+
+hdl-vet compares the values as text, by the tokens of the language. White space and
+comments do not count. You can write a number. \code{was=2} is the text
+\code{2}.
+
+The last command of the transcript runs this script. The design does not show
+\code{1'b1} at \code{test_i}, so the operation stops with exit status 2, and
+hdl-vet writes nothing.
+
+\lstinputlisting[style=script]{examples/scripts/drift.py}
+
+Drift is an error of the script, not a failed sign-off. The exit status is 2.
+Always give \code{was}. It turns a silent wrong edit into a message.
+
+\section{Several scripts}
+
+You give scripts to \cmd{vet apply} with \opt{-s}, as many as you like. If the
+project file lists scripts, they run first, and the scripts of the command line
+run after them. The scripts run in order, in one session.
+
+A script sees what the earlier scripts did. When a script ends, hdl-vet loads the
+edited text, so the next script finds the new ports, wires and connections. The
+sign-off runs once, at the end, over all scripts.
+
+\section{Groups}
+
+Some operations check themselves. They are the \term{checked operations}:
+
+\begin{itemize}
+\item \apiname{Vet.add_file}
+\item \apiname{Instance.replace_module}
+\item \apiname{Module.remove_instance}
+\item \apiname{Module.remove_wire}
+\item \apiname{Module.remove_assign}
+\item \apiname{Module.remove_port}
+\item \apiname{Module.remove_param}
+\end{itemize}
+
+A checked operation first applies and loads everything that is in the queue.
+Then it makes its edit and loads the design again. The operation is
+\emph{refused}, and hdl-vet takes back everything that the operation did, when one
+of these is true for the edited design:
+
+\begin{itemize}
+\item The design cannot be loaded.
+\item The design has a new diagnostic (a new error or a new warning).
+\item The operation leaves a signal or a port \term{dangling} (something reads it,
+  but nothing drives it).
+\item The operation leaves a signal partly undriven, after a removal that took away a
+  driver.
+\end{itemize}
+
+A refusal is an error of the script (exit status 2). The message starts with the
+operation and its target. After a refusal the session is as it was before the
+call. If the script catches the error, it can continue.
+
+A removal often needs a second edit to be clean. For example, you remove the driver of a
+signal, and you must also remove the signal or its reader. Each step alone is
+refused.
+
+A \term{group} makes the comparison once, at the end of the block. You open
+a group with \code{with vet.group():}, which is \sig{Vet.group}. If the comparison fails, or if
+an exception leaves the block, hdl-vet takes back everything done in the block. A group
+inside a group is part of the outer group.
+
+\lstinputlisting[style=script]{examples/scripts/no_group.py}
+\lstinputlisting[style=script]{examples/scripts/group.py}
+
+The first script removes the reset synchroniser, and does not reconnect
+\code{u_periph}. The wire \code{rst_sync_n} is then read but not driven. So
+hdl-vet refuses the first operation. The second script does all three steps in a group,
+and succeeds.
+
+\lstinputlisting[style=console]{examples/console/group.txt}
+
+\subsection*{Notes}
+
+When a checked operation, or a group, leaves something that nobody uses, this is
+not an error. In this case hdl-vet adds a line to the list \code{vet.notes}, and the command
+prints it as \code{note: ...}. A note starts with the operation and its target,
+or with \code{group:} for a group. Notes never make a run fail. The transcript of
+\code{retire.py} in chapter~\ref{ch:operations} shows one.
+
+\section{Scopes}
+
+A \term{scope} limits part of a script to one module and what is below it. It
+protects you from a mistake that edits another part of the design. You
+open a scope with \sig{Vet.scope}, as a \code{with} block.
+
+\lstinputlisting[style=script]{examples/scripts/scope_periph.py}
+
+The scope is the module \code{periph_wrap}. Everything below it,
+here the two timers, is in the scope too. The design is still the whole design,
+and the sign-off still judges all of it. A scope adds refusals. It takes no check
+away.
+
+\subsection*{What is inside}
+
+\begin{itemize}
+\item On entry, hdl-vet applies and loads everything that is in the queue, as for a
+  group. The module must be one that \apiname{Vet.module} accepts, and the design must
+  instantiate it under the top module. The top module itself is allowed. The scope
+  then holds the whole design.
+\item An \emph{instance} is inside when it is an instance of the scope module, or
+  lies below an instance of the scope module. This holds in the design as it is when
+  you enter the block.
+\item A \emph{module} is inside when it has at least one instance, and every
+  instance of it is inside. A module that has instances elsewhere too is not
+  inside, even if some of its instances are inside.
+\end{itemize}
+
+In the example, \code{periph_wrap} and \code{timer} are inside the scope
+\code{periph_wrap}. \code{soc_top} and \code{rst_sync} are not.
+
+\subsection*{What is refused}
+
+\begin{itemize}
+\item hdl-vet refuses an operation when you call it, if the operation tries to edit
+  the text of a module that is not inside. This holds for the operations of a module
+  handle and of an instance handle. It holds for a handle that you got before the
+  block, too. An instance operation
+  edits the module in which the instance is written.
+\item \apiname{Module.remove_port} and \apiname{Module.remove_param} also edit every
+  module that instantiates the module. hdl-vet refuses them when one of those modules is
+  not inside. For the scope module this is the case, unless the scope module is the top
+  module.
+\item A refusal names the operation, the module, the scope, and where the module is
+  instantiated. hdl-vet checks the scope before anything else. So hdl-vet also refuses an
+  operation that it skips when there is no scope. The operation queues nothing. If your script
+  catches the error, the block continues.
+\item In a scope, you can read every module. \apiname{Vet.module}, \apiname{Module.info},
+  \apiname{Module.paths} and \apiname{Module.instance} work for every module.
+\item In a scope, hdl-vet refuses \apiname{Vet.splice} unless the whole range lies in
+  the text of one module that is inside. The text is from the keyword \code{module} to
+  the end of \code{endmodule}. hdl-vet also refuses a splice when the new text has one of
+  these compiler directives, outside a comment and outside a string:
+  \begin{itemize}
+  \item \code{`include}
+  \item \code{`define}
+  \item \code{`undef}
+  \item \code{`undefineall}
+  \item \code{`celldefine}
+  \item \code{`endcelldefine}
+  \item \code{`line}
+  \item \code{`default_nettype}
+  \item \code{`unconnected_drive}
+  \item \code{`nounconnected_drive}
+  \item \code{`timescale}
+  \item \code{`resetall}
+  \item \code{`pragma}
+  \item \code{`begin_keywords}
+  \item \code{`end_keywords}
+  \end{itemize}
+  These directives reach text outside the module. hdl-vet allows a use of a macro and
+  the directives \code{`ifdef}, \code{`ifndef}, \code{`elsif}, \code{`else} and
+  \code{`endif}.
+\item \apiname{Vet.add_file}, \apiname{Vet.expect} and \apiname{Vet.permit} are not
+  restricted.
+\item \apiname{Vet.punch_port} and \apiname{Vet.propagate_param} start at the scope module.
+  The path in \code{to} begins with the name of the scope module. The new port
+  or parameter ends in the list of the scope module itself. hdl-vet edits nothing above
+  the scope module.
+
+  In the example, the argument is \code{to="periph_wrap.u_timer0"}.
+  hdl-vet refuses a path that starts anywhere else, and it refuses the scope module alone.
+  hdl-vet refuses both operations when the design instantiates the scope module more
+  than once.
+\item You cannot open a scope inside a scope or inside a group. You can open a group
+  inside a scope. hdl-vet refuses \apiname{Vet.check}, \apiname{Vet.save} and
+  \apiname{Vet.finish} inside a scope.
+\end{itemize}
+
+A scope can change the ports and the parameters of the scope module itself. The
+instantiation of the scope module in its parent is outside the scope. So a new input
+port is not connected in the parent, and the sign-off fails, until a later operation
+outside the block connects the port. The example does this after the block. It adds the
+port to the top module and connects \code{u_periph}.
+
+\subsection*{What is checked at the end}
+
+When the block ends, hdl-vet loads the design again and compares it with the
+design on entry. It raises an error that says \emph{outside the scope}, and it takes
+back everything done in the block, when one of these is true:
+
+\begin{itemize}
+\item Any byte outside the text of the inside modules changed.
+\item The structure changed at an instance that is not inside.
+\item A module that is inside has a new reference. The reference names a signal, a
+  task or a function of an instance outside the scope, by a hierarchical path. The
+  design on entry had no such reference in that module.
+\end{itemize}
+
+The message names one such reference, even if the block added several. The compiler
+does not look at a name in code that it does not elaborate, for example an unused
+sequence or property. So hdl-vet does not see such a name. The last item holds for every
+way that the text came into the module. Two ways are a splice and the expression of
+\apiname{Instance.connect} or \apiname{Module.add_assign}.
+
+A path that ends at or below an instance of the scope module is allowed. A name that
+goes through an interface port of the module is a use of the port, not a reach outside.
+
+If an exception leaves the block, hdl-vet takes back everything done in it, as for a
+group. A script must close every block that it opens. If \code{apply} returns with a
+scope or a group still open, \cmd{vet} stops with exit status 2 and names the
+script.
+
+After the block, you can edit the rest of the design again. A saved session does not
+keep a scope (chapter~\ref{ch:session}). \code{vet.log} has the operations in a scope in
+the same way as the operations outside a scope. The next scripts show a second scope,
+and two ways to leave one.
+
+\lstinputlisting[style=script]{examples/scripts/scope_reset.py}
+\lstinputlisting[style=script]{examples/scripts/scope_leaves.py}
+\lstinputlisting[style=script]{examples/scripts/scope_reaches.py}
+
+\lstinputlisting[style=console]{examples/console/scope.txt}
+
+In the transcript, the first command runs two scripts, each with its own scope. The
+script \file{scope_reset.py} adds a parameter
+to \code{rst_sync} inside a scope, and overrides it on the instance outside the
+block. The script \file{scope_leaves.py} writes to \code{soc_top} inside the scope
+\code{periph_wrap}, and hdl-vet refuses it at the call. The script \file{scope_reaches.py}
+names an instance of \code{rst_sync} from inside \code{periph_wrap}. Without the scope,
+the sign-off accepts this reference. In the scope, it reaches outside, so hdl-vet refuses
+the block and takes it back.
+
+\section{A script is a program}
+\label{sec:program}
+
+A script is a Python program. It runs with your rights. It can read and write any file
+that you can. hdl-vet does not run it in a sandbox. The sign-off checks the design that
+comes out, not what the script did on your machine.
+
+\cmd{vet apply} runs the scripts with \opt{--dry-run} too. A project file lists scripts
+that run when you type \cmd{vet apply}. Run only scripts and projects that you trust.
