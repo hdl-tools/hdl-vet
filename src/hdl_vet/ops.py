@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -592,6 +593,7 @@ class _Scope:
     inside: frozenset[str]  # the modules all of whose instances are under a root
     snap: dict[str, InstanceSnap]
     outside: dict[Path, bytes]  # each file's text on entry, the inside modules cut out
+    reaching: Counter[tuple[str, str]]  # (inside module, target) of the names that reach outside, on entry
 
 
 def _module_ranges(
@@ -608,6 +610,31 @@ def _module_ranges(
         key = info.path if info.path in known else info.path.resolve()
         out.setdefault(key, []).append((info.start, info.end, name))
     return out
+
+
+def _reaching(design: Design, inside: Iterable[str], roots: tuple[str, ...]) -> Counter[tuple[str, str]]:
+    """The hierarchical names written in modules of `inside` whose target is not under a root.
+
+    Per (module, target) the most that any one instance of the module holds: another instance of
+    the same text is not another reference.
+    """
+    names = set(inside)
+    per_host: dict[str, Counter[tuple[str, str]]] = {}
+    for r in design.hierarchical_refs():
+        if r.module in names and not _under(r.target, roots):
+            per_host.setdefault(r.host, Counter())[(r.module, r.target)] += 1
+    out: Counter[tuple[str, str]] = Counter()
+    for counts in per_host.values():
+        out |= counts
+    return out
+
+
+def _inside_modules(snap: dict[str, InstanceSnap], roots: tuple[str, ...]) -> frozenset[str]:
+    """The modules that have an instance and only instances under a root."""
+    paths: dict[str, list[str]] = {}
+    for p, s in snap.items():
+        paths.setdefault(s.module, []).append(p)
+    return frozenset(m for m, ps in paths.items() if all(_under(p, roots) for p in ps))
 
 
 def _outside_text(design: Design, names: Iterable[str], text: dict[Path, bytes]) -> dict[Path, bytes]:
@@ -1054,9 +1081,11 @@ class Vet:
         paths: dict[str, list[str]] = {}
         for p in sorted(snap):
             paths.setdefault(snap[p].module, []).append(p)
-        inside = frozenset(m for m, ps in paths.items() if all(_under(p, roots) for p in ps))
+        inside = _inside_modules(snap, roots)
         text = {p: self.session.text(p) for p in self.session.files}
-        scope = _Scope(module, roots, paths, inside, snap, _outside_text(design, inside, text))
+        scope = _Scope(
+            module, roots, paths, inside, snap, _outside_text(design, inside, text), _reaching(design, inside, roots)
+        )
         self._scope = scope
         try:
             yield
@@ -1089,6 +1118,10 @@ class Vet:
         for change in diff_snapshots(scope.snap, now.snapshot()):
             if not _under(change.path, scope.roots):
                 return f"the design changed outside the scope: {change.kind} at {change.path}"
+        added = _reaching(now, _inside_modules(now.snapshot(), scope.roots), scope.roots) - scope.reaching
+        if added:
+            module, target = min(added)
+            return f"module {module!r} names {target}, which is outside the scope"
         return None
 
     def open_block(self) -> str | None:

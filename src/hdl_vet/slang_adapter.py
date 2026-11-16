@@ -277,6 +277,18 @@ class Driver:
     instance: str | None = None  # the instance whose output port connection drives it, else None
 
 
+_HEAD_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_$]*)")
+
+
+@dataclass(frozen=True)
+class HierRef:
+    """A hierarchical name written in an instance: where it is written and what slang resolved it to."""
+
+    host: str  # path of the instance whose module (or one of its port connections) holds the name
+    module: str  # that module
+    target: str  # the resolved path of the signal, task or function
+
+
 @dataclass(frozen=True)
 class InstanceSite:
     instance_name: str
@@ -1270,6 +1282,52 @@ class Design:
         except TypeError as e:
             raise AdapterError(f"{hier_path}: not a net or variable, so it has no drivers") from e
         return [Driver(bool(d.isInputPort)) for d in drivers]
+
+    def hierarchical_refs(self) -> list[HierRef]:
+        """Every hierarchical name in the elaborated design, once per instance that holds it.
+
+        Seen: a hierarchical value (any use of a signal, down, up or from the top) and a call of a
+        task or function reached through a hierarchical name, in the module's own items (generate
+        blocks included) and in the port connections of the instances it holds (also those in
+        instance arrays and generate blocks). Each instance body is looked at on its own, so a
+        name that is relative (`u_c0.q`, `blk.m`) is resolved for every instance. A name that
+        starts at one of the module's own interface ports is a use of the port and is not reported.
+        """
+        sk, ek = pyslang.ast.SymbolKind, pyslang.ast.ExpressionKind
+        out: list[HierRef] = []
+        for inst in self._instances():
+            host, module, body = str(inst.hierarchicalPath), inst.body.definition.name, inst.body
+
+            def add(node: Any, host: str = host, module: str = module, body: Any = body) -> None:
+                if node.kind == ek.HierarchicalValue:
+                    target = str(node.symbol.hierarchicalPath)
+                elif node.isSystemCall:
+                    return
+                else:  # a call; one of its own module's subroutines, or a package's, is not hierarchical
+                    target = str(node.subroutine.hierarchicalPath)
+                    if "." not in target or target.rpartition(".")[0] == host:
+                        return
+                head = _HEAD_RE.match(str(node.syntax))
+                port = None if head is None else body.find(head.group(1))
+                if port is not None and port.kind == sk.InterfacePort:
+                    return
+                out.append(HierRef(host, module, target))
+
+            table = {ek.HierarchicalValue: add, ek.Call: add}
+
+            def walk(scope: Any, table: dict[Any, Any] = table) -> None:
+                for member in scope:
+                    if member.kind == sk.Instance:
+                        for conn in member.portConnections:
+                            if conn.expression is not None:
+                                conn.expression.visit(lookup_table=table)
+                    elif member.kind in (sk.InstanceArray, sk.GenerateBlock, sk.GenerateBlockArray):
+                        walk(member)
+                    else:
+                        member.visit(lookup_table=table)
+
+            walk(inst.body)
+        return out
 
     # --- instance sites ----------------------------------------------------
 

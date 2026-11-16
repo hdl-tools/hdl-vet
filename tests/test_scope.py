@@ -90,9 +90,9 @@ LEFT OPEN
 
 - Hierarchical operations in a scope whose module is elaborated more than once
   are refused (S6); making them work is left open.
-- A hierarchical reference written inside the scope that reaches outside it
-  (`force top.u_b.m = ...` in a splice) is not detected. `defparam` and `bind`
-  aimed outside are caught by S7.
+- (Closed by R6 in tests/test_scope_review.py: a hierarchical reference written
+  inside the scope that reaches outside it. `defparam` and `bind` aimed outside
+  are caught by S7.)
 - A scope named by an instance path instead of a module.
 - The starter script written by `vet init` does not mention scopes.
 """
