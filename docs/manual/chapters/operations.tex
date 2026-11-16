@@ -1,16 +1,16 @@
 \chapter{Operations}
 \label{ch:operations}
 
-This chapter describes every operation. Operations are grouped by what they
+This chapter describes every operation. It groups the operations by what they
 change. Each entry has the same points:
 
 \begin{description}
 \item[Writes] What the operation puts into the text.
-\item[Refused] When it stops with an error, and nothing is queued. Chapter~\ref{ch:scripts}
+\item[Refused] When it stops with an error and queues nothing. Chapter~\ref{ch:scripts}
   explains drift errors and refusals.
 \item[was] What \code{was=} means, for the operations that have it.
 \item[Again] What the operation does when you run it a second time on a design that
-  already shows its result: it is \emph{skipped}, or it stops with a drift error.
+  already shows its result. It is \emph{skipped}, or it stops with a drift error.
 \item[Example] The script and the transcript that show it.
 \end{description}
 
@@ -18,38 +18,46 @@ change. Each entry has the same points:
 
 \begin{itemize}
 \item An operation on a module handle changes every copy of the module. If the
-  module is instantiated more than once, you must confirm the number with
-  \code{vet.module(name, instances=N)}. Without it the operation is refused.
-  The same holds for an operation on an instance handle: the module that
+  design instantiates the module more than once, you must confirm the number with
+  \code{vet.module(name, instances=N)}. Without it, hdl-vet refuses the operation.
+  The same holds for an operation on an instance handle. In this case, the module that
   holds the instance counts.
 \item hdl-vet edits only text that it can edit safely. Chapter~\ref{ch:limits}
   collects these limits.
   \begin{itemize}
-  \item An operation on an instance is refused when the instance comes from a macro, is
-    written in a generate block, or is an instance array.
-  \item It is refused for connections when the instance uses positional or \code{.*}
-    connections, and for overrides when it uses positional parameter overrides.
-  \item It is refused when the list that it edits holds a conditional compilation
-    directive (\code{`ifdef} and the like).
-  \item An operation on a port or parameter list is refused when the module header
-    contains a macro. Operations on ports need an ANSI port list.
+  \item hdl-vet refuses an operation on an instance when the instance comes from a
+    macro, is written in a generate block, or is an instance array.
+  \item It refuses an operation for connections when the instance uses positional or
+    \code{.*} connections. It refuses an operation for overrides when the instance uses
+    positional parameter overrides.
+  \item It refuses an operation when the list that it edits holds a conditional
+    compilation directive, for example \code{`ifdef}.
+  \item It refuses an operation on a port list or a parameter list when the module
+    header has a macro. Operations on ports need an ANSI port list.
   \end{itemize}
-\item A file is a file on disk; a path is a place in the hierarchy (chapter~\ref{ch:intro}).
-\item Names that do not exist raise an error with up to three suggestions: ``did you
-  mean \ldots?''
-\item Inserted text uses the line ending of the file that it goes into. Text that
-  is not edited is never reformatted.
-\item Each applied operation registers \emph{expectations} for the sign-off: the
-  structural changes that it must cause. They are named in the entries as
+\item A file is a file on disk. A path is a place in the hierarchy (chapter~\ref{ch:intro}).
+\item A name that does not exist raises an error. The error has up to three
+  suggestions, in the form ``did you mean \ldots?''
+\item An operation inserts text with the line ending of the file that the text goes
+  into. hdl-vet never reformats text that it does not edit.
+\item Each applied operation registers \emph{expectations} for the sign-off. These are
+  the structural changes that the operation must cause. The entries name them as
   ``Sign-off requires'' and ``Sign-off permits''. Chapter~\ref{ch:signoff} explains
   how the sign-off uses them.
 \end{itemize}
 
 \section{All operations at a glance}
 
-The table shows, for each operation, which text it edits, what \code{was} means for it
-(where it has one), and what happens when you run it a second time on a result that
-exists already. The later sections give the details.
+For each operation, the table shows three things:
+
+\begin{itemize}
+\item which text the operation edits
+\item what \code{was} means for the operation, where it has one
+\item what happens when you run the operation a second time on a result that already
+  exists
+\end{itemize}
+
+The later sections give the details.
 
 {\small
 \begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.305\textwidth}>{\raggedright\arraybackslash}p{0.2\textwidth}>{\raggedright\arraybackslash}p{0.28\textwidth}>{\raggedright\arraybackslash}p{0.12\textwidth}@{}}
@@ -60,12 +68,12 @@ Operation & Edits the text of & \code{was} & Second run \\
 \apiname{Module.add_param} & the module & none & skipped \\
 \apiname{Module.add_wire} & the module & none & skipped \\
 \apiname{Module.add_assign} & the module & none & skipped \\
-\apiname{Instance.connect} & the module that holds the instance & the expression now there; without it, a different expression is drift & skipped \\
-\apiname{Instance.disconnect} & the module that holds the instance & the expression now there; optional check & skipped \\
-\apiname{Instance.set_param} & the module that holds the instance & the override now there; without it, a different override is drift & skipped \\
+\apiname{Instance.connect} & the module that holds the instance & the expression now there. Without it, a different expression is drift & skipped \\
+\apiname{Instance.disconnect} & the module that holds the instance & the expression now there, optional check & skipped \\
+\apiname{Instance.set_param} & the module that holds the instance & the override now there. Without it, a different override is drift & skipped \\
 \apiname{Vet.punch_port} & every module on the path & none & skipped \\
 \apiname{Vet.propagate_param} & every module on the path above the destination & none & skipped \\
-\apiname{Vet.add_file} & no source; the output tree gets a copy & none & skipped \\
+\apiname{Vet.add_file} & no source. The output tree gets a copy & none & skipped \\
 \bottomrule
 \end{tabular}
 
@@ -74,13 +82,13 @@ Operation & Edits the text of & \code{was} & Second run \\
 \toprule
 Operation & Edits the text of & \code{was} & Second run \\
 \midrule
-\apiname{Instance.replace_module} & the module that holds the instance & the module now used; optional check & skipped, or drift \\
-\apiname{Module.remove_instance} & the module that holds the instance & \code{module=}, the module now used; optional check & skipped \\
+\apiname{Instance.replace_module} & the module that holds the instance & the module now used, optional check & skipped, or drift \\
+\apiname{Module.remove_instance} & the module that holds the instance & \code{module=}, the module now used, optional check & skipped \\
 \apiname{Module.remove_wire} & the module & none & skipped \\
-\apiname{Module.remove_assign} & the module & the right-hand side now there; optional check & skipped \\
+\apiname{Module.remove_assign} & the module & the right-hand side now there, optional check & skipped \\
 \apiname{Module.remove_port} & the module, and every module that instantiates it & none & skipped \\
 \apiname{Module.remove_param} & the module, and every module that instantiates it & none & skipped \\
-\apiname{Vet.splice} & the file that you name & none; \code{old=} guards the bytes & none \\
+\apiname{Vet.splice} & the file that you name & none. \code{old=} guards the bytes & none \\
 \bottomrule
 \end{tabular}
 }
@@ -88,60 +96,78 @@ Operation & Edits the text of & \code{was} & Second run \\
 \section{Ports and connections}
 
 \begin{entry}{\sig{Module.add_port}}
-\item[Writes] A port declaration at the end of the ANSI port list, built as
-  direction, type, range and name, for example \code{input  logic [3:0] name}.
-  The range comes from \code{width}: an integer greater than 1 gives
-  \code{[N-1:0]}, a string \code{W} gives \code{[W-1:0]}, a string that starts
-  with \code{[} is used as written, and \code{None} or 1 gives no range.
+\item[Writes] The operation writes a port declaration at the end of the ANSI port list.
+  It builds the declaration as direction, type, range and name, for example
+  \code{input  logic [3:0] name}. The range comes from \code{width}:
+  \begin{itemize}
+  \item An integer greater than 1 gives \code{[N-1:0]}.
+  \item A string \code{W} gives \code{[W-1:0]}.
+  \item A string that starts with \code{[} gives that string as the range, as written.
+  \item \code{None} or 1 gives no range.
+  \end{itemize}
   If the closing parenthesis is alone at the start of its line, the new port
-  goes on a new line, indented like the last port, and a comma follows the last
+  goes on a new line, indented like the last port. A comma follows the last
   port. Otherwise the text \code{, declaration} follows the last port. An empty
   list gets the declaration between its parentheses.
-\item[Refused] A direction other than \code{input}, \code{output} or
-  \code{inout}. A module with a non-ANSI port list or none. A header with a macro.
-  A conditional directive in the list. A name that something else already uses,
-  or a port of that name with a different declaration (a drift error). The name itself is
-  not checked: a name that is not an identifier, such as \code{"a b"}, or a keyword, such
-  as \code{"wire"}, is written as it is, and the sign-off fails with errors of the
-  compiler. Use plain names.
-\item[Again] Skipped when the module has a port of that name with the same
-  declaration.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a direction other than \code{input}, \code{output} or \code{inout}
+  \item a module with a non-ANSI port list, or with none
+  \item a header with a macro
+  \item a conditional directive in the list
+  \item a name that something else already uses, or a port of that name with a different
+    declaration (a drift error)
+  \end{itemize}
+  The operation does not check the name itself. It writes a name that is not an
+  identifier, such as \code{"a b"}, or a keyword, such as \code{"wire"}, as it is. Then
+  the sign-off fails with errors of the compiler. Use plain names.
+\item[Again] hdl-vet skips the operation when the module has a port of that name with the
+  same declaration.
 \item[Example] \file{first.py} (chapter~\ref{ch:first}) and \file{ports.py} below.
-  A new input port is not connected in the instances of the module. Connect it with
-  \apiname{Instance.connect}, or the sign-off reports a new diagnostic.
+  The operation does not connect a new input port in the instances of the module.
+  Connect it with \apiname{Instance.connect}. If you do not, the sign-off reports a new
+  diagnostic.
 \end{entry}
 
 \begin{entry}{\sig{Instance.connect}}
-\item[Writes] A connection \code{.port(expr)} after the last connection, with its
-  name field aligned like the others when they all have the same width. An
-  instance with no connections gets it between its parentheses. If the port is
-  connected to nothing (\code{.port()}), the expression is filled in. If it is
-  connected to another expression, that expression is replaced, but only when
-  \code{was} matches. Only the text between the parentheses changes.
-\item[Refused] A port that the module does not have. An empty expression (to
-  leave an output open, use \apiname{Instance.disconnect}). The refusals of
-  instances in the rules above.
+\item[Writes] The operation writes a connection \code{.port(expr)} after the last
+  connection. It aligns the name field like the others when they all have the same width.
+  An instance with no connections gets the connection between its parentheses. If the
+  port is connected to nothing (\code{.port()}), the operation fills in the expression.
+  If the port is connected to another expression, the operation replaces that
+  expression, but only when \code{was} matches. Only the text between the parentheses
+  changes.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a port that the module does not have
+  \item an empty expression (to leave an output open, use \apiname{Instance.disconnect})
+  \item the refusals for instances in the rules above
+  \end{itemize}
 \item[was] The expression that you expect to find now. When the port is connected to
-  another expression, and \code{was} is missing or different, the operation stops with a
-  drift error that quotes what it found. An open port (\code{.port()}) is filled without
-  \code{was}.
-\item[Again] Skipped when the port already has the same expression.
-\item[Example] \file{first.py}; \file{drift.py} in chapter~\ref{ch:scripts}.
+  another expression, and you give no \code{was} or a different one, the operation stops
+  with a drift error. The error quotes what it found. The operation fills an open port
+  (\code{.port()}) without \code{was}.
+\item[Again] hdl-vet skips the operation when the port already has the same expression.
+\item[Example] \file{first.py}, and \file{drift.py} in chapter~\ref{ch:scripts}.
 \end{entry}
 
 \begin{entry}{\sig{Instance.disconnect}}
-\item[Writes] An empty connection \code{.port()}, which keeps the name field.
-\item[Refused] An input port: an open input would float. The message names the
-  instance and port and gives two other choices: tie the input to a value with
-  \apiname{Instance.connect}, or remove the port from the module. An interface port
-  is refused too.
-\item[was] The expression you expect to find now. A different one is a drift error.
-  Without \code{was}, the operation does not check: it opens the port whatever is
+\item[Writes] The operation writes an empty connection \code{.port()}. The connection
+  keeps the name field.
+\item[Refused] The operation refuses an input port, because an open input floats. The
+  message names the instance and the port. It gives two other choices:
+  \begin{itemize}
+  \item tie the input to a value with \apiname{Instance.connect}
+  \item remove the port from the module
+  \end{itemize}
+  The operation refuses an interface port too.
+\item[was] The expression that you expect to find now. A different expression is a drift
+  error. Without \code{was}, the operation does not check. It opens the port whatever is
   connected.
-\item[Again] Skipped when the port is already open or has no connection.
+\item[Again] hdl-vet skips the operation when the port is already open or has no connection.
 \item[Example] \file{ports.py}. After the change, \code{count1_o} of the top
-  module has no driver. That is allowed: a top output nobody reads may float.
-  If something read the signal, the sign-off would say \emph{left dangling}
+  module has no driver. This is allowed, because a top output that nobody reads can float.
+  If something reads the signal, the sign-off says \emph{left dangling}
   (chapter~\ref{ch:signoff}).
 \end{entry}
 
@@ -150,34 +176,45 @@ Operation & Edits the text of & \code{was} & Second run \\
 \section{Parameters}
 
 \begin{entry}{\sig{Module.add_param}}
-\item[Writes] \code{parameter type name = default} after the last parameter in the
-  parameter port list. A module without such a list gets
-  \texttt{ \#(parameter type name = default)} directly after its name, as in the
-  transcript below. \code{default} may be any value; it is written as text.
-\item[Refused] A header with a macro. A conditional directive in the list. A
-  name that another parameter in the body, or something else, already uses (a
-  drift error). The name itself is not checked here either: \code{"a b"} or a keyword
-  such as \code{"module"} is written as it is, and the sign-off reports that the edited
+\item[Writes] The operation writes \code{parameter type name = default} after the last
+  parameter in the parameter port list. If the module has no such list, the operation
+  writes \texttt{ \#(parameter type name = default)} directly after the name of the
+  module, as in the transcript below. \code{default} can be any value. The operation
+  writes it as text.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a header with a macro
+  \item a conditional directive in the list
+  \item a name that another parameter in the body, or something else, already uses (a
+    drift error)
+  \end{itemize}
+  The operation does not check the name itself here either. It writes \code{"a b"} or a
+  keyword such as \code{"module"} as it is. Then the sign-off reports that the edited
   design cannot be loaded.
-\item[Again] Skipped when the module has a parameter of that name with the same
-  type and default.
+\item[Again] hdl-vet skips the operation when the module has a parameter of that name with
+  the same type and default.
 \item[Example] \file{params.py}.
 \end{entry}
 
 \begin{entry}{\sig{Instance.set_param}}
-\item[Writes] An override \code{.name(value)} after the last override, or
-  \texttt{ \#(.name(value))} directly after the module name when the instance has no
-  overrides. An existing override is replaced when \code{was} matches.
-\item[Refused] A parameter that the instantiated module does not have, a
-  \code{localparam}, or a type parameter. Positional overrides. An instance that
-  shares its parameter list with other instances in one statement. The refusals of
-  instances in the rules above.
-\item[was] The override text that you expect to find now. A different one is a
+\item[Writes] The operation writes an override \code{.name(value)} after the last
+  override. When the instance has no overrides, it writes \texttt{ \#(.name(value))}
+  directly after the module name. It replaces an existing override when \code{was}
+  matches.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a parameter that the instantiated module does not have, a \code{localparam}, or a
+    type parameter
+  \item positional overrides
+  \item an instance that shares its parameter list with other instances in one statement
+  \item the refusals for instances in the rules above
+  \end{itemize}
+\item[was] The override text that you expect to find now. A different text is a
   drift error.
-\item[Again] Skipped when the override already has the same text.
+\item[Again] hdl-vet skips the operation when the override already has the same text.
 \item[Example] \file{params.py}. The sign-off compares the text of the override,
-  not the resolved value. A change of the parameter may change port widths below
-  the instance; declare these changes with \apiname{Vet.expect} (see
+  not the resolved value. A change of the parameter can change port widths below
+  the instance. Declare these changes with \apiname{Vet.expect} (see
   section~\ref{sec:byhand}).
 \end{entry}
 
@@ -186,65 +223,88 @@ Operation & Edits the text of & \code{was} & Second run \\
 \section{Wires and assignments}
 
 \begin{entry}{\sig{Module.add_wire}}
-\item[Writes] A declaration such as \code{logic [3:0] name;} on a new line directly
-  below the line that ends the module header, indented like the first line of the
-  body (two blanks if the body is empty).
-\item[Refused] A name that is not a plain identifier or is a keyword. A module
-  header whose last line holds the beginning of the body, or ends inside a block
-  comment. A name that something else uses, or a net of that name with another
-  type (a drift error).
-\item[Again] Skipped when the module has a net or variable of that name with
-  the same type and range.
+\item[Writes] The operation writes a declaration such as \code{logic [3:0] name;} on a
+  new line directly below the line that ends the module header. It indents the
+  declaration like the first line of the body. If the body is empty, it indents with two
+  blanks.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a name that is not a plain identifier or is a keyword
+  \item a module header whose last line holds the beginning of the body, or ends inside a
+    block comment
+  \item a name that something else uses, or a net of that name with another type (a drift
+    error)
+  \end{itemize}
+\item[Again] hdl-vet skips the operation when the module has a net or variable of that name
+  with the same type and range.
 \item[Example] \file{skipped.py} (chapter~\ref{ch:scripts}).
 \end{entry}
 
 \begin{entry}{\sig{Module.add_assign}}
-\item[Writes] \code{assign target = expr;} on a new line directly above the line of
-  \code{endmodule}.
-\item[Refused] A target that is not a net, variable or port of the module (with
-  suggestions). An input port. A target that already has a driver. A module whose
-  \code{endmodule} does not start its line. The target must be a plain identifier.
-\item[Again] Skipped when the module has exactly that assignment.
+\item[Writes] The operation writes \code{assign target = expr;} on a new line directly
+  above the line of \code{endmodule}.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a target that is not a net, variable or port of the module (with suggestions)
+  \item an input port
+  \item a target that already has a driver
+  \item a module whose \code{endmodule} does not start its line
+  \end{itemize}
+  The target must be a plain identifier.
+\item[Again] hdl-vet skips the operation when the module has exactly that assignment.
 \item[Example] \file{ports.py}.
 \end{entry}
 
 \section{Through the hierarchy}
 
-A generator makes the hierarchy, and a change deep inside it means a port or a
-parameter in every module on the way. The next two operations do all of it. They
-take a hierarchical path \code{to}, which starts with the name of the top module,
-for example \code{soc_top.u_periph.u_timer0}. The modules on the path are
+A generator makes the hierarchy. A change deep inside the hierarchy means a port or a
+parameter in every module on the way. The next two operations do all of this.
+
+The two operations take a hierarchical path \code{to}. The path starts with the name of
+the top module, for example \code{soc_top.u_periph.u_timer0}. The modules on the path are
 $M_0$ (the top module) to $M_n$ (the destination). hdl-vet checks the whole path
 before it changes anything.
 
 \begin{entry}{\sig{Vet.punch_port}}
 \item[Writes] For an \emph{input}, a signal enters at the top module and arrives at
-  $M_n$. $M_0$ gets the input port \code{name}, unless you give \code{signal},
-  the name of an existing port or net of $M_0$ that is the source; then $M_0$
-  gets no new port. Each of $M_1\ldots M_n$ gets the input port \code{name}, and
-  its instance in the module above is connected to \code{name} (to
-  \code{signal} in $M_0$ if you gave one). For an \emph{output}, \code{signal}
-  (default \code{name}) is a port or net of $M_n$. $M_n$ gets the output port
-  \code{name} and \code{assign name = signal;}. Each of $M_{n-1}\ldots M_0$ gets the
-  output port, and the instance below is connected to it.
-  The type of the new ports: if you give \code{type} or \code{width}, the port is
-  declared as by \apiname{Module.add_port}. If you give neither and there is a signal,
-  the port takes the type of that signal as written (an output always has one).
-  Without a signal the input is a 1-bit \code{logic}. The type must mean the
-  same in every module on the path: every identifier in it must be written
-  \code{pkg::NAME}. A type that uses a parameter or typedef of one module is
-  refused, and you give \code{width=}.
-\item[Refused] A path that is the top alone, does not start at the top module, or
-  names an instance that does not exist. A segment with an index, instances in
-  generate blocks and instance arrays. An interface port. A signal with unpacked
-  dimensions. A module on the path that is instantiated more than once: for an
-  input unless \code{all_instances=True}; for an output always, because several
-  copies would drive one net. With \code{all_instances=True} every instance of
-  each module on the path is connected, and each of these instances must sit in
-  a module of the path.
-\item[Again] A second identical call skips every piece. A path that is partly
-  punched is completed. If the output signal has the same name as an existing
-  output port of $M_n$, $M_n$ is not edited.
+  $M_n$.
+
+  $M_0$ gets the input port \code{name}, unless you give \code{signal}. \code{signal} is
+  the name of an existing port or net of $M_0$ that is the source. In this case $M_0$
+  gets no new port. Each of $M_1\ldots M_n$ gets the input port \code{name}. The
+  operation connects the instance of each of these modules in the module above to
+  \code{name}. If you gave \code{signal}, it connects the instance in $M_0$ to
+  \code{signal}.
+
+  For an \emph{output}, \code{signal} (default \code{name}) is a port or net of $M_n$.
+  $M_n$ gets the output port \code{name} and \code{assign name = signal;}. Each of
+  $M_{n-1}\ldots M_0$ gets the output port. The operation connects the instance below to
+  it.
+
+  If you give \code{type} or \code{width}, the operation declares the port as
+  \apiname{Module.add_port} does. If you give neither and there is a signal, the port
+  takes the type of that signal as written (an output always has one). Without a signal
+  the input is a 1-bit \code{logic}.
+
+  The type must mean the same in every module on the path. For this, you must write
+  every identifier in the type as \code{pkg::NAME}. The operation refuses a type that
+  uses a parameter or typedef of one module. In this case, give \code{width=}.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a path that is the top alone, does not start at the top module, or names an
+    instance that does not exist
+  \item a segment with an index, instances in generate blocks and instance arrays
+  \item an interface port
+  \item a signal with unpacked dimensions
+  \item a module on the path that the design instantiates more than once
+  \end{itemize}
+  For such a module, the operation refuses an input unless you give
+  \code{all_instances=True}. It always refuses an output, because several copies then
+  drive one net. With \code{all_instances=True}, the operation connects every instance of
+  each module on the path. Each of these instances must be in a module of the path.
+\item[Again] A second identical call skips every piece. If a path is partly
+  punched, the operation completes it. If the output signal has the same name as an
+  existing output port of $M_n$, the operation does not edit $M_n$.
 \item[Example] \file{punch.py} and \file{punch_refused.py}.
 \end{entry}
 
@@ -255,118 +315,163 @@ before it changes anything.
 \lstinputlisting[style=console]{examples/console/hierarchy.txt}
 
 In the transcript, \file{punch_refused.py} catches the two refusals and prints
-them. The module \code{timer} is instantiated twice. The input needs
+them. The design instantiates the module \code{timer} twice. The input needs
 \code{all_instances=True}. The output cannot pass through two copies at all.
-\file{punch.py} then does what is possible: it brings the signal
-\code{rst_no} out of \code{u_rst_sync} to a new output of the top module, and it
+
+\file{punch.py} then does what is possible. It brings the signal
+\code{rst_no} out of \code{u_rst_sync} to a new output of the top module. It
 adds an input to every copy of \code{timer} down from the top. In the listing of
-\file{soc_top.sv}, look at the new lines: the output port \code{sync_rst_o} and the
-input port \code{tick_i} at the end of the port list, the connection
-\code{.sync_rst_o(sync_rst_o)} on \code{u_rst_sync}, and the connection
-\code{.tick_i(tick_i)} on \code{u_periph}.
+\file{soc_top.sv}, look at the new lines:
+
+\begin{itemize}
+\item the output port \code{sync_rst_o} and the input port \code{tick_i} at the end of
+  the port list
+\item the connection \code{.sync_rst_o(sync_rst_o)} on \code{u_rst_sync}
+\item the connection \code{.tick_i(tick_i)} on \code{u_periph}
+\end{itemize}
 
 \begin{entry}{\sig{Vet.propagate_param}}
-\item[Writes] Makes a parameter of $M_n$ settable from the top, without changing its
-  value. Each of $M_0\ldots M_{n-1}$ gets \code{parameter type name = default}, and the
-  instance below is overridden with \code{.name(name)}. The default is
-  \code{default} if you give it. Else it is the value that the destination instance is
-  overridden with now. Else it is the default that $M_n$ declares. The type is the
-  type of $M_n$. An implicit type stays implicit.
-\item[Refused] A parameter that $M_n$ does not have, a \code{localparam}, a type
-  parameter, or a parameter declared in the body. A type or a value that is not
-  the same in every module on the path (the rules of \apiname{Vet.punch_port}); then
-  give \code{default=}. Each of $M_0\ldots M_{n-1}$ must be instantiated once.
-  $M_n$ itself may be shared; it is not edited.
-\item[Again] Skipped when the path already passes the parameter down.
-\item[Example] \file{propagate.py}. The value in use must not change. If it does,
-  sign-off says so: a parameter change at the destination is not permitted, and a
-  check compares the resolved value before and after.
+\item[Writes] The operation makes a parameter of $M_n$ settable from the top, without a
+  change of its value. Each of $M_0\ldots M_{n-1}$ gets
+  \code{parameter type name = default}. The operation overrides the instance below with
+  \code{.name(name)}. The default is the first of these that exists:
+  \begin{enumerate}
+  \item \code{default}, if you give it
+  \item the value that overrides the destination instance now
+  \item the default that $M_n$ declares
+  \end{enumerate}
+  The type is the type of $M_n$. An implicit type stays implicit.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a parameter that $M_n$ does not have, a \code{localparam}, a type
+    parameter, or a parameter declared in the body
+  \item a type or a value that is not the same in every module on the path (the rules of
+    \apiname{Vet.punch_port}). In this case, give \code{default=}.
+  \end{itemize}
+  The design must instantiate each of $M_0\ldots M_{n-1}$ once. The design can
+  instantiate $M_n$ itself more than once. The operation does not edit it.
+\item[Again] hdl-vet skips the operation when the path already passes the parameter down.
+\item[Example] \file{propagate.py}. The value in use must not change. If it changes,
+  the sign-off says so. The sign-off does not permit a parameter change at the
+  destination, and a check compares the resolved value before and after.
 \end{entry}
 
 \lstinputlisting[style=script]{examples/scripts/propagate.py}
 
 \lstinputlisting[style=console]{examples/console/ports.txt}
 
-In the transcript, look at three diffs. \file{ports.py} adds the port \code{status_o}
-with its assignment, and opens \code{count1_o} on \code{u_periph}. \file{params.py} turns
-the module header into \code{module soc_top }\texttt{\#}\code{(parameter int DEPTH = 2) (} and uses the
-parameter in the override. \file{propagate.py} adds a parameter \code{WIDTH} to
-\code{periph_wrap} and to \code{soc_top}, and passes it down: in \code{soc_top} the
-instance becomes \code{periph_wrap }\texttt{\#}\code{(.WIDTH(WIDTH)) u_periph}, and in \code{periph_wrap}
-the first timer gets \code{.WIDTH(WIDTH)}. The value stays 8 everywhere.
+In the transcript, look at three diffs:
+
+\begin{itemize}
+\item \file{ports.py} adds the port \code{status_o} with its assignment, and opens
+  \code{count1_o} on \code{u_periph}.
+\item \file{params.py} turns the module header into
+  \code{module soc_top }\texttt{\#}\code{(parameter int DEPTH = 2) (} and uses the
+  parameter in the override.
+\item \file{propagate.py} adds a parameter \code{WIDTH} to \code{periph_wrap} and to
+  \code{soc_top}, and passes it down. In \code{soc_top} the instance becomes
+  \code{periph_wrap }\texttt{\#}\code{(.WIDTH(WIDTH)) u_periph}. In \code{periph_wrap}
+  the first timer gets \code{.WIDTH(WIDTH)}. The value stays 8 everywhere.
+\end{itemize}
 
 \section{Replacing a module}
 
-You have a module that is not in your design, a technology cell, and you want an
+You have a module that is not in your design, a technology cell. You want an
 instance to use it. The cell is in a file that is not in the file list of the
-generator. Two operations do the job: \apiname{Vet.add_file} brings the file in, and
-\apiname{Instance.replace_module} switches the instance.
+generator. Two operations do the job. \apiname{Vet.add_file} adds the file to the
+design. \apiname{Instance.replace_module} changes the module of the instance.
 
 \lstinputlisting[style=source]{examples/cells/tech_rst_sync.sv}
 
 \begin{entry}{\sig{Vet.add_file}}
-\item[Writes] Nothing in the sources. The file joins the design as its last
-  source, and it is never edited. In the output tree it is a copy at
-  \file{hdl_vet_added/NAME}, the file list gets one more line for it (after the
-  design's own files), and \file{hdl-vet.json} lists it under \code{added}. On the
-  console, hdl-vet prints \code{added hdl_vet_added/NAME}. A relative file name
-  in the argument \code{path} starts from the current folder, not from the script. Use
-  \code{Path(__file__).resolve().parent} to make the script independent of where
-  you run it.
-\item[Refused] A file that cannot be read. A second added file with the same name.
-  An input tree that has the folder \file{hdl_vet_added} at its root. A file that
-  includes a header that is not a file of the design. A file whose addition gives
-  an error: a module that exists already, or a syntax error. Warnings that the file
-  already had when it was added are not counted as new. A warning that appears later in the
-  file, for example after an edit elsewhere changes how it is read, does count.
-\item[Again] Skipped when the file is already part of the design.
+\item[Writes] The operation writes nothing in the sources. The file joins the design as
+  its last source. hdl-vet never edits it. These things happen in the output tree:
+  \begin{itemize}
+  \item The output tree has a copy of the file at \file{hdl_vet_added/NAME}.
+  \item The file list gets one more line for the file, after the files that belong to the
+    design.
+  \item \file{hdl-vet.json} lists the file under \code{added}.
+  \end{itemize}
+  On the console, hdl-vet prints \code{added hdl_vet_added/NAME}. A relative file name
+  in the argument \code{path} starts from the current folder, not from the script. To make
+  the script independent of where you run it, use
+  \code{Path(__file__).resolve().parent}.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a file that cannot be read
+  \item a second added file with the same name
+  \item an input tree that has the folder \file{hdl_vet_added} at its root
+  \item a file that includes a header that is not a file of the design
+  \item a file whose addition gives an error: a module that exists already, or a syntax
+    error
+  \end{itemize}
+  hdl-vet does not count a warning as new if the file had it when the script added the
+  file. hdl-vet counts a warning that appears in the file later, for example after an
+  edit elsewhere changes how the file is read.
+\item[Again] hdl-vet skips the operation when the file is already part of the design.
 \item[Sign-off] The sign-off fails with \code{failed check: add_file NAME: none of
   its modules is instantiated} when no instance, other than a top module, uses a module
-  from the file. This is an error that you need to find (it is the last
-  transcript below).
+  from the file. The last transcript below shows this failure.
 \item[Example] \file{swap_cell.py}, \file{add_cell.py}.
 \end{entry}
 
 \begin{entry}{\sig{Instance.replace_module}}
-\item[Writes] The name of the new module in place of the old one, and the changes
-  to the connections and overrides that you name. The steps run in this order, and
-  existing text is not reformatted: (1) the module name is replaced; (2) renamed
-  connections and overrides get a new name, and the blanks before the opening
-  parenthesis stay; (3) dropped ones are removed (an override list that becomes
-  empty is removed whole); (4) \code{set_params}, then \code{connect}, then
-  \code{unconnected} are added, each in the order given.
-\item[Rules] Every named connection and override of the instance, and every port of
-  the new module, must be accounted for:
+\item[Writes] The operation writes the name of the new module in place of the old name.
+  It also writes the changes to the connections and overrides that you name. The steps run
+  in this order:
+  \begin{enumerate}
+  \item The operation replaces the module name.
+  \item It gives a new name to renamed connections and overrides. The blanks before the
+    opening parenthesis stay.
+  \item It removes dropped connections and overrides. If an override list becomes empty,
+    it removes the whole list.
+  \item It adds \code{set_params}, then \code{connect}, then \code{unconnected}. It adds
+    the entries of each in the order given.
+  \end{enumerate}
+  The operation does not reformat existing text.
+\item[Rules] Each connection and each override of the instance, and each port
+  of the new module, must be covered by one of these rules:
   \begin{itemize}
-  \item \code{ports={"old": "new"}} renames a connection;
-    \code{drop_ports=["old"]} removes it. A connection that you name in neither is
-    kept, if the new module has a port with that name.
+  \item \code{ports={"old": "new"}} renames a connection. \code{drop_ports=["old"]}
+    removes it. The operation keeps a connection that you name in neither, if the new
+    module has a port with that name.
   \item \code{params} and \code{drop_params} do the same for parameter overrides.
-  \item Every port of the new module needs a connection: the target of a kept or
-    renamed one, or \code{connect={"new": expr}}, or \code{unconnected=["new"]}.
+  \item Every port of the new module needs a connection. The connection is one of these:
+    \begin{itemize}
+    \item the target of a kept or renamed connection
+    \item \code{connect={"new": expr}}
+    \item \code{unconnected=["new"]}
+    \end{itemize}
     \code{unconnected} is for outputs and inouts. It writes an empty connection.
   \item \code{set_params={"name": value}} adds an override, or replaces a kept one.
     Parameters of the new module that nothing overrides keep their defaults.
   \end{itemize}
-\item[Refused] hdl-vet checks the maps first and reports all problems in one
-  message: something not accounted for (each one is named), a name that the instance
-  or the new module does not have, an input in \code{unconnected}, two things on
-  one port or parameter, a \code{set_params} name that is not an overridable value
-  parameter. It refuses a module with a non-ANSI port list, an interface port, and
-  positional overrides. It tries the edit and refuses when a kept or renamed port
-  has another direction, width or type in the new module (the message names both
-  ports), or when a parameter that both modules have and nothing overrides would
-  get another value.
-\item[was] The name of the module that you expect the instance to use now. If it
-  uses neither \code{was} nor the new module, the operation stops with a drift
-  error that names the module it does use. Without \code{was} the operation does not
-  check: it replaces whatever module the instance uses.
+\item[Refused] hdl-vet checks the maps first. It reports all problems in one
+  message. The problems are:
+  \begin{itemize}
+  \item something not covered by a rule (the message says \emph{is not accounted for} and
+    names each one)
+  \item a name that the instance or the new module does not have
+  \item an input in \code{unconnected}
+  \item two things on one port or parameter
+  \item a \code{set_params} name that is not an overridable value parameter
+  \end{itemize}
+  The operation also refuses a module with a non-ANSI port list, an interface port, and
+  positional overrides. It tries the edit. It refuses the edit when a kept or renamed port
+  has another direction, width or type in the new module. The message names both ports.
+  It also refuses the edit when the edit gives another value to a parameter that both modules
+  have and nothing overrides.
+\item[was] The name of the module that you expect the instance to use now. If the
+  instance uses neither the module in \code{was} nor the new module, the operation
+  stops with a drift error. The error names the module that the instance uses. Without
+  \code{was} the operation does not check. It replaces whatever module the instance uses.
 \item[Again] When the instance already uses the new module, hdl-vet compares only
-  \code{connect} and \code{set_params}: it skips when every entry is there, and
-  stops with a drift error that names the first entry that differs or is missing.
-\item[Sign-off] Requires \code{module-changed} at every path of the instance.
-  Permits every change at these paths and below them. A check at the end makes sure
-  that the instance uses the new module.
+  \code{connect} and \code{set_params}. If every entry is there, hdl-vet skips the operation.
+  Otherwise it stops with a drift error that names the first entry that differs or is
+  missing.
+\item[Sign-off] The sign-off requires \code{module-changed} at every path of the
+  instance. It permits every change at these paths and below them. At the end, a check
+  confirms that the instance uses the new module.
 \item[Example] \file{swap_cell.py}, \file{swap_cell_drop.py} and
   \file{swap_wrong.py}.
 \end{entry}
@@ -383,91 +488,123 @@ generator. Two operations do the job: \apiname{Vet.add_file} brings the file in,
 
 In the first script, the ports \code{clk_i}, \code{rst_ni}, \code{test_i} and
 \code{rst_no} get the names that the cell uses, and the parameter \code{STAGES}
-becomes \code{DEPTH}. The cell has an extra output, \code{SO}, which the script
-leaves open with \code{unconnected}. The second script does the same in another way:
-it drops \code{test_i}, ties the cell's \code{SE} to a constant with
-\code{connect}, drops the parameter \code{STAGES} and sets \code{DEPTH}. In the
-transcript you see the diff of the first script, the output tree of the second, and
-two failures: \file{swap_wrong.py} does not account for \code{SO} and
-\code{STAGES}, and \file{add_cell.py} adds the cell and does not use it.
+becomes \code{DEPTH}. The cell has an extra output, \code{SO}. The script
+leaves it open with \code{unconnected}.
+
+The second script does the same in another way. It drops \code{test_i}, and it ties
+\code{SE} of the cell to a constant with \code{connect}. It also drops the parameter
+\code{STAGES} and sets \code{DEPTH}.
+
+In the transcript, you see three things:
+
+\begin{itemize}
+\item the diff of the first script
+\item the output tree of the second script
+\item two failures: \file{swap_wrong.py} does not cover \code{SO} and
+  \code{STAGES}. \file{add_cell.py} adds the cell and does not use it.
+\end{itemize}
 
 Look at the diff of the first script. The renamed connections, such as \code{.CK  (clk_i)},
-keep the blanks that the old names had, so they no longer line up with each other. This is
-expected: bytes that are not edited are never reformatted, and a rename changes only the
-name. The line \code{added hdl_vet_added/tech_rst_sync.sv} after the diff says that the
-cell goes into the output tree.
+keep the blanks that the old names had, so they are not aligned with each other any more.
+This is as expected. hdl-vet never reformats bytes that it does not edit, and a rename
+changes only the name. The line \code{added hdl_vet_added/tech_rst_sync.sv} after the
+diff says that the cell goes into the output tree.
 
 \section{Removing things}
 
-The removal operations are checked operations (chapter~\ref{ch:scripts}). Each one
-is tried on the design and refused, with everything it did taken back, when it leaves
-something dangling, has a new diagnostic, or leaves a signal partly undriven. To
-remove a driver and its reader together, use a group. The removal takes the lines
-that it empties. This is the \emph{line rule}: if only blanks are left on the
-lines that the removed text occupied, these lines go too, with one line break.
-For an item of a list (a port, parameter, connection or override), the rule is:
+The removal operations are checked operations (chapter~\ref{ch:scripts}). hdl-vet tries
+each one on the design. If the operation leaves something dangling, gives a new
+diagnostic, or leaves a signal partly undriven, hdl-vet refuses it. It takes back
+everything that the operation did. To remove a driver and its reader together, use a group.
+
+The removal takes the lines that it empties. This is the \emph{line rule}. If only
+blanks stay on the lines that the removed text occupied, the removal takes these lines
+too, with one line break. For an item of a list (a port, parameter, connection or
+override), the rule is:
 
 \begin{itemize}
-\item an item that is not the last: the text from its start to the start of the next
-  item goes;
-\item the last of several: the comma after the previous item goes, with the item;
-\item the only item: the item goes. A list of overrides that becomes empty goes
-  whole. A parameter port list that becomes empty goes whole, from the end of the
-  module name through its closing parenthesis, when only blanks stand between the
-  name and \texttt{\#}.
+\item If the item is not the last, the removal takes the text from the start of the item
+  to the start of the next item.
+\item If the item is the last of several, the removal takes the comma after the previous
+  item, with the item.
+\item If the item is the only item, the removal takes the item. If a list of overrides
+  becomes empty, the removal takes the whole list. If a parameter port list becomes empty
+  and only blanks stand between the name and \texttt{\#}, the removal takes the whole
+  list. This is the text from the end of the module name through the closing parenthesis.
 \end{itemize}
 
 \begin{entry}{\sig{Module.remove_instance}}
-\item[Writes] Removes the instantiation statement (line rule).
-\item[Refused] An instance that comes from a macro, a generate block or an array.
-  A statement that declares several instances.
-\item[was] \code{module} works as \code{was}: when you give it and the instance uses
+\item[Writes] The operation removes the instantiation statement (line rule).
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item an instance that comes from a macro, a generate block or an array
+  \item a statement that declares several instances
+  \end{itemize}
+\item[was] \code{module} works as \code{was}. If you give it and the instance uses
   another module, the operation stops with a drift error. Without it, the operation does
   not check which module the instance uses.
-\item[Again] Skipped when the module has no instance of that name.
-\item[Sign-off] Requires \code{instance-removed} at every path, and permits any change
-  below them.
+\item[Again] hdl-vet skips the operation when the module has no instance of that name.
+\item[Sign-off] The sign-off requires \code{instance-removed} at every path. It permits
+  any change below these paths.
 \item[Example] \file{group.py}.
 \end{entry}
 
 \begin{entry}{\sig{Module.remove_wire}}
-\item[Writes] Removes the declaration of a module-level net or variable (line rule).
-\item[Refused] A name that is a port or something other than a net or variable. A
-  declaration that declares several names, or comes from a macro or an include, or
-  sits in a generate block.
-\item[Again] Skipped when nothing of that name is declared.
+\item[Writes] The operation removes the declaration of a module-level net or variable
+  (line rule).
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a name that is a port or something other than a net or variable
+  \item a declaration that declares several names, comes from a macro or an include, or
+    is in a generate block
+  \end{itemize}
+\item[Again] hdl-vet skips the operation when nothing of that name is declared.
 \item[Example] \file{group.py}.
 \end{entry}
 
 \begin{entry}{\sig{Module.remove_assign}}
-\item[Writes] Removes the continuous assignment to \code{target} (line rule).
-\item[Refused] Several assignments to the target. A statement that holds several
-  assignments, or comes from a macro or an include, or sits in a generate block.
+\item[Writes] The operation removes the continuous assignment to \code{target} (line
+  rule).
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item several assignments to the target
+  \item a statement that holds several assignments, comes from a macro or an include, or
+    is in a generate block
+  \end{itemize}
 \item[was] The right-hand side that you expect. A different one is a drift error.
   Without \code{was}, the operation does not check.
-\item[Again] Skipped when there is no assignment to the target.
+\item[Again] hdl-vet skips the operation when there is no assignment to the target.
 \item[Example] \file{retire.py}.
 \end{entry}
 
 \begin{entry}{\sig{Module.remove_port}}
-\item[Writes] Removes the port from the ANSI port list, and the connection to it at
-  every instance of the module.
-\item[Refused] A port whose successor takes its direction or type from it (a
-  declaration like \code{output logic [3:0] y0, y1}). A non-ANSI port list. A
-  header with a macro. Any instance whose connection list cannot be edited.
-\item[Again] Skipped when the module has no such port.
-\item[Sign-off] Requires \code{port-removed} at every path, and permits
+\item[Writes] The operation removes the port from the ANSI port list, and the connection
+  to it at every instance of the module.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a port whose successor takes its direction or type from it (a declaration like
+    \code{output logic [3:0] y0, y1})
+  \item a non-ANSI port list
+  \item a header with a macro
+  \item any instance whose connection list cannot be edited
+  \end{itemize}
+\item[Again] hdl-vet skips the operation when the module has no such port.
+\item[Sign-off] The sign-off requires \code{port-removed} at every path. It permits
   \code{connection-changed} for the port.
 \item[Example] \file{retire.py}.
 \end{entry}
 
 \begin{entry}{\sig{Module.remove_param}}
-\item[Writes] Removes the parameter from the parameter port list, and its override
-  at every instance.
-\item[Refused] A parameter that is declared in the body. A declaration of several
-  names. A header with a macro.
-\item[Again] Skipped when the module has no such parameter.
-\item[Sign-off] Requires \code{param-changed} at every path.
+\item[Writes] The operation removes the parameter from the parameter port list, and its
+  override at every instance.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a parameter that is declared in the body
+  \item a declaration of several names
+  \item a header with a macro
+  \end{itemize}
+\item[Again] hdl-vet skips the operation when the module has no such parameter.
+\item[Sign-off] The sign-off requires \code{param-changed} at every path.
 \item[Example] \file{retire.py}.
 \end{entry}
 
@@ -477,70 +614,85 @@ For an item of a list (a port, parameter, connection or override), the rule is:
 
 \lstinputlisting[style=console]{examples/console/remove.txt}
 
-\file{retire.py} takes the top-level output \code{irq_o} out of the design.
-The assignment and the port go in one group. The signal \code{irq} stays, and it
-is no longer read, so hdl-vet adds a note. The same script removes the parameter
-\code{ID}, which nobody uses, and the empty parameter list goes with it.
-\file{remove_timer.py} is refused: if the second timer goes, bit 1 of
+\file{retire.py} removes the top-level output \code{irq_o} from the design.
+It removes the assignment and the port in one group. The signal \code{irq} stays.
+Nothing reads it any more, so hdl-vet adds a note. The same script removes the parameter
+\code{ID}, which nobody uses. The empty parameter list goes too.
+
+hdl-vet refuses \file{remove_timer.py}. If the script removes the second timer, bit 1 of
 \code{irq_o} of \code{periph_wrap} has no driver, and something reads it.
 
 \section{Expectations by hand, and raw edits}
 \label{sec:byhand}
 
 Sometimes no operation does what you need. Then you edit the text yourself, and you
-tell the sign-off what to expect. Raw edits are not checked by an operation. The
-sign-off checks them, but only what it can see: the structure of the design and the
-diagnostics (chapter~\ref{ch:signoff}).
+tell the sign-off what to expect. No operation checks raw edits. The
+sign-off checks them, but it checks only what it can see. It can see the structure of
+the design and the diagnostics (chapter~\ref{ch:signoff}).
 
 \begin{entry}{\sig{Vet.splice}}
-\item[Writes] Replaces the bytes from \code{start} up to \code{end} of the file
-  \code{path} with \code{text} (a \code{bytes} value). Here \code{path} is a \emph{file}.
-  The offsets are offsets into \code{vet.text(path)}. The file is one of the design, for
-  example the attribute \code{path} of a module handle.
-\item[Refused] A file that is not a file of the design, or is not editable (an added
-  file is not). A range that overlaps an earlier splice. A range whose bytes differ
-  from \code{old}, if you gave it. Give \code{old} always: it keeps the splice from
-  going wrong when the text changes. A range that overlaps an earlier splice with another
-  range is refused with a \code{SpliceError} (chapter~\ref{ch:scripts}); the same range
-  with the same text a second time is accepted without a message.
+\item[Writes] The operation replaces the bytes from \code{start} up to \code{end} of the
+  file \code{path} with \code{text} (a \code{bytes} value). Here \code{path} is a
+  \emph{file}. The offsets are offsets into \code{vet.text(path)}. The file is a file of
+  the design, for example the attribute \code{path} of a module handle.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a file that is not a file of the design, or is not editable (an added file is
+    not editable)
+  \item a range that overlaps an earlier splice
+  \item a range whose bytes differ from \code{old}, if you gave it
+  \end{itemize}
+  Always give \code{old}. Then the splice cannot go wrong when the text changes. If a
+  range overlaps an earlier splice with another range, hdl-vet raises \code{SpliceError}
+  (chapter~\ref{ch:scripts}). The operation accepts the same range with the same text a
+  second time, without a message.
 \item[Again] A splice has no skip rule. With \code{old}, a second splice on text that
   is already edited is refused, because the bytes differ.
 \item[Example] \file{by_hand.py}. After a splice, the next operation loads the design
-  again, because the effect of a splice is unknown.
+  again, because hdl-vet does not know the effect of a splice.
 \end{entry}
 
 \begin{entry}{\sig{Vet.text}}
-\item[Writes] Nothing. It returns the text of a file of the design, as \code{bytes},
-  as of the last load. Edits that are still queued, such as a raw splice, are not in it
-  until the next load.
+\item[Writes] The operation writes nothing. It returns the text of a file of the design,
+  as \code{bytes}, as of the last load. The text does not have edits that are still in the
+  queue, such as a raw splice, until the next load.
 \end{entry}
 
 \begin{entry}{\sig{Vet.expect}}
-\item[Writes] Nothing in the text. It declares a change that the sign-off must see.
-  \code{kind}, \code{path} and \code{name} are patterns (\code{*}, \code{?} and
-  \code{[...]}; capital and small letters differ). \code{kind} is one of
-  \code{instance-added}, \code{instance-removed}, \code{module-changed},
-  \code{param-changed}, \code{port-added}, \code{port-removed}, \code{port-changed},
-  \code{port-type-changed} and \code{connection-changed}. \code{path} is the
-  hierarchical path of the instance. \code{name} is the port or parameter, and empty
-  for the kinds that name none. With \code{exact=True}, \code{path} is a plain path
-  and not a pattern.
-\item[Rules] A change that no expectation or permission covers fails the sign-off
-  (\emph{unexpected change}). An expectation that matches no change also fails it
-  (\emph{expected change not seen}).
+\item[Writes] The operation writes nothing in the text. It declares a change that the
+  sign-off must see. \code{kind}, \code{path} and \code{name} are patterns (\code{*},
+  \code{?} and \code{[...]}). Capital and small letters differ. \code{kind} is one of
+  these:
+  \begin{itemize}
+  \item \code{instance-added}
+  \item \code{instance-removed}
+  \item \code{module-changed}
+  \item \code{param-changed}
+  \item \code{port-added}
+  \item \code{port-removed}
+  \item \code{port-changed}
+  \item \code{port-type-changed}
+  \item \code{connection-changed}
+  \end{itemize}
+  \code{path} is the hierarchical path of the instance. \code{name} is the port or
+  parameter. It is empty for the kinds that name none. With \code{exact=True},
+  \code{path} is a plain path and not a pattern.
+\item[Rules] A change that no expectation or permission covers makes the sign-off fail
+  (\emph{unexpected change}). An expectation that matches no change also makes the
+  sign-off fail (\emph{expected change not seen}).
 \item[Example] \file{by_hand.py}, \file{unexpected.py}, \file{unseen.py}.
 \end{entry}
 
 \begin{entry}{\sig{Vet.permit}}
-\item[Writes] Nothing in the text. As \apiname{Vet.expect}, but the change \emph{may} happen.
-  No change is not an error. Use it for changes that follow from yours but that you
-  do not need to see.
+\item[Writes] The operation writes nothing in the text. It works as
+  \apiname{Vet.expect}, but the change \emph{can} happen. If no change happens, this is
+  not an error. Use it for changes that follow from yours but that you do not have to see.
 \item[Example] \file{by_hand.py}.
 \end{entry}
 
 \begin{entry}{\sig{Instance.allow_changes_below}}
-\item[Writes] Nothing in the text. It permits every structural change strictly below
-  each path of the instance.
+\item[Writes] The operation writes nothing in the text. It permits every structural
+  change strictly below each path of the instance.
 \item[Example] \file{below.py}.
 \end{entry}
 
@@ -556,7 +708,13 @@ diagnostics (chapter~\ref{ch:signoff}).
 
 \file{by_hand.py} makes two raw edits. It changes the tie-off of \code{test_i}, and
 declares this with \code{expect}. It changes the parameter \code{STAGES}, and says
-with \code{permit} that this may show up. \file{below.py} edits the enable of the
+with \code{permit} that this can happen. \file{below.py} edits the enable of the
 first timer. The change is below \code{u_periph}, and \code{allow_changes_below}
-covers it. The last two scripts show the two failures of the sign-off: a change
-that nobody declared, and a declaration without a change.
+covers it.
+
+The last two scripts show the two failures of the sign-off:
+
+\begin{itemize}
+\item a change that nobody declared
+\item a declaration without a change
+\end{itemize}

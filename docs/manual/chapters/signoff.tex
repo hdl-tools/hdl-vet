@@ -2,31 +2,31 @@
 \label{ch:signoff}
 
 The \term{sign-off} is the last step of a run. It decides whether hdl-vet writes the
-output tree. You see it when it fails, so this chapter is about what each failure
-says and what to do about it.
+output tree. You see the sign-off when it fails. So this chapter is about what each
+failure says and what to do about it.
 
 \section{What the sign-off does}
 
-When all scripts have run, hdl-vet does these steps.
+When the last script ends, hdl-vet does these steps:
 
 \begin{enumerate}
-\item It applies the queued edits to the text.
+\item It applies the edits in the queue to the text.
 \item It adds the header line \code{// Modified by hdl-vet; scripts: ...} to every file
-  that differs from its original. The header is part of the text that is checked.
-  What is checked is byte for byte what would be written.
-\item If a file differs, it loads the edited design and compares it with the design
-  that you started from, the \term{baseline}.
+  that differs from its original. The header is part of the text that the sign-off
+  checks. The sign-off checks byte for byte the text that hdl-vet would write.
+\item If a file differs, it loads the edited design. It compares the edited design with
+  the design that you started from, the \term{baseline}.
 \item It evaluates the checks that the operations registered.
 \end{enumerate}
 
-If every step passes, the output tree is written. If a file did not change, there is
-nothing to compare, and the checks run on the baseline. Everything is compared
-against the baseline, not against zero: a warning that the generator's design
-already has is not your problem, and does not fail the sign-off.
+If every step passes, hdl-vet writes the output tree. If no file changed, there is
+nothing to compare, and the checks run on the baseline. hdl-vet compares everything
+with the baseline, not with zero. A warning that the design of the generator
+already has is not your problem. It does not make the sign-off fail.
 
-A failed sign-off prints \code{hdl-vet sign-off: FAILED} and one line for each
-problem, to the error output. The exit status is 1. No output tree is written. This
-holds with \opt{--dry-run} too.
+If the sign-off fails, hdl-vet prints \code{hdl-vet sign-off: FAILED} and one line for
+each problem, to the error output. The exit status is 1. hdl-vet writes no output tree.
+This holds with \opt{--dry-run} too.
 
 The exit status is 1 when the sign-off fails. Chapter~\ref{ch:cli} lists all exit statuses.
 
@@ -37,41 +37,51 @@ shows one failure of each kind.
 
 \begin{description}
 \item[the edited design cannot be loaded: REASON] The compiler cannot read the
-  edited text, or cannot find the top module. The reason is its message. Look at
-  your raw edits, or at an operation that changed a name that the top module needs.
-  An operation that fails in this way alone is usually refused before.
+  edited text, or cannot find the top module. The reason is the message of the compiler.
+  Look at your raw edits, or at an operation that changed a name that the top module
+  needs. If an operation alone causes this failure, hdl-vet usually refuses the operation
+  before.
 
 \item[new file read by the edited design, not in the baseline: PATH] The edited
-  design reads a file that the original design did not read. A raw edit added an
-  \code{`include}. Use \apiname{Vet.add_file} to bring in a file on purpose.
+  design reads a file that the original design did not read. The cause is a raw edit that
+  added an \code{`include}. To add a file on purpose, use \apiname{Vet.add_file}.
 
 \item[new diagnostic: SEVERITY CODE at FILE:LINE: MESSAGE] The compiler reports an
-  error or a warning that the baseline did not have. \code{CODE} is the compiler's
-  name for it, for example \code{PortWidthExpand}. \code{FILE} and \code{LINE} are
-  in the edited text. The compiler reports its errors and its default warnings,
-  and hdl-vet switches on five more that an edit of ports can cause:
-  \code{ImplicitNet}, \code{PortWidthTruncate}, \code{PortWidthExpand},
-  \code{WidthTruncate} and \code{EmptyInputPortConn}. Notes of the compiler are
-  not counted. A diagnostic that is in the
-  baseline and has only moved because of an edit is not new. Warnings that a file
-  already had when a script added it are not new, but a later warning located in that file
-  counts. Read the message and the line, and fix the
-  script.
+  error or a warning that the baseline did not have. \code{CODE} is the name that the
+  compiler gives to it, for example \code{PortWidthExpand}. \code{FILE} and \code{LINE}
+  refer to the edited text.
 
-\item[left dangling: MESSAGE in module MODULE (FILE:LINE)] Something is read but
+  The compiler reports its errors and its default warnings. hdl-vet switches on five
+  more warnings that an edit of ports can cause:
+  \begin{itemize}
+  \item \code{ImplicitNet}
+  \item \code{PortWidthTruncate}
+  \item \code{PortWidthExpand}
+  \item \code{WidthTruncate}
+  \item \code{EmptyInputPortConn}
+  \end{itemize}
+
+  The sign-off does not count notes of the compiler. A diagnostic that is in the
+  baseline and only moved because of an edit is not new. Warnings that a file
+  already had when a script added it are not new. A later warning in that file
+  counts. Read the message and the line, and fix the script.
+
+\item[left dangling: MESSAGE in module MODULE (FILE:LINE)] Something reads a signal but
   nothing drives it. See the next section.
 
 \item[unexpected change: KIND PATH NAME: BEFORE -> AFTER] The structure of the
   design changed in a way that no operation and no \code{expect} or \code{permit}
-  explains. \code{KIND} is the kind of change (see \apiname{Vet.expect}), \code{PATH}
-  the instance, \code{NAME} the port or parameter, if any. The values are the text
-  before and after. A change that you made by hand needs an \code{expect}. A change
-  that you did not expect from an operation shows that the operation touched more than
-  you thought.
+  explains. \code{KIND} is the kind of change (see \apiname{Vet.expect}). \code{PATH}
+  is the instance. \code{NAME} is the port or parameter, if any. The values are the text
+  before and after.
 
-\item[expected change not seen: KIND path=PATH name=NAME] Something was expected
-  (\code{expect}, or an operation that must change the structure) and the design
-  does not show it. Another edit may have undone it, or the \code{expect} is wrong.
+  A change that you made by hand needs an \code{expect}. If an operation
+  makes a change that you did not expect, the operation changed more than you thought.
+
+\item[expected change not seen: KIND path=PATH name=NAME] An \code{expect}, or an
+  operation that must change the structure, expected a change, and the design does not
+  show it. One possible cause is that another edit undid the change. Another possible
+  cause is that the \code{expect} is wrong.
 
 \item[failed check: MESSAGE] A post-condition failed. See the section after next.
 \end{description}
@@ -89,8 +99,8 @@ opens an output that something reads. \file{unexpected.py}, \file{unseen.py} and
 
 \lstinputlisting[style=console]{examples/console/signoff.txt}
 
-The last-but-one command runs two scripts that fail in different ways. The report has
-one line for each problem.
+The command before the last command runs two scripts that fail in different ways. The
+report has one line for each problem.
 
 \section{Dangling: an output may float, an input may not}
 
@@ -98,32 +108,34 @@ The sign-off compares the \term{dangling set} of the final design with that of t
 baseline. Only new entries fail. The set holds:
 
 \begin{itemize}
-\item a net or variable that is read but never driven;
+\item a net or variable that is read but never driven
 \item an output port that nothing inside its module drives, \emph{but only when
-  something reads it}: some instance of the module connects it to a non-empty
-  expression, or the module itself reads its signal.
+  something reads it}. Something reads it when some instance of the module connects it
+  to a non-empty expression, or the module itself reads its signal.
 \end{itemize}
 
-An output that nobody reads may float. It is allowed. This is the case when
-every instance leaves it open (\code{.p()}), and for an output of the top module.
-An input may not float. A new input port that no instance connects is a new
+An output that nobody reads can float. This is allowed. It is the case when
+every instance leaves the output open (\code{.p()}), and for an output of the top module.
+
+An input must not float. A new input port that no instance connects is a new
 diagnostic. An input connected to nothing with \code{.p()} is a new diagnostic too.
 Entries inside an added file never count.
 
 The transcript shows a run in which \file{dangling.py} disconnects the output
-\code{irq_o} of \code{u_periph}. The signal \code{irq} is read by the top module
-and is now driven by nobody: \emph{left dangling}. In chapter~\ref{ch:operations},
+\code{irq_o} of \code{u_periph}. The top module reads the signal \code{irq}, and nobody
+drives it now. This is \emph{left dangling}. In chapter~\ref{ch:operations},
 \file{ports.py} disconnects \code{count1_o}, which goes to an output of the top
-module: that is allowed.
+module. This is allowed.
 
 The sign-off does not see everything. Chapter~\ref{ch:limits} lists what it misses,
 for example a signal that loses the driver of only some of its bits.
 
 \section{Post-conditions}
 
-Each applied operation registers a \term{check} that is evaluated on the final
-design. The check makes sure that a later edit has not undone the operation. A failed
-check starts with the name of the operation and the target. Examples:
+Each applied operation registers a \term{check}. The sign-off evaluates the check on the
+final design. The check makes sure that a later edit did not undo the operation. The
+report of a failed check starts with the name of the operation and the target. These are
+examples:
 
 \begin{itemize}
 \item \code{failed check: add_wire soc_top tmp: declaration not found in the final
@@ -134,8 +146,8 @@ check starts with the name of the operation and the target. Examples:
   from 8 to 4}
 \end{itemize}
 
-If you see one, look at the later operations of your script (or of a later script):
-one of them has changed what this operation wrote. Two operations that cancel each
+If you see one, look at the later operations of your script (or of a later script).
+One of them changed what this operation wrote. Two operations that cancel each
 other, such as \apiname{Module.add_wire} and \apiname{Module.remove_wire} on the same name,
 fail in this way.
 
@@ -144,37 +156,49 @@ Skipped operations register no check.
 \section{Expectations}
 
 The sign-off compares the structure of the baseline and the final design, instance by
-instance. A \term{change} has a kind, the path of the instance, a name and the text
-before and after.
+instance. A \term{change} has these parts:
+
+\begin{itemize}
+\item a kind
+\item the path of the instance
+\item a name
+\item the text before and after
+\end{itemize}
+
+The kinds are:
 
 \begin{description}
-\item[instance-added, instance-removed] An instance appears or goes. An added or
+\item[instance-added, instance-removed] An instance appears or disappears. An added or
   removed instance shows only this change, and the same change for each instance
   below it.
 \item[module-changed] The instance uses another module.
 \item[param-changed] A parameter has another value at the instance.
 \item[port-added, port-removed, port-changed] The module of the instance gains, loses or
-  changes a port. A port is described by its direction and width, for example
+  changes a port. hdl-vet describes a port by its direction and width, for example
   \code{input 1}.
 \item[port-type-changed] The direction and width stay, but the declared type differs.
 \item[connection-changed] The connection of a port has other text.
 \end{description}
 
-Every change must be covered by an expectation or a permission, and every
+An expectation or a permission must cover every change, and every
 expectation must match a change. Operations register their own. For example,
 \apiname{Module.add_port} requires \code{port-added} at every path of the module, and
-permits \code{connection-changed} for the port. You add yours with \apiname{Vet.expect}
+permits \code{connection-changed} for the port. You add your own with \apiname{Vet.expect}
 and \apiname{Vet.permit}.
 
 \section{Name the top module}
 
-hdl-vet needs to know the top module of your design. If you give none with
-\opt{--top}, it takes the modules that nobody instantiates. There is a trap. If your
-script replaces or removes the \emph{last} instance of a module, that module is no
-longer instantiated, so it becomes a top-level module of the edited design. The
-sign-off then reports \code{instance-added}: a new top appeared. This is not a
-problem of your script. Name the top module, and the edited design has the same top
-as the original. The transcript shows both. Put \code{top} in the project file so
-that nobody forgets.
+hdl-vet must know the top module of your design. If you give none with
+\opt{--top}, it takes the modules that nobody instantiates.
+
+There is one case that is easy to miss. If your
+script replaces or removes the \emph{last} instance of a module, that module has no
+instance any more. So it becomes a top-level module of the edited design. The
+sign-off then reports \code{instance-added}. A new top appeared. This is not a
+problem of your script.
+
+Name the top module. Then the edited design has the same top as the original. The
+transcript shows both. Put \code{top} in the project file so
+that nobody forgets it.
 
 \lstinputlisting[style=console]{examples/console/top.txt}
