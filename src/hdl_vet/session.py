@@ -726,6 +726,8 @@ class Session:
     def owned_paths(self) -> dict[Path, str]:
         """Files of the user's that saving must never replace, each with what it is."""
         out = {self._filelist_path: "the file list"}
+        for path in self._fl.lists:
+            out.setdefault(path, "a file list the design reads")
         for name, (path, _) in self._added.items():
             out.setdefault(path, f"the source of the added file {name.rsplit('/', 1)[-1]}")
         return out
@@ -767,6 +769,7 @@ class Session:
                 "incdirs": [str(p) for p in fl.incdirs],
                 "defines": [[name, value] for name, value in fl.defines.items()],
                 "root": str(fl.root),
+                "lists": [str(p) for p in fl.lists],
             },
             "files": [str(p) for p in self._files],
             "changed": [str(p) for p in changed],
@@ -829,6 +832,8 @@ class Session:
             [under(v) for v in need_list(fl_in["incdirs"])],
             defines,
             under(fl_in["root"]),
+            # The file lists lie anywhere; an archive from before this record has none.
+            [_stored_path(v) for v in need_list(fl_in["lists"])] if "lists" in fl_in else [],
         )
         paths = [under(v) for v in need_list(index["files"])]
         changed = [under(v) for v in need_list(index["changed"])]

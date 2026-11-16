@@ -28,11 +28,13 @@ class Filelist:
     incdirs: list[Path]
     defines: dict[str, str | None]
     root: Path
+    lists: list[Path] = field(default_factory=list)  # every file list read, the top-level one first
 
 
 @dataclass
 class _State:
     root: Path
+    lists: list[Path] = field(default_factory=list)
     files: list[Path] = field(default_factory=list)
     incdirs: list[Path] = field(default_factory=list)
     defines: dict[str, str | None] = field(default_factory=dict)
@@ -44,7 +46,7 @@ def read_filelist(path: Path, base: Path | None = None) -> Filelist:
     root = top.parent if base is None else Path(base).resolve()
     state = _State(root=root)
     _read(top, root, state, (top,))
-    return Filelist(state.files, state.incdirs, state.defines, state.root)
+    return Filelist(state.files, state.incdirs, state.defines, state.root, state.lists)
 
 
 def _expand(text: str, where: str) -> str:
@@ -69,8 +71,9 @@ def _strip_comment(line: str) -> str:
 def _read(fl: Path, base: Path, state: _State, stack: tuple[Path, ...]) -> None:
     try:
         text = fl.read_text(encoding="utf-8-sig")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise FilelistError(f"{fl}: cannot read file list: {e}") from e
+    state.lists.append(fl)
     for lineno, raw in enumerate(text.splitlines(), start=1):
         line = _strip_comment(raw)
         if not line:
