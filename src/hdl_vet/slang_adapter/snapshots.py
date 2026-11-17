@@ -1,0 +1,216 @@
+"""The elaborated instances of a `Design`: the structural snapshot and the primitive snapshot."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pyslang
+
+from hdl_vet.slang_adapter.host import _DesignHost
+from hdl_vet.slang_adapter.records import InstanceSnap
+from hdl_vet.slang_adapter.text import _clean_text
+
+_DIRECTIONS = {
+    "In": "input",
+    "Out": "output",
+    "InOut": "inout",
+    "Ref": "ref",
+}
+
+
+class _SnapshotOps(_DesignHost):
+    """The elaborated instances, `snapshot`, `gate_snapshot` and `instance_snap`."""
+
+    # --- elaborated structure ----------------------------------------------
+
+    def _visit_instances(self, fn: Any) -> None:
+        """Call `fn` on every instance reachable from the top instance(s).
+
+        Visiting the whole root would also reach the "$unit" instances slang makes
+        for definitions nobody instantiates; those are not part of the design.
+        """
+        for sym in self._instances():
+            fn(sym)
+
+    def _instances(self, exhaustive: bool = False) -> tuple[Any, ...]:
+        """Every instance symbol under the top instance(s), in visit order.
+
+        The whole tree is traversed either way; the difference is who filters.
+        By default slang filters by node kind in C++ (`lookup_table`) and calls
+        back only for instances. Filtering in a Python callback instead means
+        2.1 million calls for 4,836 instances on the demo_ss sample, about fifteen
+        times slower; that is what `exhaustive=True` does, uncached, so tests can
+        cross-check the fast path. Nothing is pruned, so there is no list of
+        "kinds that can contain instances" to keep right.
+        The result is cached (as a tuple): a Design never changes.
+        """
+        if not exhaustive and self._instance_cache is not None:
+            return self._instance_cache
+        instance = pyslang.ast.SymbolKind.Instance
+        out: list[Any] = []
+
+        def plain(node: Any) -> None:
+            if node.kind == instance:
+                out.append(node)
+
+        for top in self._comp.getRoot().topInstances:
+            if exhaustive:
+                top.visit(plain)
+            else:
+                top.visit(lookup_table={instance: out.append})
+        result = tuple(out)
+        if not exhaustive:
+            self._instance_cache = result
+        return result
+
+    def elaborated_instance_paths(self, exhaustive: bool = False) -> list[str]:
+        """Hierarchical paths of all instances under the top(s), sorted."""
+        return sorted(str(s.hierarchicalPath) for s in self._instances(exhaustive))
+
+    def elaborated_instance_count(self) -> int:
+        return len(self._instances())
+
+    def snapshot(self) -> dict[str, InstanceSnap]:
+        if self._snap is None:
+            self._snap = self._build_snapshot()
+        return dict(self._snap)
+
+    def _build_snapshot(self) -> dict[str, InstanceSnap]:
+        tops = {t.hierarchicalPath for t in self._comp.getRoot().topInstances}
+        out: dict[str, InstanceSnap] = {}
+
+        def one(sym: Any) -> None:
+            out[sym.hierarchicalPath] = self._snap_of(sym, sym.hierarchicalPath in tops)
+
+        self._visit_instances(one)
+        return out
+
+    def _snap_of(self, sym: Any, is_top: bool) -> InstanceSnap:
+        sk = pyslang.ast.SymbolKind
+        body = sym.body
+        params: dict[str, str] = {}
+        for p in body.parameters:
+            params[p.name] = str(p.value) if p.kind == sk.Parameter else str(p.targetType.type)
+        ports: dict[str, tuple[str, int]] = {}
+        port_types: dict[str, str] = {}
+        conns: dict[str, str] = {}
+        for port in body.portList:
+            if port.kind == sk.Port:
+                ports[port.name] = (_DIRECTIONS[port.direction.name], port.type.bitWidth)
+                port_types[port.name] = str(port.type)
+            else:
+                ports[port.name] = ("interface", 0)
+            if not is_top:
+                conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
+        return InstanceSnap(body.definition.name, params, ports, conns, port_types)
+
+    def gate_snapshot(self) -> dict[str, InstanceSnap]:
+        """The snapshot of the instances that are not module instances: primitives and checkers.
+
+        Same shape as `snapshot()`. The `module` is the primitive or checker type, there are
+        no parameters and no ports, and `connections` maps the position of the terminal ("0",
+        "1", ...) to its text. A named instance has the path of its name; an unnamed one has
+        `<scope>.<TYPE:N>`, N counting the unnamed instances of that type in the scope from 0.
+        Kept apart from `snapshot()` so that nothing that reads the module instances sees these.
+        """
+        if self._gate_snap is None:
+            self._gate_snap = self._build_gate_snapshot()
+        return dict(self._gate_snap)
+
+    def _build_gate_snapshot(self) -> dict[str, InstanceSnap]:
+        sk = pyslang.ast.SymbolKind
+        found: list[Any] = []
+        for top in self._comp.getRoot().topInstances:
+            top.visit(lookup_table={sk.PrimitiveInstance: found.append, sk.CheckerInstance: found.append})
+        out: dict[str, InstanceSnap] = {}
+        unnamed: dict[tuple[str, str], int] = {}
+        for sym in found:
+            if sym.parentScope.isUninstantiated:  # a generate branch that is not taken
+                continue
+            if sym.kind == sk.PrimitiveInstance:
+                kind = str(sym.primitiveType.name)
+                terminals = list(sym.portConnections)
+            else:
+                kind = str(sym.body.name)
+                terminals = [c.actual for c in sym.portConnections]
+            path = str(sym.hierarchicalPath)
+            if sym.arrayName:  # an element of an array of primitives: its path ends in the index
+                path += "".join(f"[{i}]" for i in sym.arrayPath)
+            elif not sym.name:
+                n = unnamed.get((path, kind), 0)
+                unnamed[(path, kind)] = n + 1
+                path = f"{path}.<{kind}:{n}>"
+            written = self._written_terminals(sym)
+            conns = {}
+            for i, e in enumerate(terminals):
+                text = self._terminal_text(e)
+                if not text and i < len(written):  # an element of an array: its bit has no text of its own
+                    text = written[i]
+                conns[str(i)] = text
+            out[path] = InstanceSnap(kind, {}, {}, conns)
+        return out
+
+    def _written_terminals(self, sym: Any) -> list[str]:
+        """The texts of the ordered connections of the statement that holds `sym`."""
+        syntax = sym.syntax
+        if syntax is None or not hasattr(syntax, "connections"):
+            return []
+        return [_clean_text(c.expr) for c in syntax.connections if getattr(c, "expr", None) is not None]
+
+    def _terminal_text(self, e: Any) -> str:
+        ek = pyslang.ast.ExpressionKind
+        if e is None:
+            return ""
+        while e.kind in (ek.Assignment, ek.Conversion):
+            if e.kind == ek.Assignment:
+                e = e.left
+            elif e.isImplicit:
+                e = e.operand
+            else:
+                break
+        return "" if e.syntax is None else _clean_text(e.syntax)
+
+    def instance_snap(self, path: str) -> InstanceSnap | None:
+        """The snapshot of the one instance at `path`, without building the whole snapshot.
+
+        None when there is no instance at that path. Equal to `snapshot().get(path)`.
+        """
+        if self._snap is not None:
+            return self._snap.get(path)
+        try:
+            sym = self._comp.getRoot().lookupName(path)
+        except RuntimeError:  # slang cannot look up a name such as `top.module`
+            sym = None
+        if sym is None:
+            return self.snapshot().get(path)
+        if sym.kind != pyslang.ast.SymbolKind.Instance:
+            return None
+        return self._snap_of(sym, "." not in path)
+
+    def _connection_text(self, port: Any, conn: Any) -> str:
+        ek = pyslang.ast.ExpressionKind
+        if conn is None:
+            return ""
+        e = conn.expression
+        if e is None:
+            iface = conn.ifaceConn
+            if iface is not None and iface[0] is not None:
+                return str(iface[0].name)
+            return ""
+        # Outputs and inouts arrive as an assignment to the connected signal, and
+        # a width mismatch as an implicit conversion around it; the text is the
+        # signal's. An explicit cast is part of what the designer wrote: it stays.
+        while True:
+            if e.kind == ek.Assignment:
+                e = e.left
+            elif e.kind == ek.Conversion and e.isImplicit:
+                e = e.operand
+            else:
+                break
+            if e.syntax is not None:
+                break
+        if e.syntax is None:
+            # Implicit `.name`, `.*` and interface ports have no source expression.
+            symbol = getattr(e, "symbol", None)
+            return str(getattr(symbol, "name", None) or port.name)
+        return _clean_text(e.syntax)

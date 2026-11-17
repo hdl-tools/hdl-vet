@@ -16,11 +16,11 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(REPO / "tests"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "support"))
 
-import hdl_vet  # noqa: E402
-from vetkit import make_design  # noqa: E402
+import hdl_vet
+from repo import REPO
+from vetkit import make_design
 
 SCRIPT = """\
 def apply(vet):
@@ -37,7 +37,10 @@ def main() -> int:
     if installed == source or (REPO / "src") in installed.parents:
         print(f"FAIL: hdl_vet was imported from the source tree ({installed}), not from an installed wheel")
         return 1
-    missing = sorted({p.name for p in source.glob("*.py")} - {p.name for p in installed.glob("*.py")})
+    missing = sorted(
+        {p.relative_to(source).as_posix() for p in source.rglob("*.py")}
+        - {p.relative_to(installed).as_posix() for p in installed.rglob("*.py")}
+    )
     if missing:
         print(f"FAIL: modules missing from the wheel: {', '.join(missing)}")
         return 1
