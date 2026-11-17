@@ -80,11 +80,12 @@ jobs:
         shell: bash
         run: |
           uv venv
-          uv pip install -e . "pytest>=8" ./.hdl-bag
-      - name: Test (corpus required)
+          uv pip install -e ".[equiv]" "pytest>=8" ./.hdl-bag
+      - name: Test (corpus and Yosys required)
         shell: bash
         env:
           HDL_VET_REQUIRE_CORPUS: "1"
+          HDL_VET_REQUIRE_EQUIV: "1"
           HDL_BAG_REPO: ${{ github.workspace }}/.hdl-bag
         run: uv run --no-sync pytest -q
 

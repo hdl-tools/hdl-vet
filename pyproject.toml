@@ -30,6 +30,10 @@ dependencies = [
     "pyslang==12.1.0",
 ]
 
+[project.optional-dependencies]
+# The formal equivalence check of `hdl_vet.equiv`. Pinned on purpose: a new Yosys can change a verdict.
+equiv = ["yowasp-yosys==0.71.0.0.post1285"]
+
 [project.urls]
 Repository = "https://github.com/hdl-tools/hdl-vet"
 Issues = "https://github.com/hdl-tools/hdl-vet/issues"
@@ -44,6 +48,8 @@ dev = [
     # an unrelated pull request. Bump them deliberately, together with any cleanup.
     "ruff==0.17.5",
     "mypy==2.4.1",
+    # The same pin as the extra `equiv`, so that the tests of the equivalence check run.
+    "yowasp-yosys==0.71.0.0.post1285",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -91,4 +97,5 @@ pythonpath = ["tests"]
 addopts = "-ra --strict-markers"
 markers = [
     "corpus: needs the hdl-bag CLI (`bag`) to generate designs; skipped when it is absent",
+    "equiv: needs Yosys (the extra `equiv`); skipped when it is absent unless HDL_VET_REQUIRE_EQUIV=1",
 ]
