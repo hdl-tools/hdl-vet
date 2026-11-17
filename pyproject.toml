@@ -98,4 +98,5 @@ addopts = "-ra --strict-markers"
 markers = [
     "corpus: needs the hdl-bag CLI (`bag`) to generate designs; skipped when it is absent",
     "equiv: needs Yosys (the extra `equiv`); skipped when it is absent unless HDL_VET_REQUIRE_EQUIV=1",
+    "bigproof: a proof on a large generated design (minutes, gigabytes); one CI job runs these",
 ]

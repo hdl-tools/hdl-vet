@@ -105,6 +105,8 @@ If `bag` or the clone is missing, pytest skips the corpus tests that need it. If
 uv run --no-sync pytest -q
 ```
 
+Some corpus tests prove a module of a large design. They have the marker `bigproof`. Each one takes about one minute and about 2.5 GB of memory. In CI, one job runs them. To run all tests but these, add `-m "not bigproof"`.
+
 If you change the output of a command, the transcripts of the manual and of the README change. If you change the scripting API, the same command rewrites `docs/manual/api.tex`. Rewrite them with this command. Before you commit, read the diff.
 
 ```sh
