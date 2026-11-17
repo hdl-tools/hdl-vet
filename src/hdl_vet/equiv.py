@@ -82,6 +82,9 @@ _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
 _PORT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_$.]*\Z")
 _VALUE = re.compile(r"[A-Za-z0-9_'.+\-]+\Z")
 _MACRO_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_MOUNT = "/hostfs_"  # POSIX: the child sees the top-level folder NAME of the host as /hostfs_NAME (see `_Seen`)
+_MOUNT_IN_TEXT = re.compile(r"/hostfs_([^/\s'\"]+)")
+_FILES = re.compile(r"(?<![\w/.-])((?:gold|gate)(?:_h)?\.(?:f|json|il)|prepared\.il|check\.json)(?!\w)")
 _REPORT_TIMEOUT = 30.0  # seconds for the report of undefined values, apart from the timeout of the proof
 _MAX_DETAIL = 300
 _LOCK = threading.Lock()
@@ -144,6 +147,8 @@ def check(
         raise ValueError(f"timeout must be a positive number of seconds: {timeout!r}")
 
     def done(status: str, detail: str) -> Result:
+        if os.name != "nt":
+            detail = _MOUNT_IN_TEXT.sub(r"/", detail)  # a path in a message is the host path, not the mount
         return Result(status, module, _one_line(detail), time.monotonic() - started)
 
     if not available():
@@ -176,9 +181,11 @@ def _run_child(
     with tempfile.TemporaryDirectory(prefix="hdl_vet_equiv_", ignore_cleanup_errors=True) as folder:
         work = Path(folder)
         (work / "tmp").mkdir()
+        seen = _Seen()
         try:
-            _write_list(work / "gold.f", gold)
-            _write_list(work / "gate.f", gate)
+            work_seen = seen(work)
+            _write_list(work / "gold.f", gold, seen)
+            _write_list(work / "gate.f", gate, seen)
         except _Refused as exc:
             return done("error", str(exc))
         spec = {"module": module, "params": params, "tie": tie, "same": same}
@@ -188,6 +195,13 @@ def _run_child(
         env = dict(os.environ)
         for name in ("TEMP", "TMP", "TMPDIR"):
             env[name] = str(work / "tmp")
+        # The user's own YOWASP_MOUNT must not reach the child. On POSIX ours replaces it (see `_Seen`);
+        # on Windows the default mounts of the drives are right.
+        env.pop("YOWASP_MOUNT", None)
+        env.pop("HDL_VET_HOSTFS", None)
+        if os.name != "nt":
+            env["YOWASP_MOUNT"] = ":".join(f"{_MOUNT}{top}=/{top}" for top in sorted(seen.tops))
+            env["HDL_VET_HOSTFS"] = work_seen
         try:
             done_run = _spawn(work, ["spec.json"], env, timeout)
         except subprocess.TimeoutExpired:
@@ -325,11 +339,11 @@ def _read_answer(path: Path) -> tuple[str, str] | None:
     return status, detail
 
 
-def _write_list(path: Path, side: Source) -> None:
+def _write_list(path: Path, side: Source, seen: Callable[[Path | str], str]) -> None:
     """A file list for read_slang's `-f`: quoted absolute paths with forward slashes (blanks survive)."""
     lines: list[str] = []
     for folder in side.incdirs:
-        lines.append(f'-I "{_posix(folder)}"')
+        lines.append(f'-I "{seen(folder)}"')
     for name, value in side.defines.items():
         # Inside the double quotes of the reader's file only four things are special: the quote itself,
         # the backslash, `$` (an environment variable, dropped when unknown) and the line break.
@@ -342,7 +356,7 @@ def _write_list(path: Path, side: Source) -> None:
         if any(c in value for c in "\\$\n\r"):
             raise _Refused(f"the define {name} has a value with a backslash, $ or line break, which Yosys cannot take")
         lines.append('-D "{}={}"'.format(name, value.replace('"', '\\"')))
-    lines.extend(f'"{_posix(file)}"' for file in side.files)
+    lines.extend(f'"{seen(file)}"' for file in side.files)
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -355,6 +369,36 @@ def _posix(path: Path | str) -> str:
             f"the path {text!r} has a character (a quote, backslash, $ or line break) that Yosys cannot take"
         )
     return text
+
+
+class _Seen:
+    """How the child sees a host path.
+
+    On Windows the runtime mounts every drive under its own name, so a path is passed as it is.
+    On POSIX it preopens the top-level folders of `/` under their own names, but then puts its own
+    package folders and a fresh `/tmp` over them, so the host's `/tmp` (or a folder with the name
+    of a package resource) would be invisible. The engine sets YOWASP_MOUNT instead: each top-level
+    folder that a path needs is mounted at `/hostfs_<name>` (one path component: a deeper mountpoint is
+    "Not supported" by the runtime), and every path given to Yosys is the host path with its first
+    component renamed so. A whole top-level folder is mounted (not just the folder of
+    a source) so that `include "../x.svh"` and include folders stay inside a mount.
+    """
+
+    def __init__(self) -> None:
+        self.tops: set[str] = set()
+
+    def __call__(self, path: Path | str) -> str:
+        text = _posix(path)
+        if os.name == "nt":
+            return text
+        parts = text.split("/")
+        if len(parts) < 3 or not parts[1]:
+            raise _Refused(f"the path {text!r} is not inside a top-level folder, which the Yosys sandbox needs")
+        top = parts[1]
+        if ":" in top or "=" in top or not os.access("/" + top, os.R_OK | os.X_OK) or not os.path.isdir("/" + top):
+            raise _Refused(f"the path {text!r} is under a folder that the Yosys sandbox cannot be given")
+        self.tops.add(top)
+        return f"{_MOUNT}{top}" + text[len(top) + 1 :]
 
 
 # --- the Yosys scripts (pure text, built from checked names) ---------------------------------------
@@ -452,9 +496,14 @@ def undefined_script(module: str) -> str:
 
 def _run_yosys(script: str, name: str) -> tuple[int, str]:
     """Run one script in this process; return the exit code and the log text."""
+    # With YOWASP_MOUNT the working folder is not the sandbox's current folder, so each file
+    # name is given in full, as the child sees it.
+    prefix = os.environ.get("HDL_VET_HOSTFS", "")
+    prefix = prefix + "/" if prefix else ""
+    script = _FILES.sub(lambda m: prefix + m.group(0), script) if prefix else script
     Path(f"{name}.ys").write_text(script, encoding="utf-8")
     yosys = importlib.import_module("yowasp_yosys")
-    code = yosys.run_yosys(["-q", "-l", f"{name}.log", f"{name}.ys"])
+    code = yosys.run_yosys(["-q", "-l", f"{prefix}{name}.log", f"{prefix}{name}.ys"])
     try:
         log = Path(f"{name}.log").read_text(encoding="utf-8", errors="replace")
     except OSError:
