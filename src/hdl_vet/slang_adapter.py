@@ -318,13 +318,20 @@ def tokens(text: object) -> list[str]:
     return list(_tokens(str(text)))
 
 
+_PLAIN_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
 def is_simple_identifier(name: str) -> bool:
     """True for one plain identifier that is not a SystemVerilog keyword."""
+    if not isinstance(name, str):
+        return False
     sm = pyslang.SourceManager()
     buf = sm.assignText(name)
     lexer = pyslang.parsing.Lexer(buf, pyslang.BumpAllocator(), pyslang.Diagnostics(), sm)
     tok = lexer.lex()
     if tok.kind != pyslang.parsing.TokenKind.Identifier or tok.rawText != name:
+        return False
+    if not _PLAIN_IDENT.fullmatch(name):  # slang also lexes `\a` as one identifier
         return False
     return lexer.lex().kind == pyslang.parsing.TokenKind.EndOfFile
 
@@ -832,6 +839,8 @@ class Design:
         self._unused: list[Diag] | None = None
         self._spans: list[tuple[Path, int, int, str]] | None = None
         self._snap: dict[str, InstanceSnap] | None = None
+        self._gate_snap: dict[str, InstanceSnap] | None = None
+        self._udps: frozenset[str] | None = None
         self._instance_cache: tuple[Any, ...] | None = None
         self._modules: dict[str, ModuleInfo] = {}
         self._buffer_paths: dict[int, Path | None] = {}
@@ -942,7 +951,7 @@ class Design:
             kinds = (dk.Module, dk.Interface, dk.Program)
             spans: list[tuple[Path, int, int, str]] = []
             for d in self._comp.getDefinitions():
-                if d.definitionKind not in kinds or d.syntax is None:
+                if getattr(d, "definitionKind", None) not in kinds or d.syntax is None:
                     continue
                 first = d.syntax.getFirstToken()
                 if not first:
@@ -1108,7 +1117,7 @@ class Design:
         kinds = (dk.Module, dk.Interface, dk.Program)
         out: set[str] = set()
         for d in self._comp.getDefinitions():
-            if d.definitionKind not in kinds or d.syntax is None:
+            if getattr(d, "definitionKind", None) not in kinds or d.syntax is None:
                 continue
             first = d.syntax.getFirstToken()
             if first and self._buffer_path(self._original(first.location).buffer) == path:
@@ -1198,6 +1207,72 @@ class Design:
                 conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
         return InstanceSnap(body.definition.name, params, ports, conns, port_types)
 
+    def gate_snapshot(self) -> dict[str, InstanceSnap]:
+        """The snapshot of the instances that are not module instances: primitives and checkers.
+
+        Same shape as `snapshot()`. The `module` is the primitive or checker type, there are
+        no parameters and no ports, and `connections` maps the position of the terminal ("0",
+        "1", ...) to its text. A named instance has the path of its name; an unnamed one has
+        `<scope>.<TYPE:N>`, N counting the unnamed instances of that type in the scope from 0.
+        Kept apart from `snapshot()` so that nothing that reads the module instances sees these.
+        """
+        if self._gate_snap is None:
+            self._gate_snap = self._build_gate_snapshot()
+        return dict(self._gate_snap)
+
+    def _build_gate_snapshot(self) -> dict[str, InstanceSnap]:
+        sk = pyslang.ast.SymbolKind
+        found: list[Any] = []
+        for top in self._comp.getRoot().topInstances:
+            top.visit(lookup_table={sk.PrimitiveInstance: found.append, sk.CheckerInstance: found.append})
+        out: dict[str, InstanceSnap] = {}
+        unnamed: dict[tuple[str, str], int] = {}
+        for sym in found:
+            if sym.parentScope.isUninstantiated:  # a generate branch that is not taken
+                continue
+            if sym.kind == sk.PrimitiveInstance:
+                kind = str(sym.primitiveType.name)
+                terminals = list(sym.portConnections)
+            else:
+                kind = str(sym.body.name)
+                terminals = [c.actual for c in sym.portConnections]
+            path = str(sym.hierarchicalPath)
+            if sym.arrayName:  # an element of an array of primitives: its path ends in the index
+                path += "".join(f"[{i}]" for i in sym.arrayPath)
+            elif not sym.name:
+                n = unnamed.get((path, kind), 0)
+                unnamed[(path, kind)] = n + 1
+                path = f"{path}.<{kind}:{n}>"
+            written = self._written_terminals(sym)
+            conns = {}
+            for i, e in enumerate(terminals):
+                text = self._terminal_text(e)
+                if not text and i < len(written):  # an element of an array: its bit has no text of its own
+                    text = written[i]
+                conns[str(i)] = text
+            out[path] = InstanceSnap(kind, {}, {}, conns)
+        return out
+
+    def _written_terminals(self, sym: Any) -> list[str]:
+        """The texts of the ordered connections of the statement that holds `sym`."""
+        syntax = sym.syntax
+        if syntax is None or not hasattr(syntax, "connections"):
+            return []
+        return [_clean_text(c.expr) for c in syntax.connections if getattr(c, "expr", None) is not None]
+
+    def _terminal_text(self, e: Any) -> str:
+        ek = pyslang.ast.ExpressionKind
+        if e is None:
+            return ""
+        while e.kind in (ek.Assignment, ek.Conversion):
+            if e.kind == ek.Assignment:
+                e = e.left
+            elif e.isImplicit:
+                e = e.operand
+            else:
+                break
+        return "" if e.syntax is None else _clean_text(e.syntax)
+
     def instance_snap(self, path: str) -> InstanceSnap | None:
         """The snapshot of the one instance at `path`, without building the whole snapshot.
 
@@ -1205,8 +1280,13 @@ class Design:
         """
         if self._snap is not None:
             return self._snap.get(path)
-        sym = self._comp.getRoot().lookupName(path)
-        if sym is None or sym.kind != pyslang.ast.SymbolKind.Instance:
+        try:
+            sym = self._comp.getRoot().lookupName(path)
+        except RuntimeError:  # slang cannot look up a name such as `top.module`
+            sym = None
+        if sym is None:
+            return self.snapshot().get(path)
+        if sym.kind != pyslang.ast.SymbolKind.Instance:
             return None
         return self._snap_of(sym, "." not in path)
 
@@ -1344,7 +1424,17 @@ class Design:
         definition.syntax.visit(visit)
         return sites
 
+    def _udp_names(self) -> frozenset[str]:
+        """Names of the user-defined primitives: definitions that are not modules, interfaces or programs."""
+        if self._udps is None:
+            self._udps = frozenset(
+                d.name for d in self._comp.getDefinitions() if getattr(d, "definitionKind", None) is None
+            )
+        return self._udps
+
     def _sites_of(self, inst: Any, plain: bool | None = None) -> list[InstanceSite]:
+        if inst.type.valueText in self._udp_names():
+            return []
         sm = self._sm
         from_macro = False
 
@@ -1390,12 +1480,14 @@ class Design:
     def modules(self) -> list[str]:
         dk = pyslang.ast.DefinitionKind
         kinds = (dk.Module, dk.Interface, dk.Program)
-        return sorted({d.name for d in self._comp.getDefinitions() if d.definitionKind in kinds})
+        return sorted({d.name for d in self._comp.getDefinitions() if getattr(d, "definitionKind", None) in kinds})
 
     def interfaces(self) -> frozenset[str]:
         """Names of the interface definitions."""
         dk = pyslang.ast.DefinitionKind
-        return frozenset(d.name for d in self._comp.getDefinitions() if d.definitionKind == dk.Interface)
+        return frozenset(
+            d.name for d in self._comp.getDefinitions() if getattr(d, "definitionKind", None) == dk.Interface
+        )
 
     def module(self, name: str) -> ModuleInfo:
         info = self._modules.get(name)
@@ -1654,6 +1746,8 @@ class Design:
 
     def _instances_of(self, node: Any, mod_path: Path) -> list[InstanceInfo]:
         sk = pyslang.syntax.SyntaxKind
+        if node.type.valueText in self._udp_names():  # a user-defined primitive is not a module
+            return []
         plain = self._plain(node)
         from_macro = False if plain else _has_macro_tokens(node, self._sm)
         module = node.type.valueText

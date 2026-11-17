@@ -30,11 +30,10 @@ Items that say so were not checked by a test.
   \apiname{Module.add_wire} and then \apiname{Module.remove_wire} of the same name. The
   check of the first operation does not find its result. The third transcript shows it.
   Remove both operations from the script.
-\item \textbf{Gate primitives, user-defined primitives and checkers.} The sign-off does
-  not compare them. A splice that changes \code{and g1 (z, a, b)} into
-  \code{and g1 (z, a, a)} passes. hdl-vet writes the output tree, with exit status 0.
-  The gate primitive was run. The other two follow from the same rule and were not checked
-  by a test.
+\item \textbf{Delays and strengths of a primitive.} The sign-off compares gate
+  primitives, user-defined primitives and checkers by their type and their connections.
+  It does not compare their delays or drive strengths. A raw edit that changes only
+  such a value passes without an \code{expect}.
 \item \textbf{More that the dangling check does not see.} The dangling check does not see
   these things:
   \begin{itemize}
@@ -85,17 +84,16 @@ or with a raw splice.
 \section{Known problems}
 
 \begin{itemize}
-\item \textbf{Escaped names.} \apiname{Module.remove_instance} cannot remove an instance
-  with an escaped identifier, such as \texttt{\textbackslash u/esc}. If you give the name
-  with the backslash, hdl-vet skips the call without a message, although the instance
-  exists. If you give the name without the backslash, hdl-vet applies the call, but the
-  sign-off fails with
-  \code{unexpected change: instance-removed}.
-\item \textbf{Names that the operations do not check.} \apiname{Module.add_port} and
-  \apiname{Module.add_param} do not check the name that you give. They write
-  \code{"a b"} or a keyword into the text, and the sign-off fails with errors of the
-  compiler or with \code{the edited design cannot be loaded}. \apiname{Module.add_wire}
-  does check its name.
+\item \textbf{Escaped names in hierarchical paths.} An instance handle works with an
+  escaped identifier, such as \texttt{\textbackslash u/esc}. A hierarchical path
+  that goes through such an instance does not work in the same way.
+  \apiname{Vet.punch_port} and \apiname{Vet.propagate_param} refuse such a path with an
+  error, and they edit nothing. \apiname{Vet.expect} and \apiname{Vet.permit} take the path as the design prints it, for
+  example \code{top.\m/esc .\l/esc }. Each escaped name ends with a blank.
+\item \textbf{Wrong types.} The operations check the names that you give, and the
+  arguments of \apiname{Vet.splice} and \apiname{Vet.text}. They do not check the type of
+  every other argument. A name that is \code{None}, or a mapping that is a list, raises a
+  Python error and not a \code{VetError}.
 \item \textbf{Time.} An operation that reads a list that an earlier operation edited
   loads the whole design again. On a large design, a script with many such operations takes
   a long time. The load count rose after a \code{connect} that follows an

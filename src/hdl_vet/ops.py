@@ -63,6 +63,18 @@ from hdl_vet.splice import SpliceError
 __all__ = ["DriftError", "Instance", "Module", "OpRecord", "Vet", "VetError"]
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
+
+
+def _instance_name(name: str) -> str:
+    """The name of an instance as `Module.info` lists it: an escaped name without its backslash and ending blank."""
+    return name[1:].rstrip() if name.startswith("\\") else name
+
+
+def _segment(name: str) -> str:
+    """The path segment of the instance `name`, spelled as the structural snapshot spells it."""
+    return name if _IDENT.fullmatch(name) else f"\\{name} "
+
+
 _DIRECTIONS = ("input", "output", "inout")
 _BASED = re.compile(r"'[sS]?[bBoOdDhH]")
 _DIGITS = re.compile(r"[0-9a-fA-FxXzZ?_]+")
@@ -678,9 +690,24 @@ class Vet:
     # --- raw escape hatch ----------------------------------------------------------
 
     def splice(self, path: Path, start: int, end: int, text: bytes, old: bytes | None = None) -> None:
+        label = f"splice {Path(path).name}" if isinstance(path, (str, Path)) else f"splice {path!r}"
+        if not isinstance(path, (str, Path)):
+            raise VetError(f"{label}: the file must be a str or a Path, not {type(path).__name__}")
+        for what, value in (("start", start), ("end", end)):
+            if type(value) is not int:
+                raise VetError(f"{label}: {what} must be an int, not {type(value).__name__}")
+        if start < 0 or end < start:
+            raise VetError(f"{label}: the range [{start}, {end}) is not valid")
+        if not isinstance(text, bytes):
+            raise VetError(f"{label}: text must be bytes, not {type(text).__name__}")
+        if old is not None and not isinstance(old, bytes):
+            raise VetError(f"{label}: old must be bytes, not {type(old).__name__}")
         if self._scope is not None:
             self._refuse_splice(self._scope, Path(path), start, end, text)
-        self.session.splice(path, start, end, text, old=old)
+        try:
+            self.session.splice(path, start, end, text, old=old)
+        except (SpliceError, SessionError) as e:
+            raise VetError(f"splice {Path(path).name}: {e}") from e
         self._sync()
         self._all = True
 
@@ -691,7 +718,12 @@ class Vet:
         self.session.permit(kind, path, name, exact=exact)
 
     def text(self, path: Path) -> bytes:
-        return self.session.text(path)
+        if not isinstance(path, (str, Path)):
+            raise VetError(f"text {path!r}: the file must be a str or a Path, not {type(path).__name__}")
+        try:
+            return self.session.text(path)
+        except (SpliceError, SessionError) as e:
+            raise VetError(f"text {Path(path).name}: {e}") from e
 
     @property
     def design(self) -> Design:
@@ -1774,6 +1806,7 @@ class Module:
     # --- selectors
 
     def instance(self, name: str) -> Instance:
+        name = _instance_name(name)
         self.vet._instance_info(self._name, name)
         return Instance(self.vet, self._name, name, self._instances)
 
@@ -1810,6 +1843,8 @@ class Module:
         v._refuse_scope("add_port", mod)
         if direction not in _DIRECTIONS:
             raise VetError(f"add_port {mod}: direction must be 'input', 'output' or 'inout', not {direction!r}")
+        if not is_simple_identifier(name):
+            raise VetError(f"add_port {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         paths = self._confirm_instances("add_port")
         decl = f"{direction:<6} {type}{_range(width)} {name}"
         info = v._info(mod, [("ports", mod)])
@@ -1818,6 +1853,8 @@ class Module:
     def add_param(self, name: str, default: object, type: str = "int") -> None:
         v, mod = self.vet, self._name
         v._refuse_scope("add_param", mod)
+        if not is_simple_identifier(name):
+            raise VetError(f"add_param {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         paths = self._confirm_instances("add_param")
         info = v._info(mod, [("params", mod)])
         v._commit(v._plan_add_param(mod, name, type, default, info, paths))
@@ -1880,6 +1917,7 @@ class Module:
     def remove_instance(self, name: str, module: str | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_instance"
         v._refuse_scope(op, mod)
+        name = _instance_name(name)
         target = f"{mod}.{name}"
         self._confirm_instances(op)
 
@@ -1904,7 +1942,7 @@ class Module:
             data = v.session.text(inst.path)
             a, b = line_rule(data, inst.stmt_start, inst.stmt_end)
             snap = v._snap()
-            where = [f"{base}.{name}" for base in self.paths if f"{base}.{name}" in snap]
+            where = [f"{base}.{_segment(name)}" for base in self.paths if f"{base}.{_segment(name)}" in snap]
             # what earlier operations expected of this instance is moot now it is going
             v.session.drop_expects(where)
             v._drop_registered(mod, name)
@@ -2168,7 +2206,7 @@ class Instance:
     def __init__(self, vet: Vet, module: str, name: str, instances: int | None = None) -> None:
         self.vet = vet
         self._mod = module
-        self._name = name
+        self._name = _instance_name(name)
         self._instances = instances  # the confirmed number of copies of the enclosing module
 
     @property
@@ -2199,7 +2237,7 @@ class Instance:
         swapped = v._swapped.get((self._mod, self._name), ())
         out = []
         for base in v.module_paths(self._mod):
-            p = f"{base}.{self._name}"
+            p = f"{base}.{_segment(self._name)}"
             found = snap.get(p)
             if found is not None and (found.module == inst.module or found.module in swapped):
                 out.append(p)

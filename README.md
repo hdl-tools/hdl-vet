@@ -41,7 +41,7 @@ No operation changes logic, for example an assign statement. There is no equival
 The sign-off does not see these changes:
 
 - a change of logic that you make with a raw edit of the text, which is `Vet.splice`
-- a change of a gate primitive
+- a change of the delay or the strength of a gate primitive
 - a signal that loses the driver of only some of its bits
 
 The operations refuse these things:

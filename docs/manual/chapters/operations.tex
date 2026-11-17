@@ -117,10 +117,12 @@ Operation & Edits the text of & \code{was} & Second run \\
   \item a conditional directive in the list
   \item a name that something else already uses, or a port of that name with a different
     declaration (a drift error)
+  \item a name that is not a plain identifier, such as \code{"a b"}, or is a keyword,
+    such as \code{"wire"}
+  \item a name that begins with a backslash, or is not a \code{str}
   \end{itemize}
-  The operation does not check the name itself. It writes a name that is not an
-  identifier, such as \code{"a b"}, or a keyword, such as \code{"wire"}, as it is. Then
-  the sign-off fails with errors of the compiler. Use plain names.
+  The operation checks the name when you call it. It queues nothing for a name that it
+  refuses.
 \item[Again] hdl-vet skips the operation when the module has a port of that name with the
   same declaration.
 \item[Example] \file{first.py} (chapter~\ref{ch:first}) and \file{ports.py} below.
@@ -187,10 +189,12 @@ Operation & Edits the text of & \code{was} & Second run \\
   \item a conditional directive in the list
   \item a name that another parameter in the body, or something else, already uses (a
     drift error)
+  \item a name that is not a plain identifier, such as \code{"a b"}, or is a keyword,
+    such as \code{"module"}
+  \item a name that begins with a backslash, or is not a \code{str}
   \end{itemize}
-  The operation does not check the name itself here either. It writes \code{"a b"} or a
-  keyword such as \code{"module"} as it is. Then the sign-off reports that the edited
-  design cannot be loaded.
+  The operation checks the name when you call it. It queues nothing for a name that it
+  refuses.
 \item[Again] hdl-vet skips the operation when the module has a parameter of that name with
   the same type and default.
 \item[Example] \file{params.py}.
@@ -229,7 +233,8 @@ Operation & Edits the text of & \code{was} & Second run \\
   blanks.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
-  \item a name that is not a plain identifier or is a keyword
+  \item a name that is not a plain identifier, or is a keyword, or begins with a
+    backslash, or is not a \code{str}
   \item a module header whose last line holds the beginning of the body, or ends inside a
     block comment
   \item a name that something else uses, or a net of that name with another type (a drift
@@ -640,11 +645,15 @@ the design and the diagnostics (chapter~\ref{ch:signoff}).
   \item a file that is not a file of the design, or is not editable (an added file is
     not editable)
   \item a range that overlaps an earlier splice
+  \item a range outside the file
+  \item an offset that is not an \code{int}, a negative offset, or a \code{start} after
+    \code{end}
+  \item a \code{text} or an \code{old} that is not \code{bytes}
   \item a range whose bytes differ from \code{old}, if you gave it
   \end{itemize}
-  Always give \code{old}. Then the splice cannot go wrong when the text changes. If a
-  range overlaps an earlier splice with another range, hdl-vet raises \code{SpliceError}
-  (chapter~\ref{ch:scripts}). The operation accepts the same range with the same text a
+  Always give \code{old}. Then the splice cannot go wrong when the text changes. Every
+  refusal is a \code{VetError}. Its message starts with \code{splice} and the name of the
+  file (chapter~\ref{ch:scripts}). The operation accepts the same range with the same text a
   second time, without a message.
 \item[Again] A splice has no skip rule. With \code{old}, a second splice on text that
   is already edited is refused, because the bytes differ.
@@ -655,7 +664,9 @@ the design and the diagnostics (chapter~\ref{ch:signoff}).
 \begin{entry}{\sig{Vet.text}}
 \item[Writes] The operation writes nothing. It returns the text of a file of the design,
   as \code{bytes}, as of the last load. The text does not have edits that are still in the
-  queue, such as a raw splice, until the next load.
+  queue, such as a raw splice, until the next load. A file that is not a file of the design
+  is a \code{VetError}. So is a \code{path} that is neither a \code{str} nor a \code{Path}.
+  Its message starts with \code{text} and the name of the file.
 \end{entry}
 
 \begin{entry}{\sig{Vet.expect}}

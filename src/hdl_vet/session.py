@@ -673,6 +673,8 @@ class Session:
             new_diagnostics(self._baseline.diagnostics(), self._design.diagnostics(), self._maps)
         )
         changes = diff_snapshots(self._baseline.snapshot(), self._design.snapshot())
+        changes += diff_snapshots(self._baseline.gate_snapshot(), self._design.gate_snapshot())
+        changes.sort(key=lambda c: (c.path, c.kind, c.name))
         unexpected, unmatched = check_changes(changes, self._expects)
         failed = self._run_checks(checks, self._design)
         added_paths = {path for path, _ in self._added.values()}

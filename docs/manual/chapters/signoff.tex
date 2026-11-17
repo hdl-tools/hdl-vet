@@ -180,6 +180,28 @@ The kinds are:
 \item[connection-changed] The connection of a port has other text.
 \end{description}
 
+The sign-off compares gate primitives, user-defined primitives and checker instances in
+the same way, with the same kinds of change. The type of such an instance is its module,
+so another type is a \code{module-changed}. A connection has the position of its terminal
+as its name, and \code{0} is the first terminal. A named instance has the path of its
+name, such as \code{top.g1}.
+
+An unnamed instance has the path \code{top.<not:0>}. Here \code{not} is the type. The
+number counts the unnamed instances of that type in the scope, from 0, in the order of the
+text. No operation edits such an instance. So a change comes from a raw edit, and you
+declare it with \apiname{Vet.expect}. The sign-off does not compare the delays and the
+strengths of a primitive.
+
+A change can come from an operation too. A \apiname{Instance.set_param} can change which
+generate branch the design takes. Then the primitives of the old branch go and those of the
+new branch appear, as \code{instance-removed} and \code{instance-added}. Call
+\apiname{Instance.allow_changes_below} on the instance to permit them.
+
+An element of an array of primitives has a path such as \code{top.g[0]}. A pattern reads
+\code{[0]} as a set of characters. So an exact expectation for one element needs
+\code{exact=True}. If you change the type of an unnamed gate, or the order of two, the
+numbers in \code{<TYPE:N>} shift. The report then shows several changes for one edit.
+
 An expectation or a permission must cover every change, and every
 expectation must match a change. Operations register their own. For example,
 \apiname{Module.add_port} requires \code{port-added} at every path of the module, and
