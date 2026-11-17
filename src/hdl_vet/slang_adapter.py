@@ -39,6 +39,7 @@ __all__ = [
     "driven_bases",
     "is_simple_identifier",
     "load",
+    "parameter_names",
     "syntax_equivalent",
     "tokens",
 ]
@@ -2144,3 +2145,37 @@ def syntax_equivalent(a: str, b: str) -> bool:
             raise AdapterError(f"text does not parse: {text!r}")
         trees.append(tree)
     return bool(trees[0].root.isEquivalentTo(trees[1].root))
+
+
+def parameter_names(
+    files: Sequence[Path | str],
+    incdirs: Sequence[Path | str],
+    defines: Mapping[str, str | None],
+    module: str,
+) -> frozenset[str]:
+    """Names of the parameters of `module` that an instance (or a tool option) can override.
+
+    A `localparam` and a type parameter are not in the answer. Raises AdapterError when the
+    design cannot be loaded or has no such module.
+    """
+    paths = [Path(f).resolve() for f in files]
+    root = paths[0].parent if paths else Path.cwd()
+    listing = Filelist(paths, [Path(d).resolve() for d in incdirs], dict(defines), root)
+    design = load(listing, module)
+    found = design._comp.tryGetDefinition(module, design._comp.getRoot()).definition
+    if found is None or found.syntax is None:
+        raise AdapterError(f"module {module!r} not found")
+    # The syntax is read as it is, also where an `include` brought a declaration in: only the names count here.
+    header = found.syntax.header
+    declarations = []
+    if header.parameters is not None:
+        declarations = list(_items(header.parameters.declarations))
+    else:  # without a parameter port list, the parameters of the body can be overridden
+        declarations = [
+            m.parameter
+            for m in _items(found.syntax.members)
+            if m.kind == pyslang.syntax.SyntaxKind.ParameterDeclarationStatement
+        ]
+    return frozenset(
+        d.name.valueText for decl in declarations if _param_kind(decl) == "value" for d in _items(decl.declarators)
+    )

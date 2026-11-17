@@ -32,6 +32,8 @@ uv run --no-sync pytest -q tests/test_project_rules.py
 
 The file `tests/test_project_rules.py` holds the rules of the code base. The versions of `ruff` and `mypy` are fixed in `pyproject.toml`, so that a new release cannot break an unrelated pull request.
 
+The group `dev` also installs Yosys for the equivalence check of `hdl_vet.equiv`. Users get Yosys from the optional extra `equiv`. Without Yosys, the tests that need it skip. If you set `HDL_VET_REQUIRE_EQUIV=1`, they fail instead, as CI does.
+
 While you work, run the fast tests. They skip the tests that need the corpus:
 
 ```sh

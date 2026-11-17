@@ -3,12 +3,14 @@ CLAUDE.md
 
 # Repo plans
 plan
+
 # Local environment and generated corpus
 .venv/
 .corpus/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
 .hdl-bag/
 
 # LaTeX build products of the manual

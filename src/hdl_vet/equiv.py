@@ -1,0 +1,827 @@
+"""Equivalence check of one module before and after an edit, with Yosys from PyPI.
+
+`check(gold, gate, module)` compares the module of the Source `gold` with the module of
+the same name of the Source `gate`. The tool is the optional extra `hdl-vet[equiv]`
+(the package `yowasp-yosys`). Nothing of it is imported here at module import time.
+
+Every check runs in a process of its own, started without a shell: this file, run as a
+script by the same Python. The child reads a small specification from a temporary
+folder, runs Yosys on it, and writes its answer back to that folder. The parent never
+loads Yosys, so a crash or a time-out of the tool cannot reach the caller.
+
+Each side is read once, made into plain logic (unpacked arrays are mapped to flops), and
+written as a netlist. The checks below read that netlist. The proof flow is `async2sync`,
+`equiv_make`, `equiv_simple -undef -seq 5`, `equiv_induct -undef -seq 5` and
+`equiv_status -assert`. Only a complete, explicit proof is "proved".
+
+What the engine does so that "proved" is true
+- Undefined values (`-undef`): x in the gate, or a net nobody drives, is a difference. x in the
+  gold means that the gate may have any value.
+- Clocks: the proof flow treats every flop as if one common clock drove it and ignores the clock
+  input. So every flop of both sides must be clocked by one input port, with one edge, the same on
+  both sides, after the ties are applied. Else the answer is "refuted" or "error".
+- Initial values (`logic r = 1'b1;`, an `initial` block) on either side: "error", also when both
+  sides are identical. The proof is by induction and has no start state.
+- Children named in `same`: the engine compares the module of each such instance, with
+  everything below it and its parameter values, between the two sides. A difference is an "error"
+  that names the instance. An instance of another module on the other side is an "error" too.
+- Names in `params` must be parameters of the module on both sides (checked with the reader of
+  `hdl_vet.slang_adapter`, because Yosys drops an unknown name without a word).
+
+Stated limits (each gives "error" or "refuted", never a wrong "proved", except the last)
+- Flops on more than one clock, when the module is compared with its children flattened:
+  "error". Name the children of each clock domain in `same`.
+- A clock that reaches a flop through an inverter, a mux that is not tied or a divider, flops on
+  both edges of one clock, latches, two asynchronous resets, interface ports, and memories that
+  cannot be mapped to flops: "error".
+- A renamed chain of more than five registers, and a rewrite that keeps the name of an internal
+  signal but changes what it carries: "refuted".
+- A wide multiplier written another way can reach the timeout.
+- A change of the signedness of a port, of the order of the fields of a struct port or of the
+  order of the ports is "proved": the module computes the same, but a parent that connects by
+  position or by field sees a change. The structure comparison of the sign-off reports it.
+- A module with flops on two clocks of its own (a clock-domain bridge) is always an "error", and
+  it is answered before any proof is run.
+- A memory of 1000 words of 32 bits reaches the timeout. A parameter value cannot be a string.
+- Where the gold has an x that reaches an output, the proof may still be "proved" (the gate may
+  choose). The detail then says "the gold has undefined values on " and names those outputs. They
+  are found by one more proof of the gold against itself, x as 0 against x as 1, run only when the
+  gold has an x constant or a used net that nothing drives.
+- Defines: a name must be a plain identifier. A value is passed on as it is, with `"` escaped,
+  except that a value with `$`, a backslash or a line break is an "error" that names the define
+  (the reader's file would expand or change it). The same holds for a path or an include folder
+  that holds a quote, a backslash, `$` or a line break. `defines` of a wrong type raises TypeError.
+- The report of undefined values has a time budget of its own (30 s, a second process). When it
+  runs out or fails, the answer stays "proved" and the detail says that the report could not be made.
+  The report does not see an undefined value of the gold that cancels (`u ^ u`) or one that a
+  division by zero makes.
+- Checks run one at a time (a lock). The lock holds for the threads of one process, not for two
+  processes.
+"""
+
+from __future__ import annotations
+
+import importlib
+import importlib.util
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+__all__ = ["Result", "Source", "available", "check"]
+
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*\Z")
+_PORT_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_$.]*\Z")
+_VALUE = re.compile(r"[A-Za-z0-9_'.+\-]+\Z")
+_MACRO_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_MOUNT = "/hostfs_"  # POSIX: the child sees the top-level folder NAME of the host as /hostfs_NAME (see `_Seen`)
+_MOUNT_IN_TEXT = re.compile(r"/hostfs_([^/\s'\"]+)")
+_FILES = re.compile(r"(?<![\w/.-])((?:gold|gate)(?:_h)?\.(?:f|json|il)|prepared\.il|check\.json)(?!\w)")
+_REPORT_TIMEOUT = 30.0  # seconds for the report of undefined values, apart from the timeout of the proof
+_MAX_DETAIL = 300
+_LOCK = threading.Lock()
+
+
+@dataclass(frozen=True)
+class Source:
+    """The files of one side, in file-list order, with its include folders and defines."""
+
+    files: Sequence[Path | str]
+    incdirs: Sequence[Path | str] = ()
+    defines: Mapping[str, str | None] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Result:
+    """`status` is "proved", "refuted" or "error"; `detail` is one line of text."""
+
+    status: str
+    module: str
+    detail: str
+    seconds: float
+
+
+def available() -> bool:
+    """True when the Yosys package can be used."""
+    try:
+        return importlib.util.find_spec("yowasp_yosys") is not None
+    except (ImportError, ValueError):
+        return False
+
+
+# --- the parent: validate, set up a folder, start the child, read its answer -----------------------
+
+
+def check(
+    gold: Source,
+    gate: Source,
+    module: str,
+    *,
+    params: Mapping[str, int | str] | None = None,
+    tie: Mapping[str, int] | None = None,
+    same: Iterable[str] = (),
+    timeout: float = 300.0,
+) -> Result:
+    """Compare `module` of `gold` (before) with `module` of `gate` (after).
+
+    Raises TypeError or ValueError only for a wrong call. Every other problem is an answer
+    with the status "error".
+    """
+    started = time.monotonic()
+    clean_params = _clean_params(params)
+    clean_tie = _clean_tie(tie)
+    clean_same = _clean_same(same)
+    for side in (gold, gate):
+        _check_defines(side.defines)
+    if not isinstance(module, str) or not _IDENT.match(module):
+        raise ValueError(f"not a module name: {module!r}")
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or timeout <= 0:
+        raise ValueError(f"timeout must be a positive number of seconds: {timeout!r}")
+
+    def done(status: str, detail: str) -> Result:
+        if os.name != "nt":
+            detail = _MOUNT_IN_TEXT.sub(r"/", detail)  # a path in a message is the host path, not the mount
+        return Result(status, module, _one_line(detail), time.monotonic() - started)
+
+    if not available():
+        return done("error", "Yosys is not installed: install the extra hdl-vet[equiv]")
+    for side in (gold, gate):
+        for file in side.files:
+            if not Path(file).is_file():
+                return done("error", f"cannot read {Path(file)}: no such file")
+    with _LOCK:  # one Yosys process at a time, also across threads
+        started = time.monotonic()  # the time of a check does not include the wait for the lock
+        try:
+            wrong = _unknown_parameters(gold, gate, module, clean_params)
+            if wrong is not None:
+                return done("error", wrong)
+            return _run_child(gold, gate, module, clean_params, clean_tie, clean_same, timeout, done)
+        except OSError as exc:
+            return done("error", f"cannot run the check: {exc}")
+
+
+def _run_child(
+    gold: Source,
+    gate: Source,
+    module: str,
+    params: dict[str, str],
+    tie: dict[str, int],
+    same: list[str],
+    timeout: float,
+    done: Callable[[str, str], Result],
+) -> Result:
+    with tempfile.TemporaryDirectory(prefix="hdl_vet_equiv_", ignore_cleanup_errors=True) as folder:
+        work = Path(folder)
+        (work / "tmp").mkdir()
+        seen = _Seen()
+        try:
+            work_seen = seen(work)
+            _write_list(work / "gold.f", gold, seen)
+            _write_list(work / "gate.f", gate, seen)
+        except _Refused as exc:
+            return done("error", str(exc))
+        spec = {"module": module, "params": params, "tie": tie, "same": same}
+        (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+        # The child must not put its scratch folders outside the work folder (the Yosys runtime
+        # makes one in the temp folder of each run), so the temp variables point inside it.
+        env = dict(os.environ)
+        for name in ("TEMP", "TMP", "TMPDIR"):
+            env[name] = str(work / "tmp")
+        # The user's own YOWASP_MOUNT must not reach the child. On POSIX ours replaces it (see `_Seen`);
+        # on Windows the default mounts of the drives are right.
+        env.pop("YOWASP_MOUNT", None)
+        env.pop("HDL_VET_HOSTFS", None)
+        if os.name != "nt":
+            env["YOWASP_MOUNT"] = ":".join(f"{_MOUNT}{top}=/{top}" for top in sorted(seen.tops))
+            env["HDL_VET_HOSTFS"] = work_seen
+        try:
+            done_run = _spawn(work, ["spec.json"], env, timeout)
+        except subprocess.TimeoutExpired:
+            return done("error", f"timed out after {timeout:g} s: the Yosys process was stopped")
+        except OSError as exc:
+            return done("error", f"cannot start the Yosys process: {exc}")
+        answer = _read_answer(work / "result.json")
+        if answer is None:
+            tail = (done_run.stderr or done_run.stdout or "").strip().splitlines()
+            reason = tail[-1] if tail else f"exit code {done_run.returncode}"
+            return done("error", f"the Yosys process stopped without an answer: {reason}")
+        if answer[0] == "proved" and (work / "report.wanted").exists():
+            return done("proved", f"{answer[1]}; {_report(work, env)}")
+        return done(answer[0], answer[1])
+
+
+def _spawn(work: Path, args: list[str], env: Mapping[str, str], timeout: float) -> subprocess.CompletedProcess[str]:
+    # -P: this file's folder is not put on the path (its modules could shadow the standard ones).
+    # Nothing else is hidden, so the child sees the packages that `available()` saw.
+    command = [sys.executable, "-P", str(Path(__file__).resolve()), *args]
+    # S603: a fixed command (this interpreter, this file) with file names; no shell, no user text.
+    return subprocess.run(  # noqa: S603
+        command, cwd=work, env=dict(env), capture_output=True, text=True, timeout=timeout, check=False
+    )
+
+
+def _report(work: Path, env: Mapping[str, str]) -> str:
+    """The report of undefined values of the gold, from a second process with its own time budget.
+
+    It never changes the status: when it cannot be made, the text says so.
+    """
+    unknown = "could not tell whether the gold has undefined values"
+    try:
+        _spawn(work, ["spec.json", "report"], env, _REPORT_TIMEOUT)
+        data = json.loads((work / "report.json").read_text(encoding="utf-8"))
+        names = [str(n) for n in data["names"]]
+    except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, TypeError):
+        return unknown
+    return "the gold has undefined values on " + ", ".join(names) if names else ""
+
+
+def _unknown_parameters(gold: Source, gate: Source, module: str, params: Mapping[str, str]) -> str | None:
+    """None when every name in `params` is a parameter of `module` on both sides, else the complaint.
+
+    The reader drops an unknown `-G` name without a word, so the names are checked with slang
+    (the pyslang of `hdl_vet.slang_adapter`, which sees the parameters of the text), not with Yosys.
+    """
+    if not params:
+        return None
+    from hdl_vet import slang_adapter  # here and not at the top: the adapter loads pyslang, which is large
+
+    for label, side in (("gold", gold), ("gate", gate)):
+        try:
+            known = slang_adapter.parameter_names(side.files, side.incdirs, side.defines, module)
+        except Exception as exc:  # any refusal of the reader is an answer, not an exception
+            return f"cannot read the parameters of {module} in the {label}: {exc}"
+        for name in params:
+            if name not in known:
+                return f"{name} is not a parameter of {module} in the {label}"
+    return None
+
+
+def _check_defines(defines: Mapping[str, str | None]) -> None:
+    if not isinstance(defines, Mapping):
+        raise TypeError("defines must be a mapping of macro names to str or None values")
+    for name, value in defines.items():
+        if not isinstance(name, str):
+            raise TypeError(f"a macro name must be a str, not {type(name).__name__}")
+        if value is not None and not isinstance(value, str):
+            raise TypeError(f"the value of the macro {name} must be a str or None, not {type(value).__name__}")
+
+
+class _Refused(Exception):
+    """Something of the sources that cannot be passed to the reader faithfully; the answer is an error."""
+
+
+def _clean_params(params: Mapping[str, int | str] | None) -> dict[str, str]:
+    if params is None:
+        return {}
+    if not isinstance(params, Mapping):
+        raise TypeError("params must be a mapping of parameter names to int or str values")
+    clean: dict[str, str] = {}
+    for name, value in params.items():
+        if not isinstance(name, str) or not _IDENT.match(name):
+            raise ValueError(f"not a parameter name: {name!r}")
+        if isinstance(value, bool) or not isinstance(value, int | str):
+            raise TypeError(f"the value of parameter {name} must be an int or a str, not {type(value).__name__}")
+        text = str(value)
+        if not _VALUE.match(text):
+            raise ValueError(f"the value of parameter {name} is not a plain constant: {text!r}")
+        clean[name] = text
+    return clean
+
+
+def _clean_tie(tie: Mapping[str, int] | None) -> dict[str, int]:
+    if tie is None:
+        return {}
+    if not isinstance(tie, Mapping):
+        raise TypeError("tie must be a mapping of input port names to int values")
+    clean: dict[str, int] = {}
+    for name, value in tie.items():
+        if not isinstance(name, str) or not _PORT_NAME.match(name):
+            raise ValueError(f"not a port name: {name!r}")
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise TypeError(f"the tie value of {name} must be an int, not {type(value).__name__}")
+        if value < 0:
+            raise ValueError(f"the tie value of {name} must not be negative")
+        clean[name] = int(value)
+    return clean
+
+
+def _clean_same(same: Iterable[str]) -> list[str]:
+    if isinstance(same, str) or not isinstance(same, Iterable):
+        raise TypeError("same must be a collection of module names")
+    names = list(same)
+    for name in names:
+        if not isinstance(name, str) or not _IDENT.match(name):
+            raise ValueError(f"not a module name: {name!r}")
+    return sorted(set(names))
+
+
+def _one_line(text: str) -> str:
+    line = " ".join(text.split())
+    return line if len(line) <= _MAX_DETAIL else line[: _MAX_DETAIL - 3] + "..."
+
+
+def _read_answer(path: Path) -> tuple[str, str] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        status, detail = data["status"], data["detail"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    if status not in ("proved", "refuted", "error") or not isinstance(detail, str):
+        return None
+    return status, detail
+
+
+def _write_list(path: Path, side: Source, seen: Callable[[Path | str], str]) -> None:
+    """A file list for read_slang's `-f`: quoted absolute paths with forward slashes (blanks survive)."""
+    lines: list[str] = []
+    for folder in side.incdirs:
+        lines.append(f'-I "{seen(folder)}"')
+    for name, value in side.defines.items():
+        # Inside the double quotes of the reader's file only four things are special: the quote itself,
+        # the backslash, `$` (an environment variable, dropped when unknown) and the line break.
+        # The quote is escaped. The other three cannot be passed on, so the define is refused.
+        if not _MACRO_NAME.match(name):
+            raise _Refused(f"the define {name!r} has a name that Yosys cannot take (a plain identifier is needed)")
+        if value is None:
+            lines.append(f'-D "{name}"')
+            continue
+        if any(c in value for c in "\\$\n\r"):
+            raise _Refused(f"the define {name} has a value with a backslash, $ or line break, which Yosys cannot take")
+        lines.append('-D "{}={}"'.format(name, value.replace('"', '\\"')))
+    lines.extend(f'"{seen(file)}"' for file in side.files)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _posix(path: Path | str) -> str:
+    text = Path(path).resolve().as_posix()
+    # Inside the quotes of the reader's file `$` starts an environment variable that is dropped
+    # when it is unknown, and a backslash or a quote ends or escapes the text. None is passed on.
+    if any(c in text for c in '"\\$\n\r'):
+        raise _Refused(
+            f"the path {text!r} has a character (a quote, backslash, $ or line break) that Yosys cannot take"
+        )
+    return text
+
+
+class _Seen:
+    """How the child sees a host path.
+
+    On Windows the runtime mounts every drive under its own name, so a path is passed as it is.
+    On POSIX it preopens the top-level folders of `/` under their own names, but then puts its own
+    package folders and a fresh `/tmp` over them, so the host's `/tmp` (or a folder with the name
+    of a package resource) would be invisible. The engine sets YOWASP_MOUNT instead: each top-level
+    folder that a path needs is mounted at `/hostfs_<name>` (one path component: a deeper mountpoint is
+    "Not supported" by the runtime), and every path given to Yosys is the host path with its first
+    component renamed so. A whole top-level folder is mounted (not just the folder of
+    a source) so that `include "../x.svh"` and include folders stay inside a mount.
+    """
+
+    def __init__(self) -> None:
+        self.tops: set[str] = set()
+
+    def __call__(self, path: Path | str) -> str:
+        text = _posix(path)
+        if os.name == "nt":
+            return text
+        parts = text.split("/")
+        if len(parts) < 3 or not parts[1]:
+            raise _Refused(f"the path {text!r} is not inside a top-level folder, which the Yosys sandbox needs")
+        top = parts[1]
+        if ":" in top or "=" in top or not os.access("/" + top, os.R_OK | os.X_OK) or not os.path.isdir("/" + top):
+            raise _Refused(f"the path {text!r} is under a folder that the Yosys sandbox cannot be given")
+        self.tops.add(top)
+        return f"{_MOUNT}{top}" + text[len(top) + 1 :]
+
+
+# --- the Yosys scripts (pure text, built from checked names) ---------------------------------------
+
+
+def _read_lines(
+    listing: str, module: str, params: Mapping[str, str], same: Sequence[str], hierarchy_json: str
+) -> list[str]:
+    """Read one side and make it plain logic: flops and gates, no memories.
+
+    With `same`, those modules stay boxes and their pins become ports of the parent. The netlist
+    before the flattening goes to `hierarchy_json`, to compare the boxes of the two sides.
+    """
+    flags = " ".join(f"-G {name}={value}" for name, value in params.items())
+    keep = " --keep-hierarchy" if same else ""
+    lines = [f"read_slang -j 1{keep}{' ' + flags if flags else ''} -f {listing} --top {module}"]
+    if same:
+        # slang names the copy of a module for each instance `NAME$parent.instance`.
+        patterns = " ".join(f"{name} {name}$*" for name in same)
+        lines += [
+            f"setattr -mod -set keep_hierarchy 1 {patterns}",
+            f"write_json {hierarchy_json}",
+            "flatten",
+            f"expose -evert {module}",
+            f"hierarchy -top {module}",
+        ]
+    # An unpacked array is a memory for the reader. Mapped to flops it is compared like any logic.
+    # A memory that this cannot map stays a `$mem` cell, which the clock check refuses.
+    lines += ["memory -nomap", "memory_map", "opt_clean"]
+    return lines
+
+
+def ports_script(module: str, params: Mapping[str, str], same: Sequence[str]) -> str:
+    """Read both sides once: write the netlist of each as JSON (for the checks) and as RTLIL (for the proof)."""
+    lines: list[str] = []
+    for side in ("gold", "gate"):
+        lines += _read_lines(f"{side}.f", module, params, same, f"{side}_h.json")
+        lines += [f"write_json {side}.json", f"write_rtlil {side}.il", "design -reset"]
+    return "\n".join(lines) + "\n"
+
+
+def prepare_script(
+    module: str,
+    free: Mapping[str, int],
+    tie: Mapping[str, tuple[int, int]],
+    drop: Sequence[str],
+) -> str:
+    """Set the two sides up for the proof (step 2 of the child), on the netlists that step 1 wrote.
+
+    `free`: inputs that only the gate has, with their widths, given to the gold side too.
+    `tie`: inputs that only the gate has, as name -> (width, value), made constants in the gate.
+    `drop`: outputs that only the gate has.
+    The two sides go to `prepared.il`. A cleaned-up copy of them goes to `check.json`, for the
+    clock check, which looks at the netlist with the ties applied.
+    """
+    lines = ["read_rtlil gold.il", f"rename {module} gold", "design -stash gold"]
+    lines += ["read_rtlil gate.il", f"rename {module} gate", "design -stash gate"]
+    lines += ["design -copy-from gold -as gold gold", "design -copy-from gate -as gate gate"]
+    for name, width in free.items():
+        lines.append(f"add -input {name} {width} gold")
+    for name, (width, value) in tie.items():
+        bits = format(value, "b").zfill(width)
+        lines += ["cd gate", f"delete -port w:{name}", f"connect -set {name} {width}'b{bits}", "cd .."]
+    lines += [f"delete -port gate/{name}" for name in drop]
+    lines += ["write_rtlil prepared.il", "opt_expr", "opt_clean", "write_json check.json"]
+    return "\n".join(lines) + "\n"
+
+
+def proof_script() -> str:
+    """The proof flow (step 4 of the child). `-undef`: an x of the gold is free, an x of the gate is a difference."""
+    lines = [
+        "read_rtlil prepared.il",
+        "async2sync",
+        "equiv_make gold gate equiv",
+        "hierarchy -top equiv",
+        "equiv_simple -undef -seq 5",
+        "equiv_induct -undef -seq 5",
+        "equiv_status -assert",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def undefined_script(module: str) -> str:
+    """The gold against itself, its x and undriven nets taken as 0 on one side and as 1 on the other."""
+    lines = ["read_rtlil gold.il", f"rename {module} gold", "setundef -undriven -zero", "design -stash gold"]
+    lines += ["read_rtlil gold.il", f"rename {module} gate", "setundef -undriven -one", "design -stash gate"]
+    lines += ["design -copy-from gold -as gold gold", "design -copy-from gate -as gate gate", "async2sync"]
+    lines += ["equiv_make gold gate equiv", "hierarchy -top equiv", "equiv_simple -seq 5", "equiv_induct -seq 5"]
+    lines += ["equiv_status"]
+    return "\n".join(lines) + "\n"
+
+
+# --- the child: runs Yosys, decides, writes result.json --------------------------------------------
+
+
+def _run_yosys(script: str, name: str) -> tuple[int, str]:
+    """Run one script in this process; return the exit code and the log text."""
+    # With YOWASP_MOUNT the working folder is not the sandbox's current folder, so each file
+    # name is given in full, as the child sees it.
+    prefix = os.environ.get("HDL_VET_HOSTFS", "")
+    prefix = prefix + "/" if prefix else ""
+    script = _FILES.sub(lambda m: prefix + m.group(0), script) if prefix else script
+    Path(f"{name}.ys").write_text(script, encoding="utf-8")
+    yosys = importlib.import_module("yowasp_yosys")
+    code = yosys.run_yosys(["-q", "-l", f"{prefix}{name}.log", f"{prefix}{name}.ys"])
+    try:
+        log = Path(f"{name}.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        log = ""
+    return int(code or 0), log
+
+
+def _problem(log: str) -> str:
+    """The first diagnostic of a failed run: the reader's own message with its place, else Yosys's ERROR line."""
+    lines = log.splitlines()
+    for line in lines:
+        if ": ERROR: " in line or ": error: " in line:
+            return line.strip()
+    for line in lines:
+        if line.startswith("ERROR: "):
+            return line[len("ERROR: ") :].strip()
+    return "Yosys failed without a message"
+
+
+def _load(path: str, module: str) -> dict[str, Any] | None:
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        loaded = data["modules"][module]
+        loaded["ports"], loaded["cells"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return loaded  # type: ignore[no-any-return]
+
+
+def _ports_of(loaded: Mapping[str, Any]) -> dict[str, tuple[str, int]]:
+    return {str(n): (str(p["direction"]), len(p["bits"])) for n, p in loaded["ports"].items()}
+
+
+_STATE_CELLS = frozenset({"$ff", "$sr", "$anyinit", "$initstate"})
+_FLOP = re.compile(r"\$[a-z]*dff[a-z0-9]*\Z")
+
+
+def _clocks(loaded: Mapping[str, Any]) -> frozenset[str] | str:
+    """The clocks of all flops of a module as `edge port[bit]` texts, or the reason they cannot be told.
+
+    A clock is told only when it is a bit of an input port, reached through nothing but buffers.
+    Anything else a flop could be clocked by (a gate, a constant, a register) is a derived clock.
+    A latch, a memory or any other cell that holds state and is not a plain flop is refused, because
+    the proof flow would not see its clock or its enable.
+    """
+    input_bits: dict[int, str] = {}
+    for name, port in loaded["ports"].items():
+        if port["direction"] == "input":
+            for index, bit in enumerate(port["bits"]):
+                if isinstance(bit, int):
+                    input_bits[bit] = name if len(port["bits"]) == 1 else f"{name}[{index}]"
+    source: dict[int, int] = {}  # a bit driven by a buffer -> the bit that feeds the buffer
+    for cell in loaded["cells"].values():
+        if cell["type"] in ("$buf", "$_BUF_"):
+            for driven, feeding in zip(cell["connections"]["Y"], cell["connections"]["A"], strict=True):
+                if isinstance(driven, int) and isinstance(feeding, int):
+                    source[driven] = feeding
+    found: set[str] = set()
+    for cell_name, cell in loaded["cells"].items():
+        kind = str(cell["type"])
+        if not kind.startswith("$"):
+            return f"the cell {cell_name} is an instance of {kind}, which is not looked into"
+        if not _FLOP.match(kind):
+            # `$_...` are gate-level cells, which the reader never makes.
+            stateful = kind.startswith(("$mem", "$fsm", "$_")) or "latch" in kind or kind in _STATE_CELLS
+            if stateful or any("CLK" in str(port) for port in cell["connections"]):
+                return f"the cell {cell_name} is a {kind}: only flops are supported"
+            continue
+        clock = cell["connections"].get("CLK")
+        bit = clock[0] if clock and len(clock) == 1 else None
+        for _ in range(len(source) + 1):
+            if bit not in source:
+                break
+            bit = source[bit]
+        if bit not in input_bits:
+            return f"the flop {cell_name} is clocked by something other than an input port"
+        polarity = str(cell["parameters"].get("CLK_POLARITY", ""))
+        if not polarity or set(polarity) - {"0", "1"}:
+            return f"the flop {cell_name} has no stated clock edge"
+        edge = "posedge" if polarity.endswith("1") else "negedge"
+        found.add(f"{edge} {input_bits[bit]}")
+    return frozenset(found)
+
+
+def _clock_verdict(gold: Mapping[str, Any], gate: Mapping[str, Any]) -> tuple[str, str] | None:
+    """None when the clocks are the same single clock (or there is no flop); else the answer."""
+    sides = (_clocks(gold), _clocks(gate))
+    for name, found in zip(("gold", "gate"), sides, strict=True):
+        if isinstance(found, str):
+            return "error", f"{name}: {found}"
+    gold_clocks, gate_clocks = (s for s in sides if not isinstance(s, str))
+    for name, found in zip(("gold", "gate"), (gold_clocks, gate_clocks), strict=True):
+        if len(found) > 1:
+            return "error", f"the {name} has flops on more than one clock ({', '.join(sorted(found))}): not supported"
+    if gold_clocks and gate_clocks and gold_clocks != gate_clocks:
+        was, now = next(iter(gold_clocks)), next(iter(gate_clocks))
+        return "refuted", f"the clock differs: {was} in the gold, {now} in the gate"
+    return None
+
+
+def _decide_ports(
+    gold: Mapping[str, tuple[str, int]], gate: Mapping[str, tuple[str, int]], tie: Mapping[str, int]
+) -> tuple[tuple[str, str] | None, dict[str, int], dict[str, tuple[int, int]], list[str]]:
+    """Return (an early answer or None, free inputs, ties, dropped outputs) for the two port lists."""
+    only_gate_inputs = {n: w for n, (d, w) in gate.items() if n not in gold and d == "input"}
+    for name in tie:
+        if name not in only_gate_inputs:
+            return ("error", f"tie {name}: not an input port that only the gate has"), {}, {}, []
+    for name, (direction, _) in list(gold.items()) + list(gate.items()):
+        if direction not in ("input", "output"):
+            return ("error", f"port {name} is {direction}: not supported"), {}, {}, []
+    for name, (direction, width) in gold.items():
+        if name not in gate:
+            return ("refuted", f"port {name} of the gold module is missing in the gate"), {}, {}, []
+        gate_dir, gate_width = gate[name]
+        if gate_dir != direction:
+            return ("refuted", f"port {name} is an {direction} in the gold and an {gate_dir} in the gate"), {}, {}, []
+        if gate_width != width:
+            return ("refuted", f"port {name} is {width} bits wide in the gold and {gate_width} in the gate"), {}, {}, []
+    for name in [n for n in gate if n not in gold]:
+        if not _PORT_NAME.match(name):
+            return ("error", f"the extra port {name} of the gate has a name that cannot be handled"), {}, {}, []
+    ties: dict[str, tuple[int, int]] = {}
+    for name, value in tie.items():
+        width = only_gate_inputs[name]
+        if value >= 1 << width:
+            return ("error", f"tie {name}: the value {value} does not fit in {width} bits"), {}, {}, []
+        ties[name] = (width, value)
+    free = {n: w for n, w in only_gate_inputs.items() if n not in tie}
+    drop = [n for n, (d, _) in gate.items() if n not in gold and d == "output"]
+    return None, free, ties, drop
+
+
+_UNPROVEN = re.compile(r"^\s*Unproven \$equiv \S+: \\(\S+?)_gold(?: \[\d+\])? ", re.MULTILINE)
+_COUNT = re.compile(r"^\s*Found (\d+) \$equiv cells in equiv:", re.MULTILINE)
+_FAILED = re.compile(r"Found (\d+) unproven \$equiv cells in 'equiv_status")
+
+
+def _verdict(code: int, log: str, gold_ports: Mapping[str, tuple[str, int]]) -> tuple[str, str]:
+    """Turn the log of the proof run into (status, detail). Only a complete, explicit proof is "proved"."""
+    failed = _FAILED.search(log)
+    if code != 0 and failed:
+        names: list[str] = []
+        for name in _UNPROVEN.findall(log):
+            if name not in names:
+                names.append(name)
+        names.sort(key=lambda n: (n not in gold_ports, n))
+        if names:
+            return "refuted", "not proven equal: " + ", ".join(names[:5])
+        return "refuted", f"{failed.group(1)} signals were not proven equal"
+    if code != 0:
+        return "error", _problem(log)
+    counted = _COUNT.findall(log)
+    outputs = sum(width for direction, width in gold_ports.values() if direction == "output")
+    if "Equivalence successfully proven!" not in log or not counted or int(counted[-1]) < max(outputs, 1):
+        return "error", "Yosys finished without a proof and without a counter-example"
+    return "proved", f"{counted[-1]} signals proven equal"
+
+
+def _strip_src(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _strip_src(v) for k, v in value.items() if k != "src"}
+    if isinstance(value, list):
+        return [_strip_src(v) for v in value]
+    return value
+
+
+def _closure(modules: Mapping[str, Any], start: str) -> dict[str, str]:
+    """The text of a module and of every module below it, as a comparable string for each.
+
+    Generated names of cells and the source places are left out; ports, public net names and the
+    cells (type, parameters, connections) stay.
+    """
+    seen: dict[str, str] = {}
+    todo = [start]
+    while todo:
+        name = todo.pop()
+        if name in seen or name not in modules:
+            continue
+        module = modules[name]
+        cells = sorted(json.dumps(_strip_src(c), sort_keys=True) for c in module.get("cells", {}).values())
+        nets = {
+            n: [v["bits"], _strip_src(v.get("attributes", {})), v.get("signed", 0)]
+            for n, v in module.get("netnames", {}).items()
+            if not n.startswith("$")
+        }
+        memories = sorted(json.dumps(_strip_src(m), sort_keys=True) for m in module.get("memories", {}).values())
+        seen[name] = json.dumps([_strip_src(module.get("ports")), cells, nets, memories], sort_keys=True)
+        todo += [str(c["type"]) for c in module.get("cells", {}).values()]
+    return seen
+
+
+def _boxes(modules: Mapping[str, Any], same: Sequence[str]) -> dict[tuple[str, str], str]:
+    """(module, instance name) -> module of the instance, for every instance of a `same` module."""
+    boxes: dict[tuple[str, str], str] = {}
+    for name, module in modules.items():
+        for cell_name, cell in module.get("cells", {}).items():
+            kind = str(cell["type"])
+            if any(kind == s or kind.startswith(s + "$") for s in same):
+                boxes[(name, cell_name)] = kind
+    return boxes
+
+
+def _boxes_differ(same: Sequence[str]) -> str | None:
+    """None when each instance that is not looked into is the same on both sides, else the complaint."""
+    try:
+        gold = json.loads(Path("gold_h.json").read_text(encoding="utf-8"))["modules"]
+        gate = json.loads(Path("gate_h.json").read_text(encoding="utf-8"))["modules"]
+    except (OSError, ValueError, KeyError):
+        return "cannot read the children named in same"
+    before, after = _boxes(gold, same), _boxes(gate, same)
+    for key in sorted(set(before) & set(after)):
+        if before[key] != after[key]:
+            return f"the instance {key[1]} is of {before[key]} in the gold and of {after[key]} in the gate"
+    for kind in sorted(set(before.values()) & set(after.values())):
+        if _closure(gold, kind) != _closure(gate, kind):
+            names = sorted({key[1] for key, value in before.items() if value == kind})
+            return f"the child {', '.join(names)} is named in same but is not the same on the two sides"
+    return None
+
+
+def _initial_value(side: Mapping[str, Any]) -> str | None:
+    for net, info in side.get("netnames", {}).items():
+        if "init" in info.get("attributes", {}):
+            return str(net)
+    return None
+
+
+def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
+    module: str = spec["module"]
+    params: dict[str, str] = spec["params"]
+    same: list[str] = spec["same"]
+    code, log = _run_yosys(ports_script(module, params, same), "ports")
+    if code != 0:
+        return "error", _problem(log)
+    gold_side = _load("gold.json", module)
+    gate_side = _load("gate.json", module)
+    if gold_side is None or gate_side is None:
+        return "error", f"module {module} was not found"
+    for label, side in (("gold", gold_side), ("gate", gate_side)):
+        net = _initial_value(side)
+        if net is not None:
+            return "error", f"the {label} has an initial value on {net}: the proof does not model initial values"
+    if same:
+        complaint = _boxes_differ(same)
+        if complaint is not None:
+            return "error", complaint
+    gold_ports, gate_ports = _ports_of(gold_side), _ports_of(gate_side)
+    early, free, ties, drop = _decide_ports(gold_ports, gate_ports, spec["tie"])
+    if early is not None:
+        return early
+    code, log = _run_yosys(prepare_script(module, free, ties, drop), "prepare")
+    if code != 0:
+        return "error", _problem(log)
+    # The clocks come first (a module that cannot be judged costs no proof), and they are read after
+    # the ties and a clean-up: a clock mux with a tied select is its input.
+    gold_clean, gate_clean = _load("check.json", "gold"), _load("check.json", "gate")
+    if gold_clean is None or gate_clean is None:
+        return "error", "the netlist for the clock check is missing"
+    clock_answer = _clock_verdict(gold_clean, gate_clean)
+    if clock_answer is not None:
+        return clock_answer
+    code, log = _run_yosys(proof_script(), "proof")
+    status, detail = _verdict(code, log, gold_ports)
+    if status == "proved" and _has_undefined(gold_side):
+        Path("report.wanted").write_text("", encoding="utf-8")  # the parent runs the report, with its own budget
+    return status, detail
+
+
+def _has_undefined(side: Mapping[str, Any]) -> bool:
+    """True when the netlist has an x constant or a used bit that nothing drives."""
+    driven: set[int] = set()
+    used: set[int] = set()
+    for port in side["ports"].values():
+        bits = {b for b in port["bits"] if isinstance(b, int)}
+        (driven if port["direction"] == "input" else used).update(bits)
+        if port["direction"] != "input" and "x" in port["bits"]:
+            return True
+    for cell in side["cells"].values():
+        directions = cell.get("port_directions", {})
+        for name, bits in cell["connections"].items():
+            if directions.get(name) == "input":
+                if any(b in ("x", "z") for b in bits):
+                    return True
+                used.update(b for b in bits if isinstance(b, int))
+            else:
+                driven.update(b for b in bits if isinstance(b, int))
+    return bool(used - driven)
+
+
+def _undefined_outputs(module: str, gold_ports: Mapping[str, tuple[str, int]]) -> list[str]:
+    """The outputs of the gold that depend on an undefined value, found by a proof of the gold against itself."""
+    outputs = [name for name, (direction, _) in gold_ports.items() if direction == "output"]
+    code, log = _run_yosys(undefined_script(module), "undefined")
+    if code != 0:
+        return outputs  # not examined: name every output, which is the safe side
+    return [n for n in dict.fromkeys(_UNPROVEN.findall(log)) if n in outputs]
+
+
+def _report_child(spec_path: str) -> int:
+    spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
+    gold_side = _load("gold.json", spec["module"])
+    if gold_side is None:
+        return 1
+    names = _undefined_outputs(spec["module"], _ports_of(gold_side))
+    Path("report.json").write_text(json.dumps({"names": names}), encoding="utf-8")
+    return 0
+
+
+def _child(spec_path: str) -> int:
+    try:
+        spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
+        status, detail = _decide(spec)
+    except BaseException as exc:  # a trap or crash of the tool is an answer, not an exception
+        status, detail = "error", f"Yosys crashed: {type(exc).__name__}: {exc}"
+    Path("result.json").write_text(json.dumps({"status": status, "detail": detail}), encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(_report_child(sys.argv[1]) if sys.argv[2:] == ["report"] else _child(sys.argv[1]))

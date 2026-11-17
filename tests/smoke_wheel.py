@@ -67,8 +67,32 @@ def main() -> int:
         if b"input  logic dft_en" not in top or b"u_spare" in top or not (out / "hdl-vet.json").is_file():
             print("FAIL: the output tree is not what the script asked for")
             return 1
+    problem = _engine_without_the_extra()
+    if problem:
+        print(f"FAIL: {problem}")
+        return 1
     print(f"ok: hdl-vet {hdl_vet.__version__} from {installed}")
     return 0
+
+
+def _engine_without_the_extra() -> str | None:
+    """The wheel is installed alone: hdl_vet.equiv must import and say that Yosys is missing."""
+    import importlib.util
+
+    from hdl_vet import equiv
+
+    if importlib.util.find_spec("yowasp_yosys") is not None:
+        return None  # the extra is installed here; nothing to check
+    if equiv.available():
+        return "hdl_vet.equiv says Yosys is available, but the package is not installed"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "m.sv"
+        path.write_text("module m (input logic a, output logic o);\n  assign o = a;\nendmodule\n", encoding="utf-8")
+        source = equiv.Source([path])
+        result = equiv.check(source, source, "m")
+    if result.status != "error" or "hdl-vet[equiv]" not in result.detail:
+        return f"without the extra, equiv.check answered {result.status!r}: {result.detail!r}"
+    return None
 
 
 if __name__ == "__main__":
