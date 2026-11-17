@@ -1,0 +1,14 @@
+# The actions that build and publish are pinned by commit hash in release.yml.
+# Dependabot proposes the next version of each action, with its new hash, in one
+# pull request a week. Python packages are not listed: pyslang, ruff and mypy are
+# pinned on purpose and are changed by hand.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns:
+          - "*"
