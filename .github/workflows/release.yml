@@ -1,0 +1,151 @@
+name: release
+
+# A pushed tag "vX.Y.Z" makes a release. A run started by hand is a trial: it builds
+# everything and uploads to TestPyPI only. No secret is read. The two uploads use
+# trusted publishing: each runs in a GitHub environment and gets an OIDC token.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A release in progress is never cancelled. A second run of the same ref waits.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  UV_VERSION: "0.9.26"
+
+jobs:
+  # Needs Python 3.11 or newer for tomllib. The runner's own python3 (3.12 on
+  # ubuntu-24.04) is enough: the script uses only the standard library.
+  version:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A tag can point at any commit, and the tagged commit brings its own release.yml.
+      # Without this step, a tag on a commit that is not in main could reach the upload.
+      - name: Check that the tag is on main
+        if: github.event_name == 'push'
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Check the three versions
+        if: github.event_name != 'push'
+        run: python3 .github/scripts/check_version.py
+      - name: Check the three versions and the tag
+        if: github.event_name == 'push'
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 .github/scripts/check_version.py "$TAG"
+
+  ci:
+    needs: [version]
+    uses: ./.github/workflows/ci.yml
+
+  manual:
+    needs: [version]
+    uses: ./.github/workflows/manual.yml
+
+  # `uv build` makes the source package and builds the wheel from it. So the build
+  # also proves that the source package is complete.
+  build:
+    needs: [version]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.13"
+          enable-cache: false
+      - name: Build the source package and the wheel
+        run: uv build
+      - name: List the packages
+        run: ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  # Only a run by hand. A version can go to TestPyPI only once, so a second trial of
+  # the same version skips the files that are there.
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: [version, ci, manual, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # Only a pushed tag. The environment `pypi` has a required reviewer: the job waits
+  # for the owner's approval.
+  pypi:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, ci, manual, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+
+  # Only a pushed tag, and only after the upload to PyPI.
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [pypi, build, manual]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      # gh needs the repository for its context.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@v4
+        with:
+          name: hdl-vet-manual
+          path: manual/
+      - name: Make the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          mv manual/hdl-vet.pdf "manual/hdl-vet-manual-${version}.pdf"
+          gh release create "$TAG" \
+            --verify-tag \
+            --generate-notes \
+            --title "hdl-vet ${version}" \
+            dist/*.whl dist/*.tar.gz "manual/hdl-vet-manual-${version}.pdf"

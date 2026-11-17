@@ -124,6 +124,27 @@ A reviewer checks the other rules:
 - Use a noun group of three words or fewer. Write the articles.
 - Use a vertical list when the text depends on its introduction.
 
+## Make a release
+
+A maintainer makes a release. A version number can be used only once on PyPI. You cannot replace a file after the upload, and you cannot reuse a number that you delete. Make sure that all is right before step 6.
+
+1. Choose the new version X.Y.Z. Write it in `pyproject.toml`, in `src/hdl_vet/__init__.py` and in `docs/manual/version.tex`.
+2. Run `python .github/scripts/check_version.py`. If it prints a line, the three versions differ. Fix them.
+3. Open a pull request with this change. Merge it when all checks pass.
+4. Start the workflow by hand on the branch `main`. The file is `release.yml`. The page "Actions" lists it as `release`. Select "Run workflow".
+5. Look at the result of the trial. If a job fails, fix the cause in a new pull request. Then go back to step 4.
+6. Open the project page on TestPyPI and read it. A second trial of the same version uploads nothing. The project page on TestPyPI shows the first upload.
+7. Run `git fetch origin`. Then make the tag on the commit of `main` that the trial ran on: `git tag -a vX.Y.Z -m "hdl-vet X.Y.Z" COMMIT`.
+8. Push the tag by name: `git push origin vX.Y.Z`. Never push all tags.
+9. When the job `pypi` waits, open the run. Select "Review deployments", select `pypi`, then select "Approve and deploy".
+10. Wait for the job `release`. Open the new release on GitHub. Make sure that it holds the wheel, the source package and the PDF of the manual.
+
+The tag must be "v" and the version, for example `v0.1.0`. The first job of the workflow fails if it is not. The first job also fails if the tagged commit is not in `main`. The workflow makes the GitHub release only for a pushed tag, never for a run by hand.
+
+If the job `pypi` fails before any file is on PyPI, correct the cause. Then delete the tag and push it again. If any file is on PyPI, do not use the version again. Change the version to the next one and start at step 1.
+
+If only the job `release` fails, select "Re-run failed jobs". Do not select "Re-run all jobs". A full run fails in the job `pypi`, because the files exist.
+
 ## Licence
 
 hdl-vet is under the Apache-2.0 licence. The text is in [LICENSE](LICENSE). When you open a pull request, you offer your contribution under this licence. There is no other form to sign.
