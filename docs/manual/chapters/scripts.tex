@@ -15,19 +15,16 @@ leaves no \file{__pycache__} folder next to it. A script that does not define
 Everything that a script prints goes to the standard output of \cmd{vet}.
 Section~\ref{sec:program} says what this means for your safety.
 
-A script can fail in three ways. All of them exit with status 2 and write nothing
-(chapter~\ref{ch:cli} lists the exit statuses). The three ways are:
+A script can fail in two ways. Both of them exit with status 2 and write nothing
+(chapter~\ref{ch:cli} lists the exit statuses). The two ways are:
 
 \begin{itemize}
 \item An operation refuses, or finds drift. hdl-vet prints \code{vet: script NAME:} and the
   reason. The error is a \code{VetError}, or a \code{DriftError}, which is a kind of
-  \code{VetError}.
+  \code{VetError}. A \apiname{Vet.splice} that overlaps an earlier splice is such an error
+  too. Its message starts with \code{splice} and the name of the file.
 \item The script raises another Python exception. hdl-vet prints
   \code{vet: script NAME raised TYPE: MESSAGE} and then a Python traceback.
-\item A raw edit with \apiname{Vet.splice} overlaps an earlier edit. The error is a
-  \code{SpliceError}. It is not a \code{VetError}. So \code{except VetError} in your script
-  does not catch it. The message is only \code{vet: [2, 7) overlaps [0, 5)}. It has the
-  two ranges and not the name of the script.
 \end{itemize}
 
 \section{Find modules and instances}

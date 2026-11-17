@@ -297,11 +297,15 @@ def _apply(args: argparse.Namespace) -> int:
         except VetError as e:
             raise _InputError(f"script {name}: {e}") from e
         except _OWN_ERRORS:
+            if session.finished:
+                raise _InputError(f"script {name} called finish; the command line finishes the session") from None
             raise
         except SystemExit as e:
             raise _InputError(f"script {name} called exit ({e.code!r}); scripts must return from apply()") from e
         except Exception as e:
             raise _InputError(f"script {name} raised {type(e).__name__}: {e}\n{traceback.format_exc()}") from e
+        if session.finished:
+            raise _InputError(f"script {name} called finish; the command line finishes the session")
         if (left := vet.open_block()) is not None:
             raise _InputError(f"script {name} returned with a {left} still open; close every `with` block")
         # Every script ends a stage: the next one sees what this one queued, as it would after a
