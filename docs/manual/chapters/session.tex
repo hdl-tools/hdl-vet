@@ -32,7 +32,10 @@ it loads the archive. You can open the archive with any zip tool. It has these p
 \item \file{added/} (the files that scripts added)
 \end{itemize}
 
-The same state gives the same bytes. hdl-vet replaces an existing archive.
+The same state gives the same bytes. hdl-vet replaces an existing archive. The archive
+keeps what the sign-off must know about each logic operation: the module, the net, the
+enable and the waiver. A run that resumes the session proves them again. An archive that an
+older version wrote has no logic operation, and it loads as before.
 
 \begin{itemize}
 \item Without \opt{-o}, hdl-vet saves, prints \code{saved FILE} and the summary, and then

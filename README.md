@@ -24,6 +24,7 @@ The sign-off fails in these cases:
 - The edited design reads a file that the original design did not read.
 - A change that an operation must cause is not in the design.
 - A later edit undid the result of an operation.
+- The equivalence check does not prove that an override has no effect when it is switched off.
 
 ## Status
 
@@ -35,12 +36,15 @@ This is an early version. These parts work today:
 - a project file, `hdl-vet.toml`, that names the design, the scripts and the output folder
 - saved sessions that you can resume later
 - scopes that limit an operation to one part of the design
+- one operation that changes logic, `Module.override_net`, which puts a multiplexer on a net, for example a bypass of a reset synchroniser
+- an equivalence check in the sign-off, which proves that such a change has no effect when its enable is 0
 
-No operation changes logic, for example an assign statement. There is no equivalence check.
+Only `Module.override_net` changes logic. The sign-off proves the edited module with Yosys. The proof needs the extra `hdl-vet[equiv]`. Without it, the operation is refused unless it has a waiver. A waiver is a text that says why the proof is not needed.
 
 The sign-off does not see these changes:
 
 - a change of logic that you make with a raw edit of the text, which is `Vet.splice`
+- a change of logic above the edited module, because the proof is of the edited module only
 - a change of the delay or the strength of a gate primitive
 - a signal that loses the driver of only some of its bits
 
@@ -74,6 +78,8 @@ cd hdl-vet
 ```
 
 To install hdl-vet from the clone, run `pip install .` in it.
+
+To use `Module.override_net` with the proof, install the extra. Run `pip install "hdl-vet[equiv]"`, or `pip install ".[equiv]"` in the clone.
 
 ## A first run
 

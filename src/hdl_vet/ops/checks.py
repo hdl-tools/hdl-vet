@@ -83,6 +83,17 @@ def _ev_add_assign(session: Session, a: tuple[Any, ...], design: Design) -> str 
     return None
 
 
+def _ev_override_net(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, net, enable, _value, keep, _waiver = a
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(f"override_net {mod} {net}")
+    # The text may have been edited by hand since (the proof judges what it does), so only the mux is looked for.
+    if not any(x.left == net and {enable, keep} <= set(tokens(x.right)) for x in m.assigns):
+        return f"override_net {mod} {net}: no assignment of {net} uses {enable} and {keep} any more"
+    return None
+
+
 def _ev_propagate_param(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
     name, to, before = a
     found = design.snapshot().get(to)
@@ -188,6 +199,7 @@ _EVALUATORS: dict[str, tuple[Callable[[Session, tuple[Any, ...], Design], str | 
     "add_param": (_ev_add_param, 4),
     "add_wire": (_ev_add_wire, 3),
     "add_assign": (_ev_add_assign, 3),
+    "override_net": (_ev_override_net, 6),
     "propagate_param": (_ev_propagate_param, 3),
     "remove_instance": (_ev_remove_instance, 2),
     "remove_wire": (_ev_remove_wire, 2),

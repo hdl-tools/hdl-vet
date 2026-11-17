@@ -329,6 +329,7 @@ def _apply(args: argparse.Namespace) -> int:
             sys.stdout.write("\n".join([f"saved {args.save}", summary, *notes]) + "\n")
             if status.ok:
                 sys.stdout.write("sign-off so far: ok\n")
+                sys.stderr.write("".join(f"{line}\n" for line in status.equivalence_lines()))
             else:
                 sys.stdout.write("sign-off so far: FAILED\n")
                 sys.stderr.write(status.report())
@@ -341,6 +342,7 @@ def _apply(args: argparse.Namespace) -> int:
         return 1
     if args.dry_run:
         sys.stdout.write(result.diff)
+        sys.stderr.write("".join(f"{line}\n" for line in result.equivalence_lines()))
         sys.stderr.write("".join(f"added {name}\n" for name in result.added))
         sys.stderr.write("".join(f"{note}\n" for note in notes))
         sys.stderr.write("".join(f"{line}\n" for line in saved_lines))
@@ -348,6 +350,7 @@ def _apply(args: argparse.Namespace) -> int:
         return 0
     if plan.outdir is None:  # --save without -o returned above
         raise _InputError("one of -o/--outdir, --save and --dry-run is required")
+    sys.stderr.write("".join(f"{line}\n" for line in result.equivalence_lines()))
     out = write_tree(session, result, plan.outdir, scripts=everything, force=args.force)
     root = session.layout_root
     lines = [f"wrote {out}", *saved_lines, summary]

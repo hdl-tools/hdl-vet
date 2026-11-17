@@ -17,6 +17,8 @@ When the last script ends, hdl-vet does these steps:
 \item If a file differs, it loads the edited design. It compares the edited design with
   the design that you started from, the \term{baseline}.
 \item It evaluates the checks that the operations registered.
+\item If an operation changed logic, it runs the equivalence check
+  (section~\ref{sec:equiv}).
 \end{enumerate}
 
 If every step passes, hdl-vet writes the output tree. If no file changed, there is
@@ -84,6 +86,24 @@ shows one failure of each kind.
   cause is that the \code{expect} is wrong.
 
 \item[failed check: MESSAGE] A post-condition failed. See the section after next.
+
+\item[equivalence proved: MODULE (OPERATIONS; equal when ENABLE is 0)] The check proved
+  the module. This line is no failure. hdl-vet prints it on the error output also when
+  the sign-off passes. If the design elaborates the module with parameter values, the
+  line shows them after the name, for example \code{rst_sync [STAGES=3]}.
+
+\item[not equivalent: MODULE: DETAIL (OPERATIONS)] The check did not prove the module.
+  The detail names the signals that are not equal. Look at the operations that the line
+  names, and at the other edits of the module.
+
+\item[equivalence not checked: MODULE: DETAIL (OPERATIONS)] The check could not judge the
+  module. The detail gives the reason, for example a second clock. This line fails the
+  sign-off too. Section~\ref{sec:equiv} lists what the check cannot judge.
+
+\item[waived: OPERATION: "WAIVER" (the check says: RESULT)] Every logic operation of the
+  module has a waiver. The waiver decides, so this line is no failure. The text in
+  parentheses is what the check said: \code{proved}, or \code{refuted} or \code{error}
+  with the detail. Without Yosys, it says that the check did not run.
 \end{description}
 
 These scripts produce the failures in the transcript. \file{cannot_load.py} renames the
@@ -142,6 +162,8 @@ examples:
   design}
 \item \code{failed check: connect soc_top.u_rst_sync test_i: expected 'x', found 'y'}
 \item \code{failed check: add_file NAME: none of its modules is instantiated}
+\item \code{failed check: override_net MODULE NET: no assignment of NET uses ENABLE and
+  KEEP any more}
 \item \code{failed check: propagate_param WIDTH PATH: the value in use changed
   from 8 to 4}
 \end{itemize}
@@ -152,6 +174,88 @@ other, such as \apiname{Module.add_wire} and \apiname{Module.remove_wire} on the
 fail in this way.
 
 Skipped operations register no check.
+
+\section{The equivalence check}
+\label{sec:equiv}
+
+Most operations change the structure only. \apiname{Module.override_net} changes logic.
+The sign-off proves that this change has no effect when you switch it off. The proof is
+the \term{equivalence check}. It uses Yosys. Chapter~\ref{ch:install} tells how to
+install it.
+
+\subsection*{What the check compares}
+
+The check compares two versions of one module: the module of the input design, and the
+edited module. hdl-vet makes one comparison for each module that a logic operation
+edited. It makes one comparison for each set of parameter values with which the design
+elaborates the module. The rules of a comparison are these:
+
+\begin{itemize}
+\item hdl-vet ties the enable of every override in the module to 0.
+\item All other edits of the run in the module are part of the edited module. A new input
+  must have no effect. A changed connection counts as a change of behaviour.
+\item hdl-vet does not look into a child module when nothing changed in it or below it.
+  The text of the child and the text of everything below it must be the same in the run.
+  The check compares the children on both sides. It gives an error when they differ.
+\end{itemize}
+
+The check reads files. So hdl-vet writes the input design and the edited design to a
+temporary folder. The folder has the layout of the real tree, so that an include
+resolves as before. hdl-vet removes the folder after the check. It does not write into the
+input tree or the output tree.
+
+\subsection*{What proved means}
+
+With the enables at 0, every output of the edited module equals the same output of the
+input module. The proof has no start state. It holds from every state of the registers.
+Yosys proves it by induction. It does not simulate. Only a complete proof gives
+\code{proved}.
+
+The check can give three answers:
+
+\begin{description}
+\item[proved] The check proved the equality.
+\item[refuted] The check did not prove the equality. The detail names the signals.
+\item[error] The check could not judge. The detail gives the reason. An \code{error} never
+  counts as proved.
+\end{description}
+
+\subsection*{What the check does not prove}
+
+The proof is of the edited module only. A parent that ties the enable to 1 is not seen by
+the proof. The comparison of the structure shows the new port and its connection. The check
+does not prove what the connection does. Chapter~\ref{ch:limits} lists the other limits.
+
+A raw edit of logic in a module that has no logic operation is not proved.
+
+\subsection*{The waiver}
+
+A waiver is an argument of the operation. With a waiver, the sign-off passes whatever the
+check says. The report and \file{hdl-vet.json} show the waiver and the answer of the
+check. The rules are these:
+
+\begin{itemize}
+\item A module is \emph{waived} only when every logic operation in it has a waiver.
+\item One waiver does not cover another operation. If one of two overrides in a module has
+  no waiver, the check decides.
+\item With Yosys, the check runs also when the operation has a waiver.
+\item Without Yosys, the operation is refused unless it has a waiver. The record then says
+  \emph{waived}, and the check did not run.
+\end{itemize}
+
+\subsection*{When the check runs}
+
+The check runs in \apiname{Vet.finish}, in \apiname{Vet.check} and with \opt{--dry-run}.
+Each run proves every module again. The check takes from a few seconds to about one minute.
+In the tests, a module with about twenty children took about one minute.
+
+The output tree keeps the result. \file{hdl-vet.json} has the list \code{equivalence}. Each
+entry has \code{module}, \code{params}, \code{operations}, \code{status} and
+\code{detail}. The list \code{waivers} has one entry for each operation with a waiver. Each
+entry has \code{operation}, \code{waiver} and \code{check}. Both lists are empty when no
+logic operation ran.
+
+The transcript in section~\ref{sec:logic} shows each of the report lines.
 
 \section{Expectations}
 

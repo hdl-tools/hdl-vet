@@ -112,11 +112,13 @@ Each word has one meaning in this manual.
 \section{What hdl-vet does not do}
 
 \begin{itemize}
-\item It does not check what your logic does. The sign-off compares the
-  structure of the design (instances, ports, parameters, connections) and the
+\item It does not check what your logic does, with one exception. The sign-off compares
+  the structure of the design (instances, ports, parameters, connections) and the
   diagnostics of the compiler. It does not simulate. A change of logic that
   you make with \apiname{Vet.splice} passes the sign-off unless you declare it.
   Chapter~\ref{ch:limits} gives an example.
+\item The one exception is \apiname{Module.override_net}. The sign-off proves that this
+  operation has no effect when its enable is 0 (section~\ref{sec:equiv}).
 \item It does not edit instances in generate blocks, instance arrays, or
   instances that come from a macro.
 \item It sees one configuration of the design. That configuration is the defines

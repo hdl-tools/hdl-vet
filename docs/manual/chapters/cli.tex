@@ -59,6 +59,9 @@ and folder names on the command line start from the current folder.
   \end{itemize}
 \item With \opt{--dry-run}, hdl-vet prints the diff on the standard output. It prints
   everything else on the error output.
+\item If a script used \apiname{Module.override_net}, hdl-vet prints the lines of the
+  equivalence check on the error output. It prints them also when the sign-off passes
+  (chapter~\ref{ch:signoff}).
 \item If hdl-vet uses a project file, the first line, on the error output, is
   \code{project: PATH}.
 \item If the run fails, hdl-vet prints the message on the error output.

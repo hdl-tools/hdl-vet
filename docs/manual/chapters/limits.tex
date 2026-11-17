@@ -8,15 +8,19 @@ Items that say so were not checked by a test.
 \section{What the sign-off does not see}
 
 \begin{itemize}
-\item \textbf{Logic.} The sign-off compares the structure (instances, ports,
-  parameters, connections) and the diagnostics of the compiler. A raw edit that changes
-  only logic passes without an \code{expect}. The first transcript below changes
-  \code{count_o + 1'b1} into \code{count_o + 2'd2} in \code{timer}, and the sign-off
-  says nothing.
+\item \textbf{Logic of a raw edit.} The sign-off compares the structure (instances,
+  ports, parameters, connections) and the diagnostics of the compiler. It proves a change
+  of logic only for \apiname{Module.override_net}. A raw edit that changes only logic passes
+  without an \code{expect}. The first transcript below changes \code{count_o + 1'b1} into
+  \code{count_o + 2'd2} in \code{timer}, and the sign-off says nothing.
 
   Use the operations where you can. They never write such an edit. If you
   use \apiname{Vet.splice}, you are responsible for the logic. The same holds for
   declarations, because \apiname{Module.add_wire} has no structural expectation.
+
+  One case differs. When \apiname{Module.override_net} edited a module, the proof covers
+  every edit of the run in that module, also a raw edit. Whether a raw edit in other
+  modules must have a proof or a waiver is not decided.
 \item \textbf{Partly undriven signals.} A signal can lose the driver of only some of
   its bits. This can happen through an operation that is not a checked operation (here
   \apiname{Instance.disconnect}), or through a splice. The sign-off passes such a run.
@@ -52,6 +56,78 @@ Items that say so were not checked by a test.
 \lstinputlisting[style=script]{examples/scripts/cancel.py}
 
 \lstinputlisting[style=console]{examples/console/limits.txt}
+
+\section{What the equivalence check does not do}
+
+Chapter~\ref{ch:signoff} explains the check. These are its limits. The check gives
+\code{error} or \code{refuted} in these cases, and never a wrong \code{proved}. Only the last
+two items can give a \code{proved} that you must read with care. A waiver is the way to go
+on when the check cannot judge.
+
+\begin{itemize}
+\item \textbf{One module.} The proof is of the edited module only. A parent that ties the
+  enable to 1 is not seen by the proof. The comparison of the structure shows the new port
+  and its connection. The check does not prove what the connection does.
+\item \textbf{The enable must be new.} The check ties the enable to 0 in the edited module
+  only. So the enable must be a port that the run added, with \apiname{Module.add_port} or
+  \apiname{Vet.punch_port}. For an input port that the input design has, hdl-vet refuses
+  the call.
+\item \textbf{Clocks.} Every flop of the two modules must have the clock of one input
+  port, with one edge, the same on both sides. A module with flops on more than one clock
+  of its own is an \code{error}. This holds for a bridge between clock domains. When the
+  check looks into the children of the module, their flops count too.
+\item \textbf{What the check cannot model.} These cases give \code{error}:
+  \begin{itemize}
+  \item an initial value, such as \code{logic r = 1'b1;}, or an \code{initial} block, on
+    either side, also when both sides are the same
+  \item a latch
+  \item a clock that reaches a flop through an inverter, through a multiplexer that is
+    not tied, or through a divider
+  \item flops on both edges of one clock
+  \item two asynchronous resets
+  \item an interface port
+  \item a memory that the tool cannot map to flops
+  \end{itemize}
+\item \textbf{Time.} A time limit of 300 seconds holds for each check. A wide multiplier
+  that is written in another way, and a memory of 1000 words of 32 bits, reach it. The
+  answer is \code{error}.
+\item \textbf{Renamed registers.} A renamed chain of more than five registers is
+  \code{refuted}. A rewrite that keeps the name of an internal signal but changes what it
+  carries is \code{refuted} too.
+\item \textbf{Overrides at two levels.} Take a module that has an override, and a child
+  that has one too. hdl-vet compares the module with that child flattened. If the two then
+  have flops on more than one clock, the answer is \code{error}, and the override of the
+  upper module needs a waiver.
+\item \textbf{A loop through other nets.} hdl-vet refuses a value that reads the net
+  itself. It does not refuse a value that reads a net which the overridden net drives. The
+  comparison ties the enable to 0, so it does not see this loop.
+\item \textbf{A rare answer of not the same.} The check compares the children that it does
+  not look into. Two identical children with symmetric logic that has no names can come in
+  another order. The answer is then an \code{error}, never a wrong \code{proved}.
+\item \textbf{What a waiver covers.} A waiver covers the comparison of the module. When
+  every logic operation of a module has a waiver, a raw edit of logic in the same module is
+  not judged.
+\item \textbf{Memory.} A large module needs memory. The comparison of the top module of a
+  large generated design took about 2.3 GB in the Yosys process.
+\item \textbf{Delays.} A driver with a delay, such as \code{assign #1 n = x;}, gives
+  \code{error}.
+\item \textbf{Parameters.} A parameter with a string value gives \code{error}. The check
+  compares a type parameter at its default only.
+\item \textbf{Values and names.}
+  A define with a value that has a dollar sign, a backslash or a line break gives
+  \code{error}. A file name or an include folder with a quote, a backslash, a dollar sign
+  or a line break gives \code{error}.
+\item \textbf{Changes that the proof does not see.} Some changes of a port are
+  \code{proved}: its signedness, the order of the fields of a struct port, and the order of
+  the ports. The module computes the same. A parent that connects by position or by field
+  sees the change. The comparison of the structure reports it.
+\item \textbf{Undefined values.} Where the input module has an undefined value that
+  reaches an output, the proof can still pass, because the edited module can choose a
+  value. The detail in \file{hdl-vet.json} then says \code{the gold has undefined values
+  on} and names the outputs. Here \emph{gold} is the input module. The search for these
+  values does not see one that cancels, such as \code{u ^ u}, or one that a division by zero
+  makes.
+\end{itemize}
 
 \section{What the operations refuse}
 

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from hdl_vet.listedit import edit_list, line_rule, remove_all
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
 from hdl_vet.ops.instance import Instance
+from hdl_vet.ops.override import override_net as _override_net
 from hdl_vet.ops.text import (
     _DIRECTIONS,
     _IDENT,
@@ -160,6 +161,17 @@ class Module:
         v._sync()
         info = v._info(mod)
         v._commit(v._plan_assign(mod, info, target, expr))
+
+    def override_net(
+        self, net: str, value: object, *, enable: str, keep: str | None = None, waiver: str | None = None
+    ) -> None:
+        """Put a mux on `net`: `assign net = enable ? value : keep;`. The driver of `net` then drives `keep`.
+
+        `enable` is a one bit input port of the module. `keep` names the new signal that holds the original
+        value (default `<net>_pre`). The sign-off proves the module equal when `enable` is 0, or `waiver`
+        (a text) says why it is not needed. Without Yosys the call needs a waiver.
+        """
+        _override_net(self, net, value, enable, keep, waiver)
 
     # --- removals (checked operations)
 

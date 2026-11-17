@@ -96,6 +96,7 @@ def test_a_corpus_test_is_beside_its_area():
         "test_ops_corpus.py": "ops",
         "test_hier_corpus.py": "ops",
         "test_instances_corpus.py": "ops",
+        "test_override_corpus.py": "ops",
         "test_save_resume_corpus.py": "cli",
     }
 

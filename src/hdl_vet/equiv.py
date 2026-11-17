@@ -182,8 +182,18 @@ def _run_child(
         work = Path(folder)
         (work / "tmp").mkdir()
         seen = _Seen()
+        forms = {work.as_posix(), str(work), work.resolve().as_posix(), str(work.resolve())}
+        finish = done
+
+        def done(status: str, detail: str) -> Result:
+            for form in sorted(forms, key=len, reverse=True):
+                detail = re.sub(re.escape(form) + r"[/\\]?", "", detail, flags=re.IGNORECASE)
+            detail = re.sub(re.escape(work.name), "", detail, flags=re.IGNORECASE)
+            return finish(status, detail)
+
         try:
             work_seen = seen(work)
+            forms.add(work_seen)
             _write_list(work / "gold.f", gold, seen)
             _write_list(work / "gate.f", gate, seen)
         except _Refused as exc:
@@ -671,29 +681,132 @@ def _strip_src(value: Any) -> Any:
     return value
 
 
-def _closure(modules: Mapping[str, Any], start: str) -> dict[str, str]:
-    """The text of a module and of every module below it, as a comparable string for each.
+def _colours(
+    cells: Sequence[Mapping[str, Any]], bodies: Sequence[str], named: Mapping[int, tuple[str, int]]
+) -> dict[int, int]:
+    """A colour for each bit that depends on the names and the neighbourhood of the bit, not on its number.
 
-    Generated names of cells and the source places are left out; ports, public net names and the
-    cells (type, parameters, connections) stay.
+    A named bit has its name and index. The colour of any other bit is made again a few times from the
+    cells that touch it (the type, the parameters and the colours of the other bits of the cell), so that
+    thousands of cells of one kind with no names are told apart by what they connect. The colours are
+    hashes of this process, so they are only comparable inside it (both sides are read in one process).
     """
-    seen: dict[str, str] = {}
+    colour: dict[int, int] = {b: hash((n, i)) for b, (n, i) in named.items()}
+    for _ in range(4):
+        touching: dict[int, list[tuple[int, str, int]]] = {}
+        for cell, body in zip(cells, bodies, strict=True):
+            wires = cell.get("connections", {})
+            signature = hash(
+                (
+                    body,
+                    tuple(
+                        (p, tuple(colour.get(b, 0) if isinstance(b, int) else b for b in bits))
+                        for p, bits in sorted(wires.items())
+                    ),
+                )
+            )
+            for port, bits in wires.items():
+                for index, value in enumerate(bits):
+                    if isinstance(value, int) and value not in named:
+                        touching.setdefault(value, []).append((signature, port, index))
+        colour.update({b: hash(tuple(sorted(items))) for b, items in touching.items()})
+    return colour
+
+
+def _renumbered(module: Mapping[str, Any]) -> str:
+    """One module as a string that does not depend on the integer ids that the reader gave to its bits.
+
+    The bits are numbered again by a walk: the ports in name order, the public nets in name order, then
+    the cells in the order of a key that holds no bit id (type, parameters, and for each connection the
+    constants and the public names it touches). Two modules give the same string only when one numbering
+    maps the one onto the other, so a changed connection, cell or name still shows.
+    """
+    ids: dict[int, int] = {}
+
+    def bit(value: Any) -> Any:
+        if not isinstance(value, int):
+            return value
+        return ids.setdefault(value, len(ids))
+
+    ports = module.get("ports", {})
+    nets = {n: v for n, v in module.get("netnames", {}).items() if not n.startswith("$")}
+    named: dict[int, tuple[str, int]] = {}
+    for name in sorted(ports):
+        for index, value in enumerate(ports[name]["bits"]):
+            if isinstance(value, int):
+                named.setdefault(value, (name, index))
+    for name in sorted(nets):
+        for index, value in enumerate(nets[name]["bits"]):
+            if isinstance(value, int):
+                named.setdefault(value, (name, index))
+
+    cells = list(module.get("cells", {}).values())
+    bodies = [json.dumps(_strip_src({k: v for k, v in c.items() if k != "connections"}), sort_keys=True) for c in cells]
+    colour = _colours(cells, bodies, named)
+
+    def shape(value: Any) -> Any:
+        return colour.get(value, 0) if isinstance(value, int) else value
+
+    keyed = []
+    for cell, body in zip(cells, bodies, strict=True):
+        wires = {p: [shape(b) for b in bits] for p, bits in cell.get("connections", {}).items()}
+        keyed.append((json.dumps([body, wires], sort_keys=True), cell))
+    keyed.sort(key=lambda item: item[0])
+    out_ports = {
+        n: [_strip_src({k: v for k, v in ports[n].items() if k != "bits"}), [bit(b) for b in ports[n]["bits"]]]
+        for n in sorted(ports)
+    }
+    out_nets = {
+        n: [[bit(b) for b in nets[n]["bits"]], _strip_src(nets[n].get("attributes", {})), nets[n].get("signed", 0)]
+        for n in sorted(nets)
+    }
+    out_cells = []
+    for key, cell in keyed:
+        wires = {p: [bit(b) for b in cell["connections"][p]] for p in sorted(cell.get("connections", {}))}
+        out_cells.append([key, wires])
+    memories = sorted(json.dumps(_strip_src(m), sort_keys=True) for m in module.get("memories", {}).values())
+    return json.dumps([out_ports, out_nets, out_cells, memories], sort_keys=True)
+
+
+def _plain(module: Mapping[str, Any]) -> str:
+    """One module as a string that keeps the numbers of the bits: cheap, and equal for most identical children."""
+    cells = sorted(json.dumps(_strip_src(c), sort_keys=True) for c in module.get("cells", {}).values())
+    nets = {
+        n: [v["bits"], _strip_src(v.get("attributes", {})), v.get("signed", 0)]
+        for n, v in module.get("netnames", {}).items()
+        if not n.startswith("$")
+    }
+    memories = sorted(json.dumps(_strip_src(m), sort_keys=True) for m in module.get("memories", {}).values())
+    return json.dumps([_strip_src(module.get("ports")), cells, nets, memories], sort_keys=True)
+
+
+def _below(modules: Mapping[str, Any], start: str) -> list[str]:
+    """The names of a module and of every module below it that the netlist holds."""
+    seen: list[str] = []
     todo = [start]
     while todo:
         name = todo.pop()
         if name in seen or name not in modules:
             continue
-        module = modules[name]
-        cells = sorted(json.dumps(_strip_src(c), sort_keys=True) for c in module.get("cells", {}).values())
-        nets = {
-            n: [v["bits"], _strip_src(v.get("attributes", {})), v.get("signed", 0)]
-            for n, v in module.get("netnames", {}).items()
-            if not n.startswith("$")
-        }
-        memories = sorted(json.dumps(_strip_src(m), sort_keys=True) for m in module.get("memories", {}).values())
-        seen[name] = json.dumps([_strip_src(module.get("ports")), cells, nets, memories], sort_keys=True)
-        todo += [str(c["type"]) for c in module.get("cells", {}).values()]
+        seen.append(name)
+        todo += [str(c["type"]) for c in modules[name].get("cells", {}).values()]
     return seen
+
+
+def _same_below(gold: Mapping[str, Any], gate: Mapping[str, Any], start: str) -> bool:
+    """True when a module and everything below it is the same on the two sides.
+
+    Generated names of cells, the source places and (in the second look) the numbers of the bits are left
+    out. Ports, public net names and the cells (type, parameters, connections) stay. A module that is not
+    equal as it is gets the second look, which numbers its bits again.
+    """
+    names = _below(gold, start)
+    if names != _below(gate, start) and sorted(names) != sorted(_below(gate, start)):
+        return False
+    for name in names:
+        if _plain(gold[name]) != _plain(gate[name]) and _renumbered(gold[name]) != _renumbered(gate[name]):
+            return False
+    return True
 
 
 def _boxes(modules: Mapping[str, Any], same: Sequence[str]) -> dict[tuple[str, str], str]:
@@ -719,7 +832,7 @@ def _boxes_differ(same: Sequence[str]) -> str | None:
         if before[key] != after[key]:
             return f"the instance {key[1]} is of {before[key]} in the gold and of {after[key]} in the gate"
     for kind in sorted(set(before.values()) & set(after.values())):
-        if _closure(gold, kind) != _closure(gate, kind):
+        if not _same_below(gold, gate, kind):
             names = sorted({key[1] for key, value in before.items() if value == kind})
             return f"the child {', '.join(names)} is named in same but is not the same on the two sides"
     return None

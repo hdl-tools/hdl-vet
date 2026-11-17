@@ -17,6 +17,7 @@ from hdl_vet.ops.plans import _PlanOps
 from hdl_vet.ops.raw import _RawOps
 from hdl_vet.ops.scope import _Scope, _ScopeOps
 from hdl_vet.ops.text import _did_you_mean
+from hdl_vet.prove import LogicOp, Record, prove
 from hdl_vet.session import Result, Session, SessionError, describe
 from hdl_vet.slang_adapter import AdapterError, Design, InstanceInfo, ModuleInfo
 
@@ -51,7 +52,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
         if self._scope is not None:
             raise VetError("finish: not allowed inside a scope")
-        return self.session.finish([*self.session.scripts, *scripts], self._evaluators())
+        return self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
 
     def _idle(self, op: str) -> None:
         """Refuse `op` inside a `group` block and after `finish`."""
@@ -73,7 +74,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         dirty, everything = set(self._dirty), self._all
         added = {mod: dict(names) for mod, names in self._added.items()}
         try:
-            return self.session.check([*self.session.scripts, *scripts], self._evaluators())
+            return self.session.check([*self.session.scripts, *scripts], self._evaluators(), self._proof())
         finally:
             self._dirty, self._all, self._added = dirty, everything, added
             self._seen = self.session.reloads
@@ -212,6 +213,21 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         """The registered post-conditions as `Session.finish` takes them."""
         session = self.session
         return [partial(_evaluate, session, c) for c in self._checks]
+
+    def _proof(self) -> Callable[[Session, Design], list[Record]] | None:
+        """The equivalence check of the logic operations registered so far, as `Session.finish` takes it."""
+        ops = [
+            LogicOp(c.args[0] or "", c.args[1] or "", c.args[2] or "", c.args[5])
+            for c in self._checks
+            if c.kind == "override_net"
+        ]
+        if not ops:
+            return None
+
+        def proof(session: Session, design: Design) -> list[Record]:
+            return prove(session, design, ops)
+
+        return proof
 
     def _instance_info(self, module: str, name: str) -> InstanceInfo:
         info = self._info(module)

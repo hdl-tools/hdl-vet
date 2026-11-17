@@ -17,7 +17,7 @@ The package has these parts:
 | `cli.py`, `project.py` | the command line and the project file |
 | `filelist.py`, `splice.py`, `listedit.py`, `paths.py` | the file list, the edits of text, small helpers |
 | `session.py`, `signoff.py`, `output.py`, `archive.py` | the session, the sign-off, the output tree, saved sessions |
-| `equiv.py` | the equivalence check with Yosys |
+| `equiv.py`, `prove.py` | the equivalence check with Yosys, and the proof of the logic operations at the sign-off |
 | `ops/` | the scripting interface |
 | `slang_adapter/` | all that reads the design with pyslang |
 
@@ -27,6 +27,7 @@ The package `ops` has one module for each group:
 | --- | --- |
 | `vet.py` | the class `Vet`: the session, checked operations, groups |
 | `module.py` | the class `Module`: ports, parameters, wires, assigns, removals |
+| `override.py` | `override_net`, the operation that changes logic |
 | `instance.py` | the class `Instance`: connections, parameter values, `replace_module` |
 | `hier.py` | `punch_port` and `propagate_param` |
 | `scope.py` | the declared scope |
@@ -40,13 +41,13 @@ The package `slang_adapter` is the only place that imports `pyslang`:
 
 | Module of `slang_adapter/` | What it holds |
 | --- | --- |
-| `api.py` | `load` and `parameter_names` |
+| `api.py` | `load`, `parameter_names` and `check_expression` |
 | `design.py` | the class `Design` |
 | `loading.py` | the load cache and the loader |
 | `model.py` | modules and instances |
 | `snapshots.py` | the structure of the design, for the comparison of the sign-off |
 | `diagnostics.py` | diagnostics, drivers, signals that are undriven or unused |
-| `hierrefs.py` | hierarchical references |
+| `hierrefs.py` | hierarchical references, the drivers and the constants of a signal |
 | `records.py`, `text.py` | the data classes, helpers for tokens and identifiers |
 | `host.py` | types only, for the type checker |
 

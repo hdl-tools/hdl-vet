@@ -68,6 +68,7 @@ Operation & Edits the text of & \code{was} & Second run \\
 \apiname{Module.add_param} & the module & none & skipped \\
 \apiname{Module.add_wire} & the module & none & skipped \\
 \apiname{Module.add_assign} & the module & none & skipped \\
+\apiname{Module.override_net} & the module & none & skipped, or drift \\
 \apiname{Instance.connect} & the module that holds the instance & the expression now there. Without it, a different expression is drift & skipped \\
 \apiname{Instance.disconnect} & the module that holds the instance & the expression now there, optional check & skipped \\
 \apiname{Instance.set_param} & the module that holds the instance & the override now there. Without it, a different override is drift & skipped \\
@@ -259,6 +260,104 @@ Operation & Edits the text of & \code{was} & Second run \\
 \item[Again] hdl-vet skips the operation when the module has exactly that assignment.
 \item[Example] \file{ports.py}.
 \end{entry}
+
+\section{Logic}
+\label{sec:logic}
+
+The operation in this section changes what the design computes. The sign-off proves that
+the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
+
+\begin{entry}{\sig{Module.override_net}}
+\item[Writes] The operation puts a multiplexer on a net. The net keeps its name and its
+  readers. A new signal, \code{keep}, holds the value that the driver gives. The default
+  name of \code{keep} is the name of the net with \code{_pre} at the end. The operation
+  makes three changes in the text of the module:
+  \begin{itemize}
+  \item It declares \code{keep} with the type and the width of the net. The declaration is
+    on a new line below the declaration of the net. For a port, it is below the line
+    that ends the module header.
+  \item It makes the driver of the net drive \code{keep}. The driver is an \code{assign}
+    statement, or the connection of an output pin of an instance.
+  \item It writes \code{assign net = enable ? value : keep;} on a new line below the
+    driver.
+  \end{itemize}
+  \code{value} is the text of an expression over signals of the module. \code{enable} is
+  the name of an input port of the module. The port is one bit wide. Add it first, with
+  \apiname{Module.add_port} or \apiname{Vet.punch_port}. When \code{enable} is 0, the net
+  has its old value. When \code{enable} is 1, the net has \code{value}.
+
+  The input design must not have the port of \code{enable}. The proof ties the enable to 0
+  in the edited module only.
+
+  \code{value} is one expression, and it has the width of the net. A fill literal
+  (\code{'0}, \code{'1}, \code{'x} or \code{'z}) takes the width of the net. hdl-vet finds
+  the width of the value in the compiler. It does not guess from the text.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a net that the module does not have, or an input port
+  \item a net with no driver, with more than one driver, or with a driver for a part of
+    the net only
+  \item a net that an \code{always} block drives
+  \item a net that an inout pin of an instance connects
+  \item a net that is an unpacked array, or has an initial value
+  \item a net that has an override already. This is a drift error. A net gets one override.
+  \item a driver in a generate block or in an instance array
+  \item a net that has an unpacked dimension or an initial value
+  \item an \code{enable} that is not an input port of the module, or is wider than one bit
+  \item an \code{enable} that the input design has as a port already
+  \item a \code{keep} that is not a plain identifier, or that the module uses already
+  \item an empty \code{value}
+  \item a \code{value} that is not one expression. Examples are a comma at the top level, an
+    unbalanced bracket, a second statement and a comment.
+  \item a \code{value} with a line break. A value is one line.
+  \item a \code{value} that reads the net itself. The message says \emph{loop}. hdl-vet reads
+    the names from the syntax of the value, not from its text.
+  \item a \code{value} with a width other than the width of the net. The message says
+    \emph{width}.
+  \item a module that the design instantiates more than once, when you did not give the
+    count (see the rules above)
+  \item a \code{waiver} that is not a text, or has a line break
+  \item a call without a waiver when Yosys is not installed. The message names
+    \code{hdl-vet[equiv]}.
+  \end{itemize}
+  The operation checks all this when you call it. It queues nothing for a call that it
+  refuses. Like the removals, it loads the edited design. If the design has a new
+  diagnostic, the operation takes its edits back and stops.
+\item[Sign-off requires] When an instance pin drives the net, the sign-off requires a
+  \code{connection-changed} of that pin at every path of the module. An \code{assign}
+  driver needs no change of the structure.
+\item[Waiver] \code{waiver} is a text that says why the proof is not needed, for example
+  the name of a test that covers the change. hdl-vet prints it in the report and writes it
+  to \file{hdl-vet.json}. With Yosys, the check still runs and the report shows what it said. Only the waiver
+  decides whether the sign-off passes. Without Yosys, the operation needs a waiver.
+  Chapter~\ref{ch:signoff} gives the rules.
+
+  The waiver is one line. The report shows it in quotes, as JSON does. The waiver of the
+  latest call counts. A call that is skipped sets the waiver of that
+  override to what the call gives. A call without a waiver takes the waiver away.
+\item[was] The operation has no \code{was}.
+\item[Again] hdl-vet skips the operation when the net is driven by the line
+  \code{assign net = enable ? value : keep;} that the operation writes. If that line has
+  another enable, another value or another kept signal, the operation stops with a drift
+  error.
+\item[Example] \file{override.py} bypasses the reset of the example design. The script
+  \file{override_again.py} runs after it and is skipped. The script
+  \file{override_waiver.py} gives a waiver. The script \file{override_refused.py} names an
+  enable with two bits. The script \file{override_wrong.py} swaps the two branches of the
+  multiplexer by hand. The sign-off then says that the module is not equivalent.
+\end{entry}
+
+\lstinputlisting[style=script]{examples/scripts/override.py}
+\lstinputlisting[style=script]{examples/scripts/override_again.py}
+\lstinputlisting[style=script]{examples/scripts/override_waiver.py}
+\lstinputlisting[style=script]{examples/scripts/override_refused.py}
+\lstinputlisting[style=script]{examples/scripts/override_wrong.py}
+
+\lstinputlisting[style=console]{examples/console/override.txt}
+
+The first command shows the diff and the line of the check. The second command shows the
+second run. The third command shows a waiver. The fourth command shows a refusal. The fifth
+command shows a failed check.
 
 \section{Through the hierarchy}
 

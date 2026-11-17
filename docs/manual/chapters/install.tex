@@ -2,7 +2,8 @@
 \label{ch:install}
 
 hdl-vet needs Python 3.11 or newer. It needs one other package, \code{pyslang}
-version 12.1.0. The installer fetches it for you.
+version 12.1.0. The installer fetches it for you. The equivalence check needs one more
+package. See the section about the extra \code{equiv} below.
 
 You install hdl-vet from PyPI, from a checkout of its repository, or from a
 wheel file. Use a virtual environment so that \code{pyslang} does not mix with
@@ -35,6 +36,25 @@ A wheel is one file with the extension \file{.whl}. If you have one,
 install it with \cmd{pip install FILE.whl}. To make a wheel from a checkout,
 use any build tool that reads \file{pyproject.toml}, for example
 \cmd{uv build --wheel}. The wheel appears in the folder \file{dist}.
+
+\section{The extra for the equivalence check}
+\label{sec:extra}
+
+\apiname{Module.override_net} changes logic. The sign-off proves the change with Yosys
+(section~\ref{sec:equiv}). Yosys comes from the package \code{yowasp-yosys}. hdl-vet pins
+one version of it, because a new version of Yosys can change an answer.
+
+The extra \code{equiv} installs this package. Give the name of the extra in square
+brackets. Quote the argument, so that your shell does not read the brackets:
+
+\begin{itemize}
+\item \cmd{pip install "hdl-vet[equiv]"} installs the release from PyPI.
+\item \cmd{pip install ".[equiv]"} installs a checkout.
+\end{itemize}
+
+Without the extra, hdl-vet works as before. The one exception is a logic operation. Without
+Yosys, \apiname{Module.override_net} refuses the call unless it has a waiver. The message
+names \code{hdl-vet[equiv]}.
 
 \section{Check the installation}
 
