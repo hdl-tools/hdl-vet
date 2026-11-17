@@ -22,7 +22,7 @@ concurrency:
 env:
   # The regeneration corpus is built from this hdl-bag commit. Bump it deliberately:
   # tests/core/test_corpus.py pins numbers measured on it.
-  HDL_BAG_REF: 930fe2dc10d94d789d0ce0f5ee01b9b91bce5d64
+  HDL_BAG_REF: 0b88a6bae969abccaa31069549e0c4166e663b00
   UV_VERSION: "0.9.26"
 
 jobs:
