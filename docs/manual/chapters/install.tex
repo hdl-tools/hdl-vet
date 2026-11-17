@@ -4,9 +4,19 @@
 hdl-vet needs Python 3.11 or newer. It needs one other package, \code{pyslang}
 version 12.1.0. The installer fetches it for you.
 
-hdl-vet is not on a package index yet, so you install it from a checkout of its
-repository or from a wheel file. Use a virtual environment so that
-\code{pyslang} does not mix with other packages.
+You install hdl-vet from PyPI, from a checkout of its repository, or from a
+wheel file. Use a virtual environment so that \code{pyslang} does not mix with
+other packages.
+
+\section{From PyPI}
+
+\begin{enumerate}
+\item Create and enter a virtual environment:
+  \cmd{python -m venv .venv}, then activate it as your shell requires.
+\item Install the package: \cmd{pip install hdl-vet}
+\end{enumerate}
+
+The name of the package is \code{hdl-vet}. The name of the command is \cmd{vet}.
 
 \section{From a checkout}
 
