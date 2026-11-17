@@ -107,6 +107,12 @@ def write_tree(
             "scripts": [{"name": n, "sha256": h} for n, h in scripts],
             "changed": changed,
             "added": added,
+            "equivalence": [record.manifest() for record in result.equivalence],
+            "waivers": [
+                {"operation": op, "waiver": text, "check": record.check}
+                for record in result.equivalence
+                for op, text in record.waivers
+            ],
             "files": listed,
         }
         (tmp / "hdl-vet.json").write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())

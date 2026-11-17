@@ -39,7 +39,8 @@ example). \code{vet.log} is the list of \code{OpRecord(op, target, status)}. The
 
 \begin{entry}{\sig{Vet.finish}}
 \item[Returns] The \code{Result} of the sign-off. The call applies the queue, adds the
-  header lines, loads the edited design, compares, and evaluates the checks. You can
+  header lines, loads the edited design, compares, evaluates the checks, and runs the
+  equivalence check. You can
   finish a session once. The header lists the scripts that the session applied before,
   then the scripts that you pass.
 \item[Result] The \code{Result} has these parts:
@@ -51,6 +52,7 @@ example). \code{vet.log} is the list of \code{OpRecord(op, target, status)}. The
   \item \code{unexpected_changes}
   \item \code{unmatched_expects}
   \item \code{failed_checks}
+  \item \code{equivalence} (one record for each comparison of the equivalence check)
   \item \code{new_files}
   \item \code{load_error}
   \item \code{files} (new bytes of each changed file)

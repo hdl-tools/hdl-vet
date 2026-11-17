@@ -200,6 +200,15 @@ class Driver:
 
 
 @dataclass(frozen=True)
+class DriverDetail:
+    """One driver of a signal: what drives it and which bits (inclusive range)."""
+
+    kind: str  # "assign" | "process" | "instance" | "input" | "initializer" | "other"
+    low: int
+    high: int
+
+
+@dataclass(frozen=True)
 class HierRef:
     """A hierarchical name written in an instance: where it is written and what slang resolved it to."""
 

@@ -9,7 +9,7 @@ from typing import Any
 import pyslang
 
 from hdl_vet.slang_adapter.host import _DesignHost
-from hdl_vet.slang_adapter.records import AdapterError, Driver, HierRef, InstanceSite
+from hdl_vet.slang_adapter.records import AdapterError, Driver, DriverDetail, HierRef, InstanceSite
 from hdl_vet.slang_adapter.text import _first_token
 
 _HEAD_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_$]*)")
@@ -18,14 +18,8 @@ _HEAD_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_$]*)")
 class _HierRefOps(_DesignHost):
     """`drivers_in`, `drivers_of`, `hierarchical_refs` and `instance_sites`."""
 
-    def drivers_in(self, module: str, name: str, hints: Sequence[str] = ()) -> list[Driver]:
-        """Drivers of module-level `name` over every elaborated instance of `module`.
-
-        slang analyses one canonical body per distinct parameterisation, so every
-        instance is visited and each canonical body is looked at once. A declaration
-        initialiser counts as a driver. The implicit driver an inout port has from
-        its own port connection is not reported.
-        """
+    def _canonical_bodies(self, module: str) -> dict[str, Any]:
+        """The canonical body of every distinct parameterisation of `module`, by hierarchical path."""
         bodies: dict[str, Any] = {}
 
         def one(sym: Any) -> None:
@@ -36,8 +30,18 @@ class _HierRefOps(_DesignHost):
         self._visit_instances(one)
         if not bodies:
             raise AdapterError(f"module {module!r} is not elaborated under the top")
+        return bodies
+
+    def drivers_in(self, module: str, name: str, hints: Sequence[str] = ()) -> list[Driver]:
+        """Drivers of module-level `name` over every elaborated instance of `module`.
+
+        slang analyses one canonical body per distinct parameterisation, so every
+        instance is visited and each canonical body is looked at once. A declaration
+        initialiser counts as a driver. The implicit driver an inout port has from
+        its own port connection is not reported.
+        """
         out: list[Driver] = []
-        for body in bodies.values():
+        for body in self._canonical_bodies(module).values():
             sym = body.find(name)
             if sym is None:
                 raise AdapterError(f"module {module!r} has no member {name!r}")
@@ -51,6 +55,51 @@ class _HierRefOps(_DesignHost):
                     out.append(Driver(bool(d.isInputPort), None if via is None else str(via.name)))
             if getattr(sym, "initializer", None) is not None:
                 out.append(Driver(False))
+        return out
+
+    def driver_details(self, module: str, name: str) -> list[tuple[int, list[DriverDetail]]]:
+        """For each elaborated body of `module`: the width of the signal `name` and each driver of it.
+
+        A driver is an `assign`, a procedural block (`process`), an output pin of an instance, an input
+        port, an initialiser, or `other` (a primitive, for example). `low` and `high` are the bits it drives.
+        """
+        sk = pyslang.ast.SymbolKind
+        kinds = {sk.ContinuousAssign: "assign", sk.ProceduralBlock: "process", sk.Instance: "instance"}
+        out: list[tuple[int, list[DriverDetail]]] = []
+        for body in self._canonical_bodies(module).values():
+            sym = body.find(name)
+            if sym is None:
+                raise AdapterError(f"module {module!r} has no member {name!r}")
+            try:
+                drivers = self._analyze().getDrivers(sym)
+            except TypeError as e:
+                raise AdapterError(f"{module}.{name}: not a net or variable, so it has no drivers") from e
+            width = int(sym.type.bitWidth)
+            found = [
+                DriverDetail(
+                    "input" if d.isInputPort else kinds.get(d.containingSymbol.kind, "other"),
+                    int(d.bounds[0]),
+                    int(d.bounds[1]),
+                )
+                for d in drivers
+            ]
+            if getattr(sym, "initializer", None) is not None:
+                found.append(DriverDetail("initializer", 0, max(width - 1, 0)))
+            out.append((width, found))
+        return out
+
+    def parameter_values(self, module: str, names: Sequence[str]) -> list[dict[str, int | None]]:
+        """For each elaborated body of `module`: the integer value of each named parameter (None if it has none)."""
+        out: list[dict[str, int | None]] = []
+        for body in self._canonical_bodies(module).values():
+            found: dict[str, int | None] = {}
+            for name in names:
+                sym = body.find(name)
+                try:
+                    found[name] = int(str(sym.value)) if sym is not None else None
+                except (ValueError, AttributeError):
+                    found[name] = None
+            out.append(found)
         return out
 
     def drivers_of(self, hier_path: str) -> list[Driver]:

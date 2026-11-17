@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 import pyslang
 
@@ -100,6 +101,48 @@ def _load(
     if top is not None and not comp.getRoot().topInstances:
         raise AdapterError(f"top module {top!r} not found")
     return Design(fl, loader, shared, dict(zip(fl.files, trees, strict=True)), comp, used)
+
+
+def check_expression(text: str) -> str | None:
+    """None when `text` reads as ONE expression of its own, else the reason it does not.
+
+    The text is put into `assign x = e ? TEXT : k;` and parsed. It must parse without a diagnostic as one
+    assignment whose then-branch is the whole text. A comment is refused too.
+    """
+    if "//" in text or "/*" in text:
+        return "it has a comment"
+    tree = pyslang.syntax.SyntaxTree.fromText(f"module _p;\nassign _x = _e ? {text} : _k;\nendmodule\n")
+    reason = "it cannot be read as one expression"
+    if list(tree.diagnostics):
+        return reason
+    root: Any = tree.root
+    members = list(root.members)
+    assigns = list(members[0].assignments) if len(members) == 1 else []
+    if len(assigns) != 1:
+        return reason
+    expr = assigns[0].right
+    if expr.kind != pyslang.syntax.SyntaxKind.ConditionalExpression:
+        return reason
+    if str(expr.left).strip() != text.strip() or str(expr.right).strip() != "_k":
+        return reason
+    return None
+
+
+def value_identifiers(text: str) -> frozenset[str]:
+    """The names that the expression `text` writes (also the first name of a select or a path).
+
+    Read from the syntax tree, not from the text. An escaped name is given without its backslash.
+    """
+    tree = pyslang.syntax.SyntaxTree.fromText(f"module _p;\nassign _x = _e ? {text} : _k;\nendmodule\n")
+    kinds = (pyslang.syntax.SyntaxKind.IdentifierName, pyslang.syntax.SyntaxKind.IdentifierSelectName)
+    found: set[str] = set()
+
+    def visit(node: Any) -> None:
+        if getattr(node, "kind", None) in kinds:
+            found.add(str(node.identifier.valueText))
+
+    tree.root.visit(visit)
+    return frozenset(found - {"_x", "_e", "_k"})
 
 
 def parameter_names(

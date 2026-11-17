@@ -36,6 +36,7 @@ $ cat myproj/out/hdl-vet.json
       "before": "7084fbd053841b11ec50fb6de4beecd141312c30e39526a05b9e2c78ead7ac83"
     }
   },
+  "equivalence": [],
   "filelist": "design.f",
   "files": [
     "design.f",
@@ -52,5 +53,6 @@ $ cat myproj/out/hdl-vet.json
   ],
   "tool": "hdl-vet",
   "top": "soc_top",
-  "version": "<version>"
+  "version": "<version>",
+  "waivers": []
 }

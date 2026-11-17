@@ -29,6 +29,7 @@ from typing import Any
 
 from hdl_vet.archive import need_bool, need_dict, need_int, need_list, need_str
 from hdl_vet.filelist import Filelist, read_filelist
+from hdl_vet.prove import Record
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
 from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
@@ -64,6 +65,7 @@ class Result:
     failed_checks: list[str] = field(default_factory=list)
     added: dict[str, bytes] = field(default_factory=dict)  # output-relative POSIX path -> bytes
     dangling: list[Diag] = field(default_factory=list)  # dangling entries the baseline did not have
+    equivalence: list[Record] = field(default_factory=list)  # one record for each comparison of the proof
 
     def _rel(self, path: Path | None) -> str:
         if path is None:
@@ -94,7 +96,12 @@ class Result:
             lines.append(f"  expected change not seen: {e.kind} path={e.path} name={e.name}")
         for msg in self.failed_checks:
             lines.append(f"  failed check: {msg}")
+        lines.extend(self.equivalence_lines())
         return "\n".join(lines) + "\n"
+
+    def equivalence_lines(self) -> list[str]:
+        """The report lines of the equivalence records (a line is there once, also for several parameter sets)."""
+        return list(dict.fromkeys(line for record in self.equivalence for line in record.lines()))
 
 
 def describe(d: Diag) -> str:
@@ -379,6 +386,11 @@ class Session:
         self._refresh()
         return self.reloads != before
 
+    @property
+    def baseline(self) -> Design:
+        """The design as it was loaded from the input files, before any edit."""
+        return self._baseline
+
     def baseline_snapshot(self) -> dict[str, InstanceSnap]:
         """The structural snapshot of the baseline design (cached; sign-off needs it too)."""
         return self._baseline.snapshot()
@@ -622,7 +634,9 @@ class Session:
         self,
         scripts: Iterable[tuple[str, str]] = (),
         checks: Iterable[Callable[[Design], str | None]] = (),
+        proof: Callable[[Session, Design], list[Record]] | None = None,
     ) -> Result:
+        """`proof` makes the records of the equivalence check from this session and the edited design."""
         if self._finished:
             raise SessionError("the session is already finished")
         self._finished = True
@@ -646,8 +660,9 @@ class Session:
             else:
                 design = self._design if self._added else self._baseline
             failed = self._run_checks(checks, design)
+            records = self._run_proof(proof, design, failed)
             return Result(
-                not unmatched and not failed,
+                not unmatched and not failed and all(r.passed for r in records),
                 [],
                 [],
                 unexpected,
@@ -657,6 +672,7 @@ class Session:
                 self.layout_root,
                 failed_checks=failed,
                 added=self.added,
+                equivalence=records,
             )
 
         files = {p: self._text[p] for p in changed}
@@ -677,9 +693,11 @@ class Session:
         changes.sort(key=lambda c: (c.path, c.kind, c.name))
         unexpected, unmatched = check_changes(changes, self._expects)
         failed = self._run_checks(checks, self._design)
+        records = self._run_proof(proof, self._design, failed)
         added_paths = {path for path, _ in self._added.values()}
         dangling = _grown(dangling_set(self._baseline, added_paths), dangling_set(self._design, added_paths))
         ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling
+        ok = ok and all(r.passed for r in records)
         return Result(
             ok,
             new,
@@ -693,7 +711,20 @@ class Session:
             failed_checks=failed,
             added=self.added,
             dangling=dangling,
+            equivalence=records,
         )
+
+    def _run_proof(
+        self, proof: Callable[[Session, Design], list[Record]] | None, design: Design, failed: list[str]
+    ) -> list[Record]:
+        """The records of the equivalence check. An exception of the check is a failed check, not an escape."""
+        if proof is None:
+            return []
+        try:
+            return proof(self, design)
+        except Exception as e:
+            failed.append(f"the equivalence check raised {type(e).__name__}: {e}")
+            return []
 
     def _run_checks(self, checks: Sequence[Callable[[Design], str | None]], design: Design) -> list[str]:
         out: list[str] = []
@@ -711,14 +742,17 @@ class Session:
         return self._finished
 
     def check(
-        self, scripts: Iterable[tuple[str, str]] = (), checks: Iterable[Callable[[Design], str | None]] = ()
+        self,
+        scripts: Iterable[tuple[str, str]] = (),
+        checks: Iterable[Callable[[Design], str | None]] = (),
+        proof: Callable[[Session, Design], list[Record]] | None = None,
     ) -> Result:
         """What `finish` would return now; afterwards the session is as it was (`reloads` keeps counting)."""
         if self._finished:
             raise SessionError("the session is already finished")
         cp = self.checkpoint()
         try:
-            return self.finish(scripts, checks)
+            return self.finish(scripts, checks, proof)
         finally:
             self.rollback(cp)
             self._finished = False
