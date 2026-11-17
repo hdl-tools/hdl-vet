@@ -37,6 +37,7 @@ from repo import REPO
 pytestmark = [
     pytest.mark.corpus,
     pytest.mark.equiv,
+    pytest.mark.bigproof,
     pytest.mark.skipif(
         not corpus.bag_available() and os.environ.get("HDL_VET_REQUIRE_CORPUS") != "1",
         reason="hdl-bag CLI (`bag`) is missing",
