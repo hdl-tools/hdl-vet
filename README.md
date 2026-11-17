@@ -55,18 +55,25 @@ The chapter "Limits and known problems" of the manual lists the rest.
 
 ## Install
 
-hdl-vet needs Python 3.11 or newer. It has one dependency, `pyslang`, and the installer fetches it. You install hdl-vet from a clone of this repository. Use a virtual environment.
+hdl-vet needs Python 3.11 or newer. It has one dependency, `pyslang`, and the installer fetches it. Install hdl-vet from PyPI. Use a virtual environment.
+
+```sh
+python -m venv .venv
+. .venv/bin/activate
+pip install hdl-vet
+python -m hdl_vet --version
+```
+
+These commands are for a POSIX shell. On Windows, run `.venv\Scripts\activate` in place of the second line. If you use uv, run `uv venv`. Activate the environment as above. Then run `uv pip install hdl-vet`.
+
+The first run below uses the example design of the manual, which is in this repository. To get it, make a clone:
 
 ```sh
 git clone https://github.com/hdl-tools/hdl-vet.git
 cd hdl-vet
-python -m venv .venv
-. .venv/bin/activate
-pip install .
-python -m hdl_vet --version
 ```
 
-These commands are for a POSIX shell. On Windows, run `.venv\Scripts\activate` in place of the fourth line. If you use uv, run `uv venv`. Activate the environment as above. Then run `uv pip install .`.
+To install hdl-vet from the clone, run `pip install .` in it.
 
 ## A first run
 

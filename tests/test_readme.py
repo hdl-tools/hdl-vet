@@ -43,9 +43,10 @@ D5  The language rules T1-T4 hold for the prose of both documents: 25 words in
     a sentence (20 in a numbered list), 6 sentences in a paragraph, no word of
     FORBIDDEN, no contraction, no semicolon. Code blocks, tables, headings and
     names in backticks are not prose; a name in backticks counts as one word.
-D6  The README does not name a package index and gives no install command with
-    the bare package name: the name is not registered yet (part 5c-3 changes
-    this). It does not print a version number.
+D6  The README says how to install the released package (`pip install hdl-vet`,
+    from PyPI; version 0.1.0 was the first release) and how to install from a
+    clone. It does not print a version number, so that it does not go out of
+    date with each release.
 D7  CONTRIBUTING.md gives the commands that CI runs, so that a contributor can
     run them first: `ruff check`, `ruff format --check`, `mypy`, `pytest`, the
     project rules (`tests/test_project_rules.py`), the corpus tests (the
@@ -290,11 +291,15 @@ def test_the_language_rules(path: Path):
     assert found == []
 
 
-def test_the_readme_names_no_package_index_and_no_version():
+def test_the_readme_says_how_to_install_and_names_no_version():
     """D6."""
     text = _text(README)
-    assert "pypi" not in text.lower()
-    assert not re.search(r"pip install (?:-U |--upgrade )?hdl-vet\b", text)
+    install = text[text.index("## Install") : text.index("## A first run")]
+    assert "PyPI" in install
+    assert re.search(r"^pip install hdl-vet$", install, re.M)
+    assert "`uv pip install hdl-vet`" in install
+    assert "git clone " in install
+    assert "`pip install .`" in install
     assert hdl_vet.__version__ not in text
     assert "docs/manual" in text
     assert "CONTRIBUTING.md" in text

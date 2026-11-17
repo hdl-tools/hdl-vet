@@ -67,9 +67,8 @@ P10 CONTRIBUTING.md has a section "Make a release" that a maintainer can follow:
 
 LEFT OPEN
 
-- The README still says to install from a clone. It changes to
-  `pip install hdl-vet` in a small pull request after the first release exists,
-  so that it never names a package that is not there.
+- (Done after the release of 0.1.0: the README and the manual say
+  `pip install hdl-vet`.)
 - The README's relative links do not work on the PyPI page.
 - Actions are pinned by tag, not by commit hash.
 """

@@ -94,8 +94,8 @@ OUTLINE (chapter files in this order; names may differ, content may not be less)
  1  Introduction: what hdl-vet is for; the input tree is never changed, the output
     tree is a copy with the edits; text that is not edited stays byte-identical;
     sign-off decides whether the output is written; what it does not do.
- 2  Installing: Python 3.11 or newer; from a checkout or a wheel. Do not name a
-    package index: the name is not registered yet.
+ 2  Installing: Python 3.11 or newer; from PyPI (`pip install hdl-vet`), from a
+    checkout or from a wheel.
  3  A first project, start to finish, on the example design: `vet init`, what it
     writes, a first script (a new input port on `soc_top` and its connection),
     `--dry-run`, the real run, the output tree (header line, file list,
