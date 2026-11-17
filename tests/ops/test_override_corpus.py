@@ -13,7 +13,8 @@ C3  With one of the four overrides wired the wrong way round, the sign-off fails
     and the record is "refuted".
 C4  The check of this module, with about twenty children, takes less than two
     minutes.
-C5  (From the review.) An override in `bag_axi_dw`, which is elaborated with
+C5  (From the review.) An override of an output that an instance drives in
+    `bag_axi_dw`, which is elaborated with
     three sets of parameter values and has children that did not change, is
     proved for each of the three sets. Two of them were answered "the child
     i_dw is named in same but is not the same" by a comparison that depended
@@ -112,7 +113,7 @@ def test_an_override_in_a_module_with_three_parameter_sets_and_unchanged_childre
     """C5."""
     vet = Vet(Session(demo.filelist, top=demo.top))
     vet.punch_port("dft_en_i", "input", to=f"{TOP}.u_main_wrapper.u_cpu0_dw_2_main_xbar", all_instances=True)
-    vet.module("bag_axi_dw", instances=3).override_net("aw_room", "1'b0", enable="dft_en_i")
+    vet.module("bag_axi_dw", instances=3).override_net("m_arlock_o", "1'b0", enable="dft_en_i")
     result = vet.finish()
     found = [(r.module, r.status, r.detail) for r in result.equivalence]
     assert [f[:2] for f in found] == [("bag_axi_dw", "proved")] * 3, found

@@ -304,7 +304,9 @@ class _Trees:
                 found = re.sub(re.escape(form) + r"[/\\]?", "", found, flags=re.IGNORECASE)
         for form in self._forms(self._folder):
             found = re.sub(re.escape(form) + r"[/\\]?", "", found, flags=re.IGNORECASE)
-        return found
+        # Any other spelling of the folder, such as the mount point of the Yosys runtime on POSIX.
+        other = r"[^\s'\"()]*" + re.escape(self._folder.name) + r"(?:[/\\](?:gold|gate))?[/\\]?"
+        return re.sub(other, "", found, flags=re.IGNORECASE)
 
     @staticmethod
     def _forms(path: Path) -> list[str]:
