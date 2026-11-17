@@ -10,6 +10,58 @@ Read the chapter "Limits and known problems" of the manual. It lists what hdl-ve
 
 The code is in `src/hdl_vet`. The tests are in `tests`. Each test file has a docstring at its top that states the rules the tests check. Find the test file whose docstring states the rules of the code that you change. Read that docstring.
 
+The package has these parts:
+
+| Part of `src/hdl_vet` | What it holds |
+| --- | --- |
+| `cli.py`, `project.py` | the command line and the project file |
+| `filelist.py`, `splice.py`, `listedit.py`, `paths.py` | the file list, the edits of text, small helpers |
+| `session.py`, `signoff.py`, `output.py`, `archive.py` | the session, the sign-off, the output tree, saved sessions |
+| `equiv.py` | the equivalence check with Yosys |
+| `ops/` | the scripting interface |
+| `slang_adapter/` | all that reads the design with pyslang |
+
+The package `ops` has one module for each group:
+
+| Module of `ops/` | What it holds |
+| --- | --- |
+| `vet.py` | the class `Vet`: the session, checked operations, groups |
+| `module.py` | the class `Module`: ports, parameters, wires, assigns, removals |
+| `instance.py` | the class `Instance`: connections, parameter values, `replace_module` |
+| `hier.py` | `punch_port` and `propagate_param` |
+| `scope.py` | the declared scope |
+| `raw.py` | `splice`, `text`, `expect`, `permit` |
+| `plans.py` | `add_file` and the plans of an edit |
+| `checks.py` | the post-conditions that the sign-off checks |
+| `common.py`, `text.py` | the errors, the records, helpers for text and numbers |
+| `host.py` | types only, for the type checker |
+
+The package `slang_adapter` is the only place that imports `pyslang`:
+
+| Module of `slang_adapter/` | What it holds |
+| --- | --- |
+| `api.py` | `load` and `parameter_names` |
+| `design.py` | the class `Design` |
+| `loading.py` | the load cache and the loader |
+| `model.py` | modules and instances |
+| `snapshots.py` | the structure of the design, for the comparison of the sign-off |
+| `diagnostics.py` | diagnostics, drivers, signals that are undriven or unused |
+| `hierrefs.py` | hierarchical references |
+| `records.py`, `text.py` | the data classes, helpers for tokens and identifiers |
+| `host.py` | types only, for the type checker |
+
+The tests are in folders by area:
+
+| Folder of `tests/` | What it tests |
+| --- | --- |
+| `core` | the file list, splices, the adapter, the session, the sign-off |
+| `ops` | the operations and the scope |
+| `cli` | the command line, the project file, saved sessions |
+| `docs` | the manual, the README, the release, the rules of the code base, this layout |
+| `equiv` | the equivalence check |
+| `perf` | the cost of a load |
+| `support` | helpers and designs that the tests share |
+
 ## Set up
 
 You need Python 3.11 or newer. CI uses uv. Create a virtual environment and install hdl-vet with the tools for development:
@@ -27,10 +79,10 @@ Run the checks of the first job of CI. Run them before you open a pull request:
 uv run --no-sync ruff check
 uv run --no-sync ruff format --check
 uv run --no-sync mypy
-uv run --no-sync pytest -q tests/test_project_rules.py
+uv run --no-sync pytest -q tests/docs/test_project_rules.py
 ```
 
-The file `tests/test_project_rules.py` holds the rules of the code base. The versions of `ruff` and `mypy` are fixed in `pyproject.toml`, so that a new release cannot break an unrelated pull request.
+The file `tests/docs/test_project_rules.py` holds the rules of the code base. The versions of `ruff` and `mypy` are fixed in `pyproject.toml`, so that a new release cannot break an unrelated pull request.
 
 The group `dev` also installs Yosys for the equivalence check of `hdl_vet.equiv`. Users get Yosys from the optional extra `equiv`. Without Yosys, the tests that need it skip. If you set `HDL_VET_REQUIRE_EQUIV=1`, they fail instead, as CI does.
 
@@ -55,7 +107,7 @@ uv run --no-sync pytest -q
 If you change the output of a command, the transcripts of the manual and of the README change. If you change the scripting API, the same command rewrites `docs/manual/api.tex`. Rewrite them with this command. Before you commit, read the diff.
 
 ```sh
-HDL_VET_MANUAL_UPDATE=1 uv run --no-sync pytest -q tests/test_manual.py tests/test_readme.py
+HDL_VET_MANUAL_UPDATE=1 uv run --no-sync pytest -q tests/docs/test_manual.py tests/docs/test_readme.py
 ```
 
 This form is for a POSIX shell. In PowerShell, set `$env:HDL_VET_MANUAL_UPDATE = "1"` first. Then run the command without the first word.
@@ -108,7 +160,7 @@ You can use an AI tool. You do not have to say that you used one. You answer for
 
 ## Writing
 
-The text of the manual, of the README and of this file follows the writing rules of ASD-STE100, Simplified Technical English. The file `tests/test_manual_style.py` states the rules. Tests check these rules:
+The text of the manual, of the README and of this file follows the writing rules of ASD-STE100, Simplified Technical English. The file `tests/docs/test_manual_style.py` states the rules. Tests check these rules:
 
 - A sentence has 25 words or fewer. A sentence in a numbered list has 20 words or fewer.
 - A paragraph has 6 sentences or fewer.

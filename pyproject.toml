@@ -58,7 +58,7 @@ packages = ["src/hdl_vet"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-src = ["src", "tests"]
+src = ["src", "tests/support"]
 
 [tool.ruff.lint]
 select = [
@@ -74,7 +74,7 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = [
+"tests/**" = [
     "S101",    # assert is what tests are made of
     "S603",    # tests run the `bag` CLI with fixed arguments
     "SIM117",  # nested `with` reads better for pytest.raises around vet.group()
@@ -93,7 +93,7 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["tests"]
+pythonpath = ["tests/support"]
 addopts = "-ra --strict-markers"
 markers = [
     "corpus: needs the hdl-bag CLI (`bag`) to generate designs; skipped when it is absent",
