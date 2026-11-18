@@ -137,7 +137,7 @@ Before you open a pull request, make sure that each item is true:
 - [ ] The manual changes with the behaviour. The tests of the manual find a name of the scripting API without an entry. They find an option without an entry. They find an operation without an example. They find a transcript that no longer prints what it shows. They do not find text that is now false, so read the text near your change.
 - [ ] Every example in the manual and in the README is a file or a transcript that a test runs.
 - [ ] The text that you write follows the rules in the section "Writing".
-- [ ] The tests pass on Python 3.11 and on Python 3.13, on Linux and on Windows. CI runs them with the corpus.
+- [ ] The tests pass on Python 3.11 and on Python 3.13, on Linux, on macOS and on Windows. CI runs them with the corpus.
 - [ ] The wheel builds, installs alone and passes `tests/smoke_wheel.py`. The `package` job of CI does this.
 - [ ] If you change `docs/manual`, the PDF of the manual builds without an error and without an undefined reference. The `manual` workflow does this.
 

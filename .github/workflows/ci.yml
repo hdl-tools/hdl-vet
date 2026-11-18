@@ -62,6 +62,11 @@ jobs:
           - { os: ubuntu-24.04, python: "3.13", select: "bigproof or not bigproof" }
           - { os: windows-2022, python: "3.11", select: "not bigproof" }
           - { os: windows-2022, python: "3.13", select: "not bigproof" }
+          # macOS is the only runner whose file system ignores case while `resolve()`
+          # leaves a name that is not the one on disk alone. Several tests can only run
+          # there, and skip with a reason elsewhere.
+          - { os: macos-15, python: "3.11", select: "not bigproof" }
+          - { os: macos-15, python: "3.13", select: "not bigproof" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -98,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2022]
+        os: [ubuntu-24.04, windows-2022, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
