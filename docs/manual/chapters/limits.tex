@@ -153,6 +153,15 @@ on when the check cannot judge.
   on} and names the outputs. Here \emph{gold} is the input module. The search for these
   values does not see one that cancels, such as \code{u ^ u}, or one that a division by zero
   makes.
+\item \textbf{What the sandbox is given.} The Yosys of the extra \code{equiv} runs as
+  WebAssembly, and it sees only what the run gives it. The run gives it the \emph{first}
+  part of each path it needs, because its runtime takes no deeper mountpoint. So a whole
+  top-level folder is readable in the sandbox, not only the folder of a source. A design
+  under \file{/Volumes} on macOS makes every mounted disk readable there. The Yosys
+  process has the rights that you have, so this grants it nothing that you cannot read.
+\item \textbf{Where the design can lie.} The check needs each path it reads to be inside
+  a top-level folder that it can read and enter. A path that is not gives \code{error},
+  and the detail names it. A design in the root folder itself is such a path.
 \end{itemize}
 
 \section{What the operations refuse}
