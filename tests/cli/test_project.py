@@ -584,6 +584,26 @@ def test_an_output_directory_on_the_command_line_must_not_hold_the_scripts_eithe
     assert (proj / "extra.py").is_file() and (proj / "hdl-vet.toml").is_file()
 
 
+def test_force_is_not_stopped_by_what_the_file_manager_leaves(proj, capsys):
+    """A Mac user who opens the output folder in the Finder gets a `.DS_Store` in it.
+
+    The check that `--force` replaces only hdl-vet's own tree then refused every later
+    run. The same holds for the `._*` files that appear when a tree is copied to a
+    volume that keeps no resource forks.
+    """
+    assert run("apply", "--force") == 0
+    capsys.readouterr()
+    (proj / "out" / ".DS_Store").write_bytes(b"\x00\x01")
+    (proj / "out" / "rtl" / "._top.sv").write_bytes(b"\x00")
+    assert run("apply", "--force") == 0, capsys.readouterr().err
+    capsys.readouterr()
+    # Anything else in the tree is still a reason to stop.
+    (proj / "out" / "thesis.txt").write_text("mine", encoding="utf-8")
+    assert run("apply", "--force") == 2
+    assert "thesis.txt" in capsys.readouterr().err
+    assert (proj / "out" / "thesis.txt").read_text(encoding="utf-8") == "mine"
+
+
 def test_force_with_a_project_output_replaces_only_an_hdl_vet_tree(proj, capsys):
     (proj / "out").mkdir()
     (proj / "out" / "thesis.txt").write_text("mine", encoding="utf-8")
