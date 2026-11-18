@@ -163,7 +163,9 @@ def check(
 
     def done(status: str, detail: str) -> Result:
         if os.name != "nt":
-            detail = _MOUNT_IN_TEXT.sub(r"/", detail)  # a path in a message is the host path, not the mount
+            detail = _MOUNT_IN_TEXT.sub(r"/\1", detail)
+            # The part after the mount prefix is the top-level folder's name, so the
+            # group is kept. It held a control byte, which went into the message.
         return Result(status, module, _one_line(detail), time.monotonic() - started)
 
     both = sorted(set(clean_same) & set(clean_inert))
@@ -243,7 +245,14 @@ def _run_child(
         if answer is None:
             tail = (done_run.stderr or done_run.stdout or "").strip().splitlines()
             reason = tail[-1] if tail else f"exit code {done_run.returncode}"
-            return done("error", f"the Yosys process stopped without an answer: {reason}")
+            # The usual cause is that the child could not read the design. On macOS a
+            # folder such as Documents is readable only with the user's permission,
+            # which a process started by a daemon or by cron does not inherit.
+            return done(
+                "error",
+                f"the Yosys process stopped without an answer: {reason}"
+                " (check that this process may read the design's files)",
+            )
         if answer[0] == "proved" and inert:
             complaint = _parameters_differ(gold, gate, module, params, work / "boxes.json")
             if complaint is not None:
