@@ -49,6 +49,7 @@ from pathlib import Path
 import pytest
 
 from hdl_vet import slang_adapter
+from hdl_vet.session import Session
 from hdl_vet.slang_adapter import load, syntax_equivalent
 from vetkit import keeps_the_asked_spelling
 
@@ -335,3 +336,27 @@ def test_a_header_included_in_two_cases_is_one_file(tmp_path: Path):
     assert [d for d in design.diagnostics() if d.severity == "error"] == []
     assert design.included == [tmp_path / "inc" / "defs.svh"], design.included
     assert list(design.included_bytes) == [tmp_path / "inc" / "defs.svh"]
+
+
+def test_an_edit_to_a_header_included_in_two_cases_is_kept(tmp_path: Path):
+    """The header is one file of the design, so an edit to it must not be read back
+    from disk. Review of #70 asked whether the canonical key and the key the bytes are
+    looked up under could disagree; they must not."""
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("a wrong spelling cannot survive here, so one header cannot become two")
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "inc" / "defs.svh").write_text("`ifndef DEFS\n`define DEFS\n`define W 4\n`endif\n")
+    (tmp_path / "rtl" / "t.sv").write_text(
+        '`include "DEFS.svh"\n`include "defs.svh"\nmodule t(input logic [`W-1:0] a);\nendmodule\n'
+    )
+    (tmp_path / "t.f").write_text("+incdir+inc\nrtl/t.sv\n")
+    s = Session(tmp_path / "t.f", top="t")
+    header = next(p for p in s.files if p.suffix == ".svh")
+    assert header == tmp_path / "inc" / "defs.svh"
+    raw = s.text(header)
+    at = raw.index(b"4")
+    s.splice(header, at, at + 1, b"8")
+    result = s.finish()
+    assert header in result.files
+    assert b"`define W 8" in result.files[header]

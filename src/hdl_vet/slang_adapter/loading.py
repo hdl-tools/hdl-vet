@@ -12,7 +12,7 @@ from typing import Any
 import pyslang
 
 from hdl_vet.filelist import Filelist
-from hdl_vet.paths import true_case
+from hdl_vet.paths import same_file, true_case
 from hdl_vet.slang_adapter.records import AdapterError
 from hdl_vet.slang_adapter.text import _BOM, _key, _read
 
@@ -281,10 +281,14 @@ class _Loader:
             return known[key]
         found: tuple[Path, Path] | None = None
         for base in (real_dir, *self.fl.incdirs):
-            asked = base / name
-            cand = self.cache.resolved(asked)
+            cand = self.cache.resolved(base / name)
             if cand in self.overrides or cand.is_file():
-                found = (true_case(cand), Path(os.path.normpath(asked)))
+                real = true_case(cand)
+                # `normpath` collapses '..' as text where `resolve()` followed symlinks, so
+                # the asked-for place is only a key when it really is this header. Decided
+                # here, because a re-load must answer from this cache without a syscall.
+                asked = Path(os.path.normpath(base / name))
+                found = (real, asked if same_file(asked, real) else real)
                 break
         known[key] = found
         return found
@@ -339,7 +343,8 @@ class _Loader:
                         child_raw = raw.parent
             # Where slang looks: the spelling the `include asked for. On Windows
             # `resolve()` canonicalises case, so the real path can differ from it, and a
-            # header asked for in another case would not be found at all.
+            # header asked for in another case would not be found at all. `_resolve` has
+            # already checked that the place is this header.
             keys.append(self.mirror(asked))
             keys.append(self.mirror(header))
             fresh = False
