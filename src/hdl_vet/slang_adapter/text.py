@@ -229,6 +229,34 @@ _DIRECTIVES = frozenset(
         "pragma",
         "begin_keywords",
         "end_keywords",
+        "default_decay_time",
+        "default_trireg_strength",
+        "delay_mode_distributed",
+        "delay_mode_path",
+        "delay_mode_unit",
+        "delay_mode_zero",
+        "protect",
+        "endprotect",
+        "protected",
+        "endprotected",
+    }
+)
+# The directives that take an argument: the argument is the next token, on this line or on a later one.
+_TAKES_ARGUMENT = frozenset(
+    {
+        "undef",
+        "ifdef",
+        "ifndef",
+        "elsif",
+        "include",
+        "default_nettype",
+        "begin_keywords",
+        "unconnected_drive",
+        "default_decay_time",
+        "default_trireg_strength",
+        "line",
+        "timescale",
+        "pragma",
     }
 )
 
@@ -336,7 +364,8 @@ def splice_stays(before: bytes, after: bytes, spans: list[tuple[int, int, int, i
 def _directive_lines(data: bytes) -> list[tuple[int, int, bool]] | None:
     """(start, stop, is_define) of the line of each compiler directive, read from the lexed file.
 
-    A line runs from the directive token to its line break (`stop` is the place of the break). A `define goes on
+    A line runs from the directive token to the line break after its last token or argument (`stop` is the place of
+    the break). The argument of a directive that takes one (`undef Q`) can stand on a later line. A `define goes on
     through the lines that a backslash continues. A use of a macro is not a directive. None when the file does
     not lex.
     """
@@ -344,11 +373,22 @@ def _directive_lines(data: bytes) -> list[tuple[int, int, bool]] | None:
     if found is None:
         return None
     out: list[tuple[int, int, bool]] = []
-    for offset, kind, raw in found:
+    for index, (offset, kind, raw) in enumerate(found):
         if kind != "Directive" or raw[1:] not in _DIRECTIVES:
             continue
         define = raw == "`define"
-        stop = offset
+        # The last token that the directive takes: its first argument, wherever it is (the name may stand on the
+        # next line), and the tokens that follow it on the same line.
+        last = offset + len(raw.encode())
+        needed = raw[1:] in _TAKES_ARGUMENT
+        for o, k, r in found[index + 1 :]:
+            if not needed and b"\n" in data[last:o]:
+                break
+            if k == "Directive" and r[1:] in _DIRECTIVES:
+                break
+            needed = False
+            last = o + len(r.encode())
+        stop = offset if define else last
         while True:
             nl = data.find(b"\n", stop)
             if nl < 0:

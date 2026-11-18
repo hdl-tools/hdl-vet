@@ -930,3 +930,66 @@ def test_the_check_of_the_session_keeps_the_outside_waivers(tmp_path, monkeypatc
     for result in (vet.session.check(), vet.check()):
         assert [(o.file, o.waiver) for o in result.outside] == [("rtl/ab.sv", "the other branch: see TB-2")]
         assert "waived: splice rtl/ab.sv" in result.report()
+
+
+# --- the re-check of X1 ---------------------------------------------------------------------------
+#
+# slang takes the name of a directive from the line after it. The line of a directive ends at its
+# last token, wherever that is.
+
+NEXT_LINE = (
+    "`define W\n"
+    "`define Q\n"
+    "`define YES\n"
+    "module a (\n"
+    "  input  logic x,\n"
+    "  output logic y\n"
+    ");\n"
+    "`ifndef\n"
+    "  YES\n"
+    "`define V\n"
+    "`endif\n"
+    "`undef\n"
+    "  Q\n"
+    "  assign y = x;\n"
+    "endmodule\n"
+    "module b (\n"
+    "  input  logic x,\n"
+    "  output logic z\n"
+    ");\n"
+    "`ifdef W\n"
+    "  assign z = x;\n"
+    "`else\n"
+    "  assign z = ~x;\n"
+    "`endif\n"
+    "`ifdef V\n"
+    "  wire spare;\n"
+    "`endif\n"
+    "endmodule\n"
+)
+
+
+@pytest.mark.parametrize(
+    "before, old, new",
+    [(b"`undef\n  ", b"Q", b"W"), (b"`ifndef\n  ", b"YES", b"NO"), (b"`undef\n", b"  Q", b"  W")],
+    ids=["undef", "ifndef", "undef with blanks"],
+)
+@pytest.mark.parametrize("yosys", [True, False])
+def test_directive_name_on_the_next_line_is_outside(tmp_path, monkeypatch, before, old, new, yosys):
+    if not yosys:
+        no_yosys(monkeypatch)
+    design = Design(tmp_path / "d", {"ab": NEXT_LINE, "top": AB_TOP})
+    vet = design.vet()
+    path = design.path("ab")
+    at = vet.text(path).index(before + old) + len(before)
+    with pytest.raises(VetError, match="outside"):
+        vet.splice(path, at, at + len(old), new, old=old)
+    assert design.changed(vet) == set()
+
+
+@needs_yosys
+def test_a_splice_after_a_directive_with_its_name_on_the_next_line_is_inside(tmp_path):
+    design = Design(tmp_path / "d", {"ab": NEXT_LINE, "top": AB_TOP})
+    vet = design.vet()
+    design.replace(vet, "ab", b"  assign y = x;", b"  assign y = x | 1'b0;")
+    assert records(vet.finish()) == [("a", "proved")]

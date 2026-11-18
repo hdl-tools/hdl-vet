@@ -366,7 +366,8 @@ mark needs a waiver or Yosys and has none.
 
 A splice is outside the modules also when its range meets the line of a directive. This holds
 inside a module too. A directive that is written inside a module reaches the modules after it
-in the file. The line is the directive, its arguments and the name of an include. It also has
+in the file. The line is the directive, its arguments and the name of an include. An argument can stand
+on a later line, as the name of an \code{`undef} can. It also has
 the lines of a \code{`define} that a backslash continues, and the line break that ends it.
 
 hdl-vet reads these lines from the tokens of the file, not from a search for a backtick. A
