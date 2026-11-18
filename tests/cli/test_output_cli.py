@@ -241,6 +241,25 @@ def test_output_inside_the_input_tree_is_refused(kit):
     assert kit.top.is_file()
 
 
+def test_output_in_a_differently_cased_input_tree_is_refused(kit):
+    """A case-insensitive filesystem must not let --force delete the input tree."""
+    probe = kit.root.parent / "hdl_vet_case_probe"
+    probe.mkdir()
+    try:
+        ignores_case = (kit.root.parent / "HDL_VET_CASE_PROBE").is_dir()
+    finally:
+        probe.rmdir()
+    if not ignores_case:
+        pytest.skip("this filesystem keeps case, so the spelling is a different directory")
+    s = Session(kit.filelist, top="top")
+    r = s.finish()
+    before = tree_bytes(kit.root)
+    variant = kit.root.parent / kit.root.name.upper()
+    with pytest.raises(OutputError):
+        write_tree(s, r, variant, force=True)
+    assert tree_bytes(kit.root) == before
+
+
 def test_layout_with_includes_defines_and_nested_lists(tmp_path: Path):
     root = tmp_path / "in"
     (root / "lists").mkdir(parents=True)
