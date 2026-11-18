@@ -18,7 +18,7 @@ from hdl_vet import __version__
 from hdl_vet.filelist import FilelistError
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.output import OutputError, write_tree
-from hdl_vet.paths import within
+from hdl_vet.paths import same_file, within
 from hdl_vet.project import PROJECT_FILE, Project, ProjectError, init_project, load_project
 from hdl_vet.session import Session, SessionError
 from hdl_vet.slang_adapter import AdapterError
@@ -116,10 +116,6 @@ def _load_script(path: Path) -> tuple[str, str, Any]:
     if not callable(func):
         raise _InputError(f"{path}: the script must define apply(vet)")
     return path.name, hashlib.sha256(data).hexdigest(), func
-
-
-def _same_file(a: Path, b: Path) -> bool:
-    return a.resolve() == b.resolve()
 
 
 @dataclass(frozen=True)
@@ -232,9 +228,9 @@ def _plan(args: argparse.Namespace, project: Project | None) -> _Plan:
         if outdir is not None and within(args.save, outdir):
             raise _InputError(f"--save {args.save} is inside {called} {outdir}")
         owned = [*scripts, *([filelist] if filelist is not None else [])]
-        if any(_same_file(args.save, p) for p in owned):
+        if any(same_file(args.save, p) for p in owned):
             raise _InputError(f"--save {args.save} names a script or the file list; it would be overwritten")
-        if project is not None and _same_file(args.save, project.path):
+        if project is not None and same_file(args.save, project.path):
             raise _InputError(f"--save {args.save} names the project file; it would be overwritten")
     if args.resume is not None and outdir is not None and within(args.resume, outdir):
         raise _InputError(f"--resume {args.resume} is inside {called} {outdir}, which would be replaced")
@@ -286,7 +282,7 @@ def _apply(args: argparse.Namespace) -> int:
         vet = Vet(session)
     if args.save is not None:
         for owned, what in session.owned_paths().items():
-            if _same_file(args.save, owned):
+            if same_file(args.save, owned):
                 raise _InputError(f"--save {args.save} is {what}; it would be overwritten")
         if within(args.save, session.layout_root):
             raise _InputError(f"--save {args.save} is inside the input tree {session.layout_root}")
