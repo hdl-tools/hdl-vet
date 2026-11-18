@@ -148,7 +148,13 @@ class _Shared:
         self.fl = fl
         self._names: dict[str, str] = {}
         self._root = Path(fl.root.anchor) / "__hdlvet__"
-        self.real: dict[str, Path] = {}  # synthetic buffer path -> real path
+        # Two questions, two answers. `real` maps a path slang reports back to the file
+        # it stands for, and its key is folded, because slang can report another case of
+        # it on Windows. `given` records the buffers slang already holds, and its member
+        # is the path exactly as spelled, because `assignText` is case-sensitive: two
+        # spellings of one header are two buffers, and each `include needs its own.
+        self.real: dict[str, Path] = {}  # synthetic buffer path, folded -> real path
+        self.given: set[str] = set()  # the synthetic paths slang holds, as spelled
         self.hbytes: dict[Path, bytes] = {}  # raw bytes of every header registered
         self.bad: dict[Path, str] = {}  # headers that are not valid UTF-8
         self.bodies: dict[Path, str] = {}
@@ -351,13 +357,16 @@ class _Loader:
             for key in keys:
                 k = _key(key)
                 known = sh.real.get(k)
-                if known is not None:
-                    if known != header and self.strict:
+                if known is not None and known != header:
+                    if self.strict:
                         raise _Unsafe()
-                    continue
+                    continue  # another header already stands for this name
                 sh.real[k] = header
-                self.sm.assignText(str(key), body)
-                fresh = True
+                text = str(key)
+                if text not in sh.given:
+                    sh.given.add(text)
+                    self.sm.assignText(text, body)
+                    fresh = True
             if fresh:
                 self._register_includes(body, header.parent, depth + 1, child_raw)
 

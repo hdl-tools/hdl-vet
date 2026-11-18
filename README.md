@@ -60,7 +60,7 @@ The chapter "Limits and known problems" of the manual lists the rest.
 
 ## Install
 
-hdl-vet needs Python 3.11 or newer. It has one dependency, `pyslang`, and the installer fetches it. Install hdl-vet from PyPI. Use a virtual environment.
+hdl-vet needs Python 3.11 or newer. On macOS the Python of the system is older, so install a newer one first. It has one dependency, `pyslang`, and the installer fetches it. Install hdl-vet from PyPI. Use a virtual environment.
 
 ```sh
 python -m venv .venv
@@ -69,7 +69,7 @@ pip install hdl-vet
 python -m hdl_vet --version
 ```
 
-These commands are for a POSIX shell. On Windows, run `.venv\Scripts\activate` in place of the second line. If you use uv, run `uv venv`. Activate the environment as above. Then run `uv pip install hdl-vet`.
+These commands are for a POSIX shell, which is what you have on Linux and on macOS. On Windows, run `.venv\Scripts\activate` in place of the second line. If you use uv, run `uv venv`. Activate the environment as above. Then run `uv pip install hdl-vet`.
 
 The first run below uses the example design of the manual, which is in this repository. To get it, make a clone:
 
@@ -91,7 +91,7 @@ cp -r docs/manual/examples /tmp/vet-examples
 cd /tmp/vet-examples
 ```
 
-These commands are for a POSIX shell. In PowerShell, use another folder in place of `/tmp`. Chapter 3 of the manual shows the PowerShell commands.
+These commands are for a POSIX shell, on Linux or on macOS. In PowerShell, use another folder in place of `/tmp`. Chapter 3 of the manual shows the PowerShell commands.
 
 This script adds the input port `test_en_i` to `soc_top`. It connects the port to the instance `u_rst_sync`, in place of the constant `1'b0`. The argument `was` says what hdl-vet must find there now. If the design shows something else, hdl-vet stops the run and writes nothing. The exit status is 2.
 

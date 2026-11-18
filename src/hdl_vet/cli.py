@@ -153,6 +153,17 @@ def _raise(error: OSError) -> None:
     raise error
 
 
+def _left_by_a_file_manager(name: str) -> bool:
+    """True for a file that a file manager writes into a folder it shows.
+
+    The Finder writes `.DS_Store` into any folder it opens, and `._NAME` appears beside a
+    file copied to a volume that keeps no resource forks. Explorer writes `Thumbs.db` and
+    `desktop.ini`. None of them is part of an output tree, and refusing `--force` because
+    one is there would stop a user who only looked at the folder.
+    """
+    return name in {".DS_Store", "Thumbs.db", "desktop.ini"} or name.startswith("._")
+
+
 def _check_replaceable(outdir: Path) -> None:
     """`--force` on the output directory a project names: only an earlier hdl-vet output with nothing else in it."""
     if not outdir.is_dir():
@@ -185,6 +196,8 @@ def _check_replaceable(outdir: Path) -> None:
     try:
         for here, _, names in os.walk(outdir, onerror=_raise):
             for name in names:
+                if _left_by_a_file_manager(name):
+                    continue
                 rel = (Path(here) / name).relative_to(outdir).as_posix()
                 if rel not in known:
                     raise refuse(f"{rel} is not listed in hdl-vet.json")
