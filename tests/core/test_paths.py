@@ -24,20 +24,7 @@ from pathlib import Path
 import pytest
 
 from hdl_vet.paths import same_file, within
-
-
-def ignores_case(where: Path) -> bool:
-    """True when the filesystem holding `where` ignores case in names.
-
-    Probed by writing, not by asking the platform: a case-sensitive volume on
-    macOS and a case-insensitive one on Linux both exist.
-    """
-    probe = where / "hdl_vet_case_probe"
-    probe.mkdir()
-    try:
-        return (where / "HDL_VET_CASE_PROBE").is_dir()
-    finally:
-        probe.rmdir()
+from vetkit import ignores_case
 
 
 def test_a_directory_is_within_itself(tmp_path: Path):
