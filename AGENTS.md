@@ -21,8 +21,6 @@ Work on a part is done by three roles. One agent does not take two roles on the 
 | Reviewer | A strong model, started fresh | Tries to break the implementation. Does not see the planner's opinion of it. Changes nothing in the repository. |
 | Executor | A fast model | Implements. The tests are frozen for it. |
 
-So far the planner was Claude Fable, the reviewer Claude Opus and the executor Claude Sonnet.
-
 ## The flow of a part
 
 1. The planner asks the owner the design questions, each with options and one recommendation.
