@@ -15,6 +15,8 @@ from pathlib import Path
 
 __all__ = ["Filelist", "FilelistError", "read_filelist"]
 
+from hdl_vet.paths import same_file
+
 _ENV_RE = re.compile(r"\$(?:\{(\w+)\}|\((\w+)\)|(\w+))")
 
 
@@ -38,6 +40,24 @@ class _State:
     files: list[Path] = field(default_factory=list)
     incdirs: list[Path] = field(default_factory=list)
     defines: dict[str, str | None] = field(default_factory=dict)
+
+
+def _add_once(where: list[Path], path: Path) -> None:
+    """Append `path` unless the same file or directory is already there.
+
+    A list that names one thing twice gives it once. The spellings need not match: on a
+    file system that ignores case two of them are one file, and keeping both put the same
+    source in the design twice, which slang then reported as a duplicate definition.
+
+    Only a spelling that could collide is put to the file system, so the usual list costs
+    no syscall beyond the ones `resolve()` already made.
+    """
+    if path in where:
+        return
+    folded = str(path).casefold()
+    if any(folded == str(other).casefold() and same_file(path, other) for other in where):
+        return
+    where.append(path)
 
 
 def read_filelist(path: Path, base: Path | None = None) -> Filelist:
@@ -83,7 +103,7 @@ def _read(fl: Path, base: Path, state: _State, stack: tuple[Path, ...]) -> None:
         if line.startswith("+incdir+"):
             for part in line[len("+incdir+") :].split("+"):
                 if part:
-                    state.incdirs.append((base / part).resolve())
+                    _add_once(state.incdirs, (base / part).resolve())
         elif line.startswith("+define+"):
             for part in line[len("+define+") :].split("+"):
                 if part:
@@ -104,5 +124,4 @@ def _read(fl: Path, base: Path, state: _State, stack: tuple[Path, ...]) -> None:
             src = (base / line).resolve()
             if not src.is_file():
                 raise FilelistError(f"{where}: source file not found: {line}")
-            if src not in state.files:
-                state.files.append(src)
+            _add_once(state.files, src)
