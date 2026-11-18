@@ -218,6 +218,16 @@ class HierRef:
 
 
 @dataclass(frozen=True)
+class BindRef:
+    """A `bind` directive: what it targets (a module or an instance, as written), where it is written, its text."""
+
+    target: str
+    instances: list[str]  # the names after the colon of `bind m : i1, i2 ...`
+    host: str | None  # the module (or interface, program) that holds it; None at file level
+    text: str
+
+
+@dataclass(frozen=True)
 class InstanceSite:
     instance_name: str
     module_name: str

@@ -89,7 +89,7 @@ Operation & Edits the text of & \code{was} & Second run \\
 \apiname{Module.remove_assign} & the module & the right-hand side now there, optional check & skipped \\
 \apiname{Module.remove_port} & the module, and every module that instantiates it & none & skipped \\
 \apiname{Module.remove_param} & the module, and every module that instantiates it & none & skipped \\
-\apiname{Vet.splice} & the file that you name & none. \code{old=} guards the bytes & none \\
+\apiname{Vet.splice} & the file that you name & none. \code{old=} guards the bytes. A raw splice needs a proof or a \code{waiver=} & none \\
 \bottomrule
 \end{tabular}
 }
@@ -743,9 +743,11 @@ hdl-vet refuses \file{remove_timer.py}. If the script removes the second timer, 
 \label{sec:byhand}
 
 Sometimes no operation does what you need. Then you edit the text yourself, and you
-tell the sign-off what to expect. No operation checks raw edits. The
-sign-off checks them, but it checks only what it can see. It can see the structure of
-the design and the diagnostics (chapter~\ref{ch:signoff}).
+tell the sign-off what to expect. No operation checks raw edits. The sign-off checks
+them. It sees the structure of the design and the diagnostics (chapter~\ref{ch:signoff}).
+
+A raw edit of logic needs more: a proof or a waiver. A \term{raw splice} is a call of
+\apiname{Vet.splice} by your script. A splice that an operation makes is not raw.
 
 \begin{entry}{\sig{Vet.splice}}
 \item[Writes] The operation replaces the bytes from \code{start} up to \code{end} of the
@@ -762,6 +764,10 @@ the design and the diagnostics (chapter~\ref{ch:signoff}).
     \code{end}
   \item a \code{text} or an \code{old} that is not \code{bytes}
   \item a range whose bytes differ from \code{old}, if you gave it
+  \item a waiver that is not one line of text
+  \item a range inside a module, when Yosys is not installed and the splice has no waiver
+  \item a range that is not inside the text of one module, when the splice has no waiver
+  \item a range inside a module that the design does not elaborate under the top
   \end{itemize}
   Always give \code{old}. Then the splice cannot go wrong when the text changes. Every
   refusal is a \code{VetError}. Its message starts with \code{splice} and the name of the
@@ -769,8 +775,51 @@ the design and the diagnostics (chapter~\ref{ch:signoff}).
   second time, without a message.
 \item[Again] A splice has no skip rule. With \code{old}, a second splice on text that
   is already edited is refused, because the bytes differ.
-\item[Example] \file{by_hand.py}. After a splice, the next operation loads the design
-  again, because hdl-vet does not know the effect of a splice.
+\item[Waiver] \code{waiver=} is one line of text that says why the splice needs no proof.
+  Without it, a raw splice needs a proof (next item). The rules for a waiver are in
+  section~\ref{sec:equiv}.
+\item[Proof] hdl-vet decides at the call what the splice changes. It reads the syntax tree
+  of the file before the splice, with the ranges of its module declarations. It does not
+  search the text.
+  \begin{itemize}
+  \item \emph{Only blanks and comments change.} The splice needs nothing: no proof, no
+    waiver, no record.
+  \item \emph{The range lies inside the text of one module.} hdl-vet judges the result too:
+    the module must stay one whole module (section~\ref{sec:rawsplice}). The splice then
+    marks the module.
+    The sign-off compares each marked module with the module of the input design. It does
+    the same for a module with \apiname{Module.override_net}
+    (section~\ref{sec:equiv}). A module without an enable must be equal as it is.
+
+    The comparison needs Yosys. Without Yosys, hdl-vet refuses the splice at the call and
+    writes nothing, unless it has a waiver. The message starts with \code{splice} and the
+    name of the file, and it names \code{hdl-vet[equiv]}.
+  \item \emph{Anything else is outside the modules.} Examples are a package, a macro, a
+    type at file level, a directive, a range over two modules, and a file that holds no
+    module. An insertion before \code{module} is outside too.
+
+    A range inside a module can be outside as well. This is so when the range meets the line
+    of a directive, such as the directive, its arguments or the name of an include. A directive
+    in a module reaches the modules after it. It is so when the old or the new text
+    has a directive such as \code{`define} or \code{`ifdef}, or a use of a macro. It is so when
+    the text has a \code{bind}, a keyword such as \code{module} or \code{endmodule}, or a comment or
+    string that does not end. It is so too when the splice, read with the whole file as
+    tokens, changes text outside the module (section~\ref{sec:rawsplice}).
+
+    hdl-vet refuses such a splice at the call, with or without Yosys, unless it has a
+    waiver. The message names what made it outside: a keyword such as \code{endmodule}, a
+    directive, a use of a macro, or a \code{bind}. To add text before \code{endmodule},
+    insert at its first byte. Do not replace it. With a waiver, no comparison runs for it. The report says that the splice is
+    outside the modules.
+  \end{itemize}
+  A module is waived only when every logic operation and every raw splice in it has a
+  waiver. A module that a hierarchical name from outside reads is never proved. A session has
+  one \code{Vet}. A waiver does not silence another check: a raw splice that changes the structure
+  still needs \apiname{Vet.expect}, and a new diagnostic still fails the sign-off.
+\item[Example] \file{by_hand.py} (a waiver), \file{splice_proved.py} (a proof),
+  \file{logic_change.py} (a refuted proof), \file{splice_outside.py} (a refusal) and
+  \file{new_file.py} (a waiver outside the modules). After a splice, the next operation
+  loads the design again, because hdl-vet does not know the effect of a splice.
 \end{entry}
 
 \begin{entry}{\sig{Vet.text}}
@@ -823,6 +872,10 @@ the design and the diagnostics (chapter~\ref{ch:signoff}).
 
 \lstinputlisting[style=script]{examples/scripts/below.py}
 
+\lstinputlisting[style=script]{examples/scripts/splice_proved.py}
+
+\lstinputlisting[style=script]{examples/scripts/splice_outside.py}
+
 \lstinputlisting[style=script]{examples/scripts/unexpected.py}
 
 \lstinputlisting[style=script]{examples/scripts/unseen.py}
@@ -831,9 +884,17 @@ the design and the diagnostics (chapter~\ref{ch:signoff}).
 
 \file{by_hand.py} makes two raw edits. It changes the tie-off of \code{test_i}, and
 declares this with \code{expect}. It changes the parameter \code{STAGES}, and says
-with \code{permit} that this can happen. \file{below.py} edits the enable of the
-first timer. The change is below \code{u_periph}, and \code{allow_changes_below}
-covers it.
+with \code{permit} that this can happen. Both edits change logic in \code{soc_top}, so
+each has a waiver. The report shows the waivers and what the check said.
+
+\file{below.py} edits the enable of the first timer, with a waiver. The change is below
+\code{u_periph}, and \code{allow_changes_below} covers it.
+
+\file{splice_proved.py} writes \code{1'b1 + count_o} in place of \code{count_o + 1'b1} in
+\code{timer}. It has no waiver. The check proves that \code{timer} is equal, and the report
+says so. \file{splice_outside.py} puts a directive in front of \code{module timer}. The
+range is not inside a module, no comparison can judge it, and the splice has no waiver.
+hdl-vet refuses it at the call.
 
 The last two scripts show the two failures of the sign-off:
 

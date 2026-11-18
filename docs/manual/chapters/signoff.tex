@@ -17,7 +17,7 @@ When the last script ends, hdl-vet does these steps:
 \item If a file differs, it loads the edited design. It compares the edited design with
   the design that you started from, the \term{baseline}.
 \item It evaluates the checks that the operations registered.
-\item If an operation changed logic, it runs the equivalence check
+\item If an operation or a raw splice changed logic, it runs the equivalence check
   (section~\ref{sec:equiv}).
 \end{enumerate}
 
@@ -90,7 +90,9 @@ shows one failure of each kind.
 \item[equivalence proved: MODULE (OPERATIONS; equal when ENABLE is 0)] The check proved
   the module. This line is no failure. hdl-vet prints it on the error output also when
   the sign-off passes. If the design elaborates the module with parameter values, the
-  line shows them after the name, for example \code{rst_sync [STAGES=3]}.
+  line shows them after the name, for example \code{rst_sync [STAGES=3]}. A module that
+  has raw splices and no enable has no \code{equal when}: the line ends with
+  \code{(splice MODULE)}.
 
 \item[not equivalent: MODULE: DETAIL (OPERATIONS)] The check did not prove the module.
   The detail names the signals that are not equal. Look at the operations that the line
@@ -100,14 +102,22 @@ shows one failure of each kind.
   module. The detail gives the reason, for example a second clock. This line fails the
   sign-off too. Section~\ref{sec:equiv} lists what the check cannot judge.
 
-\item[waived: OPERATION: "WAIVER" (the check says: RESULT)] Every logic operation of the
-  module has a waiver. The waiver decides, so this line is no failure. The text in
-  parentheses is what the check said: \code{proved}, or \code{refuted} or \code{error}
-  with the detail. Without Yosys, it says that the check did not run.
+\item[waived: OPERATION: "WAIVER" (the check says: RESULT)] Every logic operation and
+  every raw splice of the module has a waiver. The waiver decides, so this line is no
+  failure. The text in parentheses is what the check said: \code{proved}, or
+  \code{refuted} or \code{error} with the detail. Without Yosys, it says that the check did
+  not run. The operation of a raw splice is \code{splice MODULE}.
+
+\item[waived: splice FILE: "WAIVER" (outside the modules: not compared)] A raw splice
+  changed text outside every module, and it has a waiver. No comparison ran for it. The
+  line is no failure.
 \end{description}
 
 These scripts produce the failures in the transcript. \file{cannot_load.py} renames the
-top module with a raw edit. \file{new_file.py} inserts an \code{`include}.
+top module with a raw edit. \file{new_file.py} inserts an \code{`include}. This splice is
+outside the modules, so it has a waiver. The sign-off still fails, because a waiver
+silences no other check.
+
 \file{wide_port.py} connects a 1-bit expression to a 2-bit port. \file{dangling.py}
 opens an output that something reads. \file{unexpected.py}, \file{unseen.py} and
 \file{add_cell.py} are in chapter~\ref{ch:operations}.
@@ -179,20 +189,24 @@ Skipped operations register no check.
 \label{sec:equiv}
 
 Most operations change the structure only. \apiname{Module.override_net} changes logic.
-The sign-off proves that this change has no effect when you switch it off. The proof is
-the \term{equivalence check}. It uses Yosys. Chapter~\ref{ch:install} tells how to
-install it.
+The sign-off proves that this change has no effect when you switch it off.
+
+A raw splice inside a module can change logic too. The sign-off proves that such a module
+is equal to the module of the input design. The proof is the \term{equivalence check}. It
+uses Yosys. Chapter~\ref{ch:install} tells how to install it.
 
 \subsection*{What the check compares}
 
 The check compares two versions of one module: the module of the input design, and the
 edited module. hdl-vet makes one comparison for each module that a logic operation
-edited. It makes one comparison for each set of parameter values with which the design
-elaborates the module. The rules of a comparison are these:
+edited, and for each module that a raw splice marked (section~\ref{sec:rawsplice}). It makes
+one comparison for each set of parameter values with which the design elaborates the
+module. The rules of a comparison are these:
 
 \begin{itemize}
 \item hdl-vet ties to 0 the enable of every override in the module. It ties to 0 also each
-  enable that the module carries up from a child (section~\ref{sec:enable}).
+  enable that the module carries up from a child (section~\ref{sec:enable}). A raw splice has
+  no enable. A module with raw splices and no enable has no tie: it must be equal as it is.
 \item All other edits of the run in the module are part of the edited module. A new input
   must have no effect. A changed connection counts as a change of behaviour.
 \item hdl-vet does not look into a child module when nothing changed in it or below it.
@@ -228,6 +242,33 @@ temporary folder. The folder has the layout of the real tree, so that an include
 resolves as before. hdl-vet removes the folder after the check. It does not write into the
 input tree or the output tree.
 
+A module that is read from outside is never \code{proved}. Suppose a name that is written
+outside the module M leads into an instance of M: a net, a variable or a function of M. The
+comparison of M sees its inputs and its outputs only, so it cannot stand for the design.
+The record of M is \code{error}, and the detail names the name. This holds for every module
+that the check compares, also for one with \code{override_net}. A name written inside M, also
+one into a child of M, is not this case.
+
+A \code{bind} has the same effect. Suppose a \code{bind} is written in another module, or at
+file level. It puts an instance into the module M or into an instance of M. The comparison
+reads M alone, and it does not read that \code{bind}. The record of M is \code{error}, and
+the detail names the \code{bind}. A \code{bind} in the text of M itself is part of M.
+
+hdl-vet does not read the target as it is written. It takes the target from the elaborated
+design, where the compiler resolved it. It lists the instances that a \code{bind} built, with
+the instance that holds each. It does this for the edited design and for the input design.
+If the compiler cannot list the instances, every compared module is \code{error}. A
+\code{bind} whose target is not in the design builds no instance, so it is no cause.
+
+The check uses one value of each parameter for both sides. So when an edit changes a value
+that an instance uses, the record for that set of values is \code{error}. The detail names
+the parameter, the two values and the instance. A changed default of a parameter does this.
+So does \apiname{Instance.set_param} on an instance of a compared module. The comparison
+cannot show that the module is the same at the old value.
+
+A module that is proved and has no enable is not a black box for its parent. The parent is
+compared with it inside.
+
 \subsection*{What proved means}
 
 With the enables at 0, every output of the edited module equals the same output of the
@@ -250,21 +291,134 @@ The proof is of the edited module only. The check does not prove what a connecti
 enable does. The sign-off looks at the connection only (section~\ref{sec:enable}).
 Chapter~\ref{ch:limits} lists the other limits.
 
-A raw edit of logic in a module that has no logic operation is not proved.
+A module is judged as a whole. A structural operation in a module that has a raw splice
+or an override is part of the edited module. An example is another connection of a pin. If
+it changes the behaviour, the answer is \code{refuted}.
+
+\subsection*{Raw splices}
+\label{sec:rawsplice}
+
+\emph{Who the rule is for.} The rule protects a script that uses the public interface as
+this manual shows it, mistakes included. A script is Python. A script that works against the
+check can always pass. It can reach into names that begin with an underscore, patch
+hdl-vet, or forge objects. That is a stated limit, not a hole.
+
+hdl-vet closes the doors that an honest script can walk through. It closes the doors that
+only a hostile script finds where this is cheap.
+
+The marks of the raw splices are part of the state of the session, like the text and the
+queue. So is the list of the splices that wait. A checkpoint, a roll back, a check, a re-load, an
+added file, a group and a saved session carry them with the text. A \code{Vet} cannot be
+copied. \code{Session.rollback} takes only a checkpoint that this session gave. A splice
+with an argument of a near type, such as a \code{bytearray}, is refused.
+
+A raw splice is a call of \apiname{Vet.splice} by your script. A splice that an operation
+makes is not raw. hdl-vet decides at the call what a raw splice changes. It reads the syntax
+tree of the file before the splice. It does not search the text. There are three cases:
+
+\begin{itemize}
+\item \emph{Blanks and comments.} The file stays the same but for blanks and comments.
+  The splice needs nothing: no comparison, no waiver, no record.
+\item \emph{Inside one module.} The range lies inside the text of one module, from
+  \code{module} to the end of \code{endmodule}. hdl-vet also judges the result. After the
+  splice, hdl-vet reads the whole file as tokens, before and after. A comment is not a
+  token, so a comment that swallows text shows as missing tokens. These must hold:
+  \begin{itemize}
+  \item The tokens outside the module are the same, in the same order. Directives count.
+  \item The module starts with the same token. Its keywords that open and close come in
+    matching pairs, and the module closes only at its last token.
+  \item Its directives are the same, in the same order, and its conditional directives
+    are balanced.
+  \end{itemize}
+
+  A splice in the middle of a word that stays inside the module is still inside. hdl-vet
+  marks the module. The sign-off compares each marked module with the module of the input
+  design, as for a module with a logic operation.
+
+  Several splices in a module are one operation in the report. It is named
+  \code{splice MODULE}. Without Yosys, hdl-vet refuses the splice at the call and writes
+  nothing, unless it has a waiver. The message starts with \code{splice} and the name of
+  the file. It names \code{hdl-vet[equiv]}.
+\item \emph{Outside the modules.} The range is in a package, in a macro, in a type at file
+  level, or in a file with no module. It is over more than one module, or beside a module.
+
+  The old or the new text can have a directive (\code{`define}, \code{`ifdef},
+  \code{`include} and others), or a keyword that opens or ends a module. It can have a
+  comment or a string that does not end. Then the splice is outside too.
+
+  No comparison can say what such a splice does. hdl-vet refuses it at the call, with or
+  without Yosys, unless it has a waiver. The message says \emph{outside}. With a waiver,
+  the splice is applied and nothing is compared for it.
+\end{itemize}
+
+Splices of one file that wait for the next load are judged together. All their ranges are
+in the text that \apiname{Vet.text} gave, and they stay right. hdl-vet judges a new splice on
+the file with all the waiting splices of the file made, against the file before them. It
+does not matter which module a splice is in, or whether it is at file level. A comment at
+file level and a comment in a module can add up to another module body.
+
+If the whole is not blanks and comments only, every one of those splices marks its module.
+The module declarations of the file must stay the same, and so must the tokens outside them.
+This holds also for an earlier splice that left no mark at its own call. Such a splice takes
+the waiver of the later splice that makes it count. Two splices that
+each change only a comment can turn code into a comment together. The call is refused when a
+mark needs a waiver or Yosys and has none.
+
+A splice is outside the modules also when its range meets the line of a directive. This holds
+inside a module too. A directive that is written inside a module reaches the modules after it
+in the file. The line is the directive, its arguments and the name of an include. It also has
+the lines of a \code{`define} that a backslash continues, and the line break that ends it.
+
+hdl-vet reads these lines from the tokens of the file, not from a search for a backtick. A
+splice that changes only blanks there still needs nothing, except in a \code{`define}. A use
+of a macro in ordinary code is not a directive line. A splice elsewhere on that line is inside.
+
+A splice is outside the modules also when its old or new text has a use of a macro or a
+\code{bind}. What a macro expands to is not in the text. A \code{bind} puts logic into
+another module. A splice that touches a \code{`define}, with its line and the lines that a
+backslash continues, is never blanks and comments only. The header of a macro is read alone,
+where nothing expands it.
+
+A session has one \code{Vet}. A second \code{Vet(session)} is refused. The session has no
+public name that queues an edit without the check, and none that takes the check away. A
+script that reaches into names with an underscore is not covered.
+
+\apiname{Session.check} and \apiname{Session.finish} run no comparison. They keep the
+waivers of the splices outside the modules, in the result and in the report. Suppose a script
+calls them on a session that has marks, without the comparison of a \code{Vet}. Then they
+give an \code{error} record for each marked module, with the detail \emph{not compared}.
+They never say ok for it. \apiname{Vet.check} and \apiname{Vet.finish} are as before.
+
+\apiname{Session.splice} called by a script is a raw splice too. It is sorted, marked or
+refused in the same way. It takes no waiver, so a script that needs one uses
+\apiname{Vet.splice}. The operations use another way into the queue, so they are never raw.
+
+A splice in a module that the design does not elaborate under the top is refused, as an
+operation on such a module is.
+
+A group that ends with an exception takes back its raw splices, with their marks. A scope
+keeps its own rules for a splice (chapter~\ref{ch:scripts}). A splice that the scope allows
+is raw like any other.
 
 \subsection*{The waiver}
 
-A waiver is an argument of the operation. With a waiver, the sign-off passes whatever the
-check says. The report and \file{hdl-vet.json} show the waiver and the answer of the
-check. The rules are these:
+A waiver is an argument of the operation or of the splice. With a waiver, the sign-off
+passes whatever the check says. The report and \file{hdl-vet.json} show the waiver and the
+answer of the check. The rules are these:
 
 \begin{itemize}
-\item A module is \emph{waived} only when every logic operation in it has a waiver.
+\item A module is \emph{waived} only when every logic operation in it and every raw splice
+  in it has a waiver.
 \item One waiver does not cover another operation. If one of two overrides in a module has
-  no waiver, the check decides.
+  no waiver, the check decides. A waiver on an override does not cover a raw splice in the
+  module, and the other way round.
 \item With Yosys, the check runs also when the operation has a waiver.
-\item Without Yosys, the operation is refused unless it has a waiver. The record then says
-  \emph{waived}, and the check did not run.
+\item Without Yosys, the operation or the splice is refused unless it has a waiver. The
+  record then says \emph{waived}, and the check did not run.
+\item A waiver silences only the comparison. A raw splice that changes the structure still
+  needs \apiname{Vet.expect}, and a new diagnostic still fails the sign-off.
+\item A waiver is one line of text. It has no line separator of any kind: not a line
+  feed, not a carriage return, not a form feed, and not the Unicode separators.
 \end{itemize}
 
 \subsection*{When the check runs}
@@ -278,10 +432,14 @@ entry has \code{module}, \code{params}, \code{operations}, \code{status} and
 \code{detail}. The list \code{waivers} has one entry for each operation with a waiver. Each
 entry has \code{operation}, \code{waiver} and \code{check}.
 
+A raw splice outside the modules
+has an entry too. Its operation is \code{splice} and the path of the file, such as
+\code{splice rtl/p.sv}, and its \code{check} is \code{null}.
+
 The list \code{enables} has one
 entry for each pin of an enable that hdl-vet looked at. Each entry has \code{module},
 \code{instance}, \code{pin}, \code{connection} and \code{status}. The three lists are empty
-when no logic operation ran.
+when no logic operation and no raw splice ran.
 
 The transcript in section~\ref{sec:logic} shows the lines of the check.
 

@@ -278,7 +278,13 @@ def test_a_local_signal_with_the_name_of_the_port_is_not_off(tmp_path, monkeypat
     vet = design.vet()
     vet.module("leaf").add_port("test_en_i", "input")
     vet.punch_port("test_en_i", "input", to="top.u_mid0")
-    design.replace(vet, "mid", b"leaf u_leaf (.clk_i(clk_i),", b"leaf u_leaf (.test_en_i(test_en_i), .clk_i(clk_i),")
+    design.replace(
+        vet,
+        "mid",
+        b"leaf u_leaf (.clk_i(clk_i),",
+        b"leaf u_leaf (.test_en_i(test_en_i), .clk_i(clk_i),",
+        waiver="set-up of the test",
+    )
     vet.module("leaf").override_net("q", "1'b0", enable="test_en_i", waiver="w")
     result = vet.check()
     assert ("mid", "g.u_leaf", "test_en_i", "test_en_i", "waived") in enables(result), enables(result)
@@ -312,10 +318,18 @@ def test_two_elaborations_with_other_connections_are_both_looked_at(tmp_path, mo
     vet.module("top").instance("u_mid0").connect("test_en_i", "test_en_i")
     vet.module("top").instance("u_mid1").connect("test_en_i", "test_en_i")
     design.replace(
-        vet, "mid", b"leaf u_leaf (.clk_i(clk_i), .d(d),", b"leaf u_leaf (.test_en_i(test_en_i), .clk_i(clk_i), .d(d),"
+        vet,
+        "mid",
+        b"leaf u_leaf (.clk_i(clk_i), .d(d),",
+        b"leaf u_leaf (.test_en_i(test_en_i), .clk_i(clk_i), .d(d),",
+        waiver="set-up of the test",
     )
     design.replace(
-        vet, "mid", b"leaf u_leaf (.clk_i(clk_i), .d(~d),", b"leaf u_leaf (.test_en_i(1'b1), .clk_i(clk_i), .d(~d),"
+        vet,
+        "mid",
+        b"leaf u_leaf (.clk_i(clk_i), .d(~d),",
+        b"leaf u_leaf (.test_en_i(1'b1), .clk_i(clk_i), .d(~d),",
+        waiver="set-up of the test",
     )
     vet.module("leaf", instances=2).override_net("q", "1'b0", enable="test_en_i", waiver="w")
     result = vet.check()

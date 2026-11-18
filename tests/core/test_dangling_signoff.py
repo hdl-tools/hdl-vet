@@ -258,7 +258,7 @@ CHAIN = (
 
 def remove_text(vet: Vet, path: Path, text: bytes) -> None:
     start, end = span(vet.text(path), text)
-    vet.splice(path, start, end, b"")
+    vet.splice(path, start, end, b"", waiver="set-up of the test")
 
 
 def test_an_output_its_own_module_reads_must_stay_driven(tmp_path: Path):

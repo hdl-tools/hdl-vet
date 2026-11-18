@@ -3,9 +3,9 @@ def apply(vet):
     path = periph.path
     text = vet.text(path)
 
-    # Give the first timer the other enable bit.
+    # Give the first timer the other enable bit. It is a change of logic, so it has a waiver.
     start = text.index(b"en_i[0]")
-    vet.splice(path, start, start + 7, b"en_i[1]", old=b"en_i[0]")
+    vet.splice(path, start, start + 7, b"en_i[1]", old=b"en_i[0]", waiver="covered by tb_periph")
 
     # This changes u_periph.u_timer0, below u_periph. Allow every change below u_periph.
     vet.module("soc_top").instance("u_periph").allow_changes_below()

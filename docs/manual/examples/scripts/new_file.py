@@ -3,4 +3,5 @@ def apply(vet):
     path = top.path
     text = vet.text(path)
     start = text.index(b"module soc_top")
-    vet.splice(path, start, start, b'`include "../../cells/tech_rst_sync.sv"\n')
+    include = b'`include "../../cells/tech_rst_sync.sv"\n'
+    vet.splice(path, start, start, include, waiver="the cell is read, nothing uses it")

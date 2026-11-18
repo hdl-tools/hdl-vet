@@ -9,7 +9,7 @@ from typing import Any
 import pyslang
 
 from hdl_vet.slang_adapter.host import _DesignHost
-from hdl_vet.slang_adapter.records import AdapterError, Driver, DriverDetail, HierRef, InstanceSite
+from hdl_vet.slang_adapter.records import AdapterError, BindRef, Driver, DriverDetail, HierRef, InstanceSite
 from hdl_vet.slang_adapter.text import _first_token
 
 _HEAD_RE = re.compile(r"\s*([A-Za-z_][A-Za-z0-9_$]*)")
@@ -158,6 +158,33 @@ class _HierRefOps(_DesignHost):
                         member.visit(lookup_table=table)
 
             walk(inst.body)
+        return out
+
+    def binds(self) -> list[BindRef]:
+        """Every instance that a `bind` put into the design, as the elaborated design has it.
+
+        The target of a bind is what slang resolved it to, not the way it is written: an instance that the compiler
+        built from a `bind` directive (its syntax lies under the directive) is listed with the path of the instance
+        that holds it, and the module that holds the directive. Nothing here reads the text of a target.
+        """
+        kind = pyslang.syntax.SyntaxKind
+        out: list[BindRef] = []
+        for inst in self._instances():
+            node = inst.syntax
+            while node is not None and node.kind != kind.BindDirective:
+                node = node.parent
+            if node is None:
+                continue
+            host = None
+            up = node.parent
+            while up is not None:
+                header = getattr(up, "header", None)
+                if header is not None and getattr(header, "name", None) is not None:
+                    host = str(header.name.valueText)
+                    break
+                up = up.parent
+            parent = str(inst.hierarchicalPath).rpartition(".")[0]
+            out.append(BindRef(parent, [], host, " ".join(str(node).split())))
         return out
 
     # --- instance sites ----------------------------------------------------

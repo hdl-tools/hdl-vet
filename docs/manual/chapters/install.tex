@@ -52,9 +52,10 @@ brackets. Quote the argument, so that your shell does not read the brackets:
 \item \cmd{pip install ".[equiv]"} installs a checkout.
 \end{itemize}
 
-Without the extra, hdl-vet works as before. The one exception is a logic operation. Without
-Yosys, \apiname{Module.override_net} refuses the call unless it has a waiver. The message
-names \code{hdl-vet[equiv]}.
+Without the extra, hdl-vet works as before. The exception is a logic operation. Without
+Yosys, \apiname{Module.override_net} refuses the call unless it has a waiver. A raw
+\apiname{Vet.splice} inside a module is refused in the same way. A raw splice outside the
+modules needs a waiver with or without Yosys. The message names \code{hdl-vet[equiv]}.
 
 \section{Check the installation}
 

@@ -43,7 +43,7 @@ __all__ = [
     "write_archive",
 ]
 
-FORMAT = 1
+FORMAT = 2  # 2: the index holds the marks of the raw splices (a format 1 archive cannot be judged)
 MAX_BYTES = 2 * 1024**3  # the most uncompressed data an archive may declare
 INDEX = "session.json"
 _STAMP = (1980, 1, 1, 0, 0, 0)  # the earliest time a zip can hold

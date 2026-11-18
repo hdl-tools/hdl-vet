@@ -77,7 +77,7 @@ Python API
     (`remove_instance` after `connect`) behaves as in an unsaved run.
 
 Archive layout (a reader may open it with any zip tool)
-    session.json                 the index: {"format": 1, "tool": "hdl-vet",
+    session.json                 the index: {"format": 2, "tool": "hdl-vet",
                                  "version": ..., "top": ..., "scripts": [...],
                                  ...}; everything that is not file content
     original/<path>              every source and included file as loaded,
@@ -371,14 +371,14 @@ def test_another_format_version_is_refused(work, capsys):
             data = src.read(item.filename)
             if item.filename == "session.json":
                 index = json.loads(data)
-                assert index["format"] == 1 and index["tool"] == "hdl-vet"
+                assert index["format"] == 2 and index["tool"] == "hdl-vet"
                 index["format"] = 99
                 data = json.dumps(index).encode()
             dst.writestr(item, data)
     capsys.readouterr()
     assert run("apply", "--resume", other, "-o", w.tmp / "out") == 2
     err = capsys.readouterr().err
-    assert "format" in err and "99" in err and "1" in err and "Traceback" not in err
+    assert "format" in err and "99" in err and "2" in err and "Traceback" not in err
     with pytest.raises(SessionError, match="99"):
         Vet.restore(other)
 
@@ -508,7 +508,7 @@ def test_the_archive_can_be_read_with_a_zip_tool(kit, cells, tmp_path: Path):
         assert z.read("current/rtl/mid.sv") == vet.text(kit.mid)
         assert z.read("added/cell_leaf.sv") == CELLS["cell_leaf.sv"].encode()
         index = json.loads(z.read("session.json"))
-        assert index["format"] == 1 and index["tool"] == "hdl-vet" and index["top"] == "top"
+        assert index["format"] == 2 and index["tool"] == "hdl-vet" and index["top"] == "top"
         assert index["scripts"] == []
 
 

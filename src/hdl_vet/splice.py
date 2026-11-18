@@ -14,11 +14,32 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
-__all__ = ["OffsetMap", "Splice", "SpliceError", "SpliceQueue", "apply_splices", "unified_diff"]
+__all__ = ["OffsetMap", "RawMark", "RawSplice", "Splice", "SpliceError", "SpliceQueue", "apply_splices", "unified_diff"]
 
 
 class SpliceError(Exception):
     """Raised for an out-of-range or overlapping splice; the message has the offsets."""
+
+
+@dataclass
+class RawSplice:
+    """A raw splice (`Vet.splice`) that waits in the queue of the session. Its range is in the text of the last load."""
+
+    start: int
+    end: int
+    text: bytes
+    waiver: str | None
+    modules: tuple[str, ...]  # the modules whose text holds the range (none or two: not one)
+    marked: bool = False
+
+
+@dataclass(frozen=True)
+class RawMark:
+    """What the sign-off must judge for a raw splice: `kind` "splice" (`target` is a module) or "outside" (a file)."""
+
+    kind: str
+    target: str
+    waiver: str | None
 
 
 @dataclass(frozen=True)

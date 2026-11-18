@@ -58,7 +58,7 @@ class Design:
     def replace(self, vet: Vet, old: bytes, new: bytes) -> None:
         data = vet.text(self.top)
         at = data.index(old)
-        vet.splice(self.top, at, at + len(old), new, old=old)
+        vet.splice(self.top, at, at + len(old), new, old=old, waiver="set-up of the test")
 
 
 def statuses(vet: Vet) -> list[tuple[str, str, str]]:

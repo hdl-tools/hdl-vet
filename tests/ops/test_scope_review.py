@@ -84,6 +84,7 @@ import pytest
 from hdl_vet.cli import main
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 from scope_design import CELL, FILES, Design, statuses
 
 
@@ -126,7 +127,7 @@ def test_an_include_spliced_into_the_scope_cannot_change_logic_outside(tmp_path:
     at = cells.read_bytes().index(b"  always_ff")
     with vet.scope("blk_a"):
         with pytest.raises(VetError, match="scope 'blk_a'") as e:
-            vet.splice(cells, at, at, b'  `include "alt.svh"\n')
+            vet.splice(cells, at, at, b'  `include "alt.svh"\n', waiver="set-up of the test")
         assert "`include" in str(e.value)
     assert vet.text(cells) == cells.read_bytes()
     assert vet.finish().ok
@@ -158,7 +159,7 @@ def test_a_directive_that_reaches_outside_the_module_is_refused(vet, design, tex
     directive = text[text.index(b"`") :].split()[0].decode()
     with vet.scope("blk_a"):
         with pytest.raises(VetError, match="scope 'blk_a'") as e:
-            vet.splice(cells, at, at, text + b"\n")
+            vet.splice(cells, at, at, text + b"\n", waiver="set-up of the test")
         assert directive in str(e.value)
     assert design.changed(vet) == set()
 
@@ -177,7 +178,7 @@ def test_a_directive_that_reaches_outside_the_module_is_refused(vet, design, tex
 def test_what_is_not_such_a_directive_is_accepted(vet, design, text):
     cells, at = in_cell_a(design)
     with vet.scope("blk_a"):
-        vet.splice(cells, at, at, text + b"\n")
+        vet.splice(cells, at, at, text + b"\n", waiver="set-up of the test")
     assert design.changed(vet) == {"cells"}
     assert vet.finish().ok
 
@@ -189,14 +190,14 @@ def test_a_macro_use_is_accepted(tmp_path: Path):
     vet = Vet(Session(design.filelist, top="top"))
     at = cells.read_bytes().index(b"  always_ff")
     with vet.scope("blk_a"):
-        vet.splice(cells, at, at, b"  logic t;\n  assign t = `ONE;\n")
+        vet.splice(cells, at, at, b"  logic t;\n  assign t = `ONE;\n", waiver="set-up of the test")
     assert vet.finish().ok
 
 
 def test_outside_a_scope_a_splice_may_hold_any_directive(vet, design):
     """R1 is a rule of the scope; the raw splice is as free as before without one."""
     cells, at = in_cell_a(design)
-    vet.splice(cells, at, at, b"`define X 1\n")
+    vet.splice(cells, at, at, b"`define X 1\n", waiver="set-up of the test")
     assert b"`define X 1" in vet.check().files[cells]
 
 
@@ -338,7 +339,7 @@ EXTRA_B = (
 def into_blk_a(design: Design, vet: Vet, text: bytes) -> None:
     blk_a = design.path("blk_a")
     at = vet.text(blk_a).index(b"endmodule")
-    vet.splice(blk_a, at, at, text)
+    vet.splice(blk_a, at, at, text, waiver="set-up of the test")
 
 
 @pytest.mark.parametrize(
@@ -428,10 +429,10 @@ def test_a_scope_with_two_instances_and_a_reference_between_them(vet, design):
     at = shared.read_bytes().index(b"endmodule")
     with pytest.raises(VetError, match="outside the scope") as e:
         with vet.scope("shared"):
-            vet.splice(shared, at, at, b"  logic peek;\n  assign peek = top.u_a.m;\n")
+            vet.splice(shared, at, at, b"  logic peek;\n  assign peek = top.u_a.m;\n", waiver="set-up of the test")
     assert "top.u_a.m" in str(e.value)
     with vet.scope("shared"):
-        vet.splice(shared, at, at, b"  logic peek;\n  assign peek = top.u_a.u_s.r;\n")
+        vet.splice(shared, at, at, b"  logic peek;\n  assign peek = top.u_a.u_s.r;\n", waiver="set-up of the test")
     assert design.changed(vet) == {"shared"}
     assert vet.finish().ok
 
@@ -507,7 +508,7 @@ def test_a_use_of_an_interface_port_is_accepted(tmp_path: Path, module, text):
     path = design.path(module)
     at = vet.text(path).index(b"endmodule")
     with vet.scope("blk_a"):
-        vet.splice(path, at, at, text)
+        vet.splice(path, at, at, text, waiver="set-up of the test")
     assert design.changed(vet) == {module}
     assert vet.finish().ok
 
@@ -555,7 +556,7 @@ def test_another_instance_of_a_module_with_an_old_reference_is_accepted(tmp_path
     at = vet.text(cells).index(b"endmodule")
     with pytest.raises(VetError, match="outside the scope") as e:
         with vet.scope("blk_a"):
-            vet.splice(cells, at, at, b"  logic more;\n  assign more = top.u_b.m;\n")
+            vet.splice(cells, at, at, b"  logic more;\n  assign more = top.u_b.m;\n", waiver="set-up of the test")
     assert "'cell_a'" in str(e.value)
     assert design.changed(vet) == {"blk_a"}
 
@@ -596,7 +597,7 @@ def test_a_reference_hidden_by_a_generate_block_is_refused(tmp_path: Path):
     new = b"  assign m = d;\n  logic own_spy;\n  assign own_spy = top.u_b.m;\n"
     with pytest.raises(VetError, match="outside the scope") as e:
         with vet.scope("blk_a"):
-            vet.splice(blk_a, start, start + len(GEN_CELL), new)
+            vet.splice(blk_a, start, start + len(GEN_CELL), new, waiver="set-up of the test")
     assert "'blk_a'" in str(e.value)
     assert "top.u_b.m" in str(e.value)
     assert design.changed(vet) == set()

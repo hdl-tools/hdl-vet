@@ -46,6 +46,7 @@ import pytest
 from findings_design import ESC, LEAF, TOP, Design, changes, statuses
 from hdl_vet.cli import main
 from hdl_vet.ops import Vet, VetError
+from no_comparison import no_comparison  # noqa: F401
 
 
 @pytest.fixture
