@@ -8,7 +8,7 @@ drivers of a hierarchical name, and syntax equivalence.
 
 from __future__ import annotations
 
-from hdl_vet.slang_adapter.api import check_expression, load, parameter_names, value_identifiers
+from hdl_vet.slang_adapter.api import check_expression, instance_parameters, load, parameter_names, value_identifiers
 from hdl_vet.slang_adapter.design import Design
 from hdl_vet.slang_adapter.diagnostics import driven_bases
 from hdl_vet.slang_adapter.loading import LoadCache
@@ -27,6 +27,7 @@ from hdl_vet.slang_adapter.records import (
     ModuleInfo,
     ParamInfo,
     ParamOverride,
+    PinConn,
     PortInfo,
 )
 from hdl_vet.slang_adapter.text import is_simple_identifier, syntax_equivalent, tokens
@@ -47,9 +48,11 @@ __all__ = [
     "ModuleInfo",
     "ParamInfo",
     "ParamOverride",
+    "PinConn",
     "PortInfo",
     "check_expression",
     "driven_bases",
+    "instance_parameters",
     "is_simple_identifier",
     "load",
     "parameter_names",

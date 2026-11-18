@@ -25,6 +25,7 @@ The sign-off fails in these cases:
 - A change that an operation must cause is not in the design.
 - A later edit undid the result of an operation.
 - The equivalence check does not prove that an override has no effect when it is switched off.
+- The enable of an override is not off in the design, and the override has no waiver. A pin is off when it connects a constant 0 or a new input port of the parent.
 
 ## Status
 

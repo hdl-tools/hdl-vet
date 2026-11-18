@@ -25,6 +25,13 @@ What the engine does so that "proved" is true
 - Children named in `same`: the engine compares the module of each such instance, with
   everything below it and its parameter values, between the two sides. A difference is an "error"
   that names the instance. An instance of another module on the other side is an "error" too.
+- Children named in `inert={"child": ["en_i", ...]}`: a child that the caller has proved on its own, with the
+  inputs that only the gate's child has. Such a child is a black box on both sides and is not compared. The
+  engine itself checks, on the netlists, that each instance of it is on both sides, that apart from the named
+  inputs the two boxes have the same ports and the same parameter values, and that after the ties each named
+  input of each instance is the constant 0 (see `hdl_vet.equiv_inert`). Anything else is an "error" that names
+  the instance and the pin. The other connections of the box are compared as for a `same` child. A module in
+  `same` and in `inert` is an "error".
 - Names in `params` must be parameters of the module on both sides (checked with the reader of
   `hdl_vet.slang_adapter`, because Yosys drops an unknown name without a word).
 
@@ -72,9 +79,11 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
+
+from hdl_vet import equiv_inert
 
 __all__ = ["Result", "Source", "available", "check"]
 
@@ -107,6 +116,10 @@ class Result:
     module: str
     detail: str
     seconds: float
+    # True when the answer is an "error" only because the engine cannot take the interface of an inert child
+    # (a name it cannot handle, a port that is not as `inert` says). The caller can then compare without
+    # `inert`. It is never True for a pin that is not 0, a net with two drivers or another parameter value.
+    inert_refused: bool = False
 
 
 def available() -> bool:
@@ -128,6 +141,7 @@ def check(
     params: Mapping[str, int | str] | None = None,
     tie: Mapping[str, int] | None = None,
     same: Iterable[str] = (),
+    inert: Mapping[str, Sequence[str]] | None = None,
     timeout: float = 300.0,
 ) -> Result:
     """Compare `module` of `gold` (before) with `module` of `gate` (after).
@@ -139,6 +153,7 @@ def check(
     clean_params = _clean_params(params)
     clean_tie = _clean_tie(tie)
     clean_same = _clean_same(same)
+    clean_inert = _clean_inert(inert)
     for side in (gold, gate):
         _check_defines(side.defines)
     if not isinstance(module, str) or not _IDENT.match(module):
@@ -151,6 +166,11 @@ def check(
             detail = _MOUNT_IN_TEXT.sub(r"/", detail)  # a path in a message is the host path, not the mount
         return Result(status, module, _one_line(detail), time.monotonic() - started)
 
+    both = sorted(set(clean_same) & set(clean_inert))
+    if both:
+        return done("error", f"{', '.join(both)} is named in same and in inert: a child is one or the other")
+    if module in clean_inert:
+        return done("error", f"the module {module} is named in inert: only a child can be")
     if not available():
         return done("error", "Yosys is not installed: install the extra hdl-vet[equiv]")
     for side in (gold, gate):
@@ -163,7 +183,7 @@ def check(
             wrong = _unknown_parameters(gold, gate, module, clean_params)
             if wrong is not None:
                 return done("error", wrong)
-            return _run_child(gold, gate, module, clean_params, clean_tie, clean_same, timeout, done)
+            return _run_child(gold, gate, module, clean_params, clean_tie, clean_same, clean_inert, timeout, done)
         except OSError as exc:
             return done("error", f"cannot run the check: {exc}")
 
@@ -175,6 +195,7 @@ def _run_child(
     params: dict[str, str],
     tie: dict[str, int],
     same: list[str],
+    inert: dict[str, list[str]],
     timeout: float,
     done: Callable[[str, str], Result],
 ) -> Result:
@@ -198,7 +219,7 @@ def _run_child(
             _write_list(work / "gate.f", gate, seen)
         except _Refused as exc:
             return done("error", str(exc))
-        spec = {"module": module, "params": params, "tie": tie, "same": same}
+        spec = {"module": module, "params": params, "tie": tie, "same": same, "inert": inert}
         (work / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
         # The child must not put its scratch folders outside the work folder (the Yosys runtime
         # makes one in the temp folder of each run), so the temp variables point inside it.
@@ -223,9 +244,16 @@ def _run_child(
             tail = (done_run.stderr or done_run.stdout or "").strip().splitlines()
             reason = tail[-1] if tail else f"exit code {done_run.returncode}"
             return done("error", f"the Yosys process stopped without an answer: {reason}")
+        if answer[0] == "proved" and inert:
+            complaint = _parameters_differ(gold, gate, module, params, work / "boxes.json")
+            if complaint is not None:
+                return done("error", complaint)
         if answer[0] == "proved" and (work / "report.wanted").exists():
             return done("proved", f"{answer[1]}; {_report(work, env)}")
-        return done(answer[0], answer[1])
+        answered = done(answer[0], answer[1])
+        if answer[0] == "error" and (work / "interface.flag").exists():
+            return replace(answered, inert_refused=True)
+        return answered
 
 
 def _spawn(work: Path, args: list[str], env: Mapping[str, str], timeout: float) -> subprocess.CompletedProcess[str]:
@@ -321,6 +349,60 @@ def _clean_tie(tie: Mapping[str, int] | None) -> dict[str, int]:
             raise ValueError(f"the tie value of {name} must not be negative")
         clean[name] = int(value)
     return clean
+
+
+def _clean_inert(inert: Mapping[str, Sequence[str]] | None) -> dict[str, list[str]]:
+    if inert is None:
+        return {}
+    if not isinstance(inert, Mapping):
+        raise TypeError("inert must be a mapping of module names to lists of input names")
+    clean: dict[str, list[str]] = {}
+    for name, pins in inert.items():
+        if not isinstance(name, str):
+            raise TypeError(f"a module name must be a str, not {type(name).__name__}")
+        if not _IDENT.match(name):
+            raise ValueError(f"not a module name: {name!r}")
+        if isinstance(pins, str) or not isinstance(pins, Sequence):
+            raise TypeError(f"the inputs of {name} must be a list of names")
+        for pin in pins:
+            if not isinstance(pin, str):
+                raise TypeError(f"an input name of {name} must be a str, not {type(pin).__name__}")
+            if not _IDENT.match(pin):
+                raise ValueError(f"not an input name: {pin!r}")
+        if not pins:
+            raise ValueError(f"inert {name} names no input: a child that has the same ports is `same`")
+        clean[name] = sorted(set(pins))
+    return dict(sorted(clean.items()))
+
+
+def _parameters_differ(gold: Source, gate: Source, module: str, params: Mapping[str, str], boxes: Path) -> str | None:
+    """None when each inert box has the same parameter values on the two sides, else the complaint.
+
+    The netlist holds the parameters only as they were used, so the reader of `hdl_vet.slang_adapter` is
+    asked, for the instances that the child found as boxes. A doubt is an answer, not a pass.
+    """
+    from hdl_vet import slang_adapter  # here and not at the top: the adapter loads pyslang, which is large
+
+    try:
+        wanted = [(str(m), str(p)) for m, p in json.loads(boxes.read_text(encoding="utf-8"))]
+    except (OSError, ValueError, TypeError):
+        return "cannot read the list of the inert children"
+    names = frozenset(m for m, _ in wanted)
+    found = {}
+    for label, side in (("gold", gold), ("gate", gate)):
+        try:
+            found[label] = slang_adapter.instance_parameters(
+                side.files, side.incdirs, side.defines, module, params, names
+            )
+        except Exception as exc:  # any refusal of the reader is an answer, not an exception
+            return f"cannot read the parameter values of the inert children in the {label}: {exc}"
+    for child, path in wanted:
+        before, after = found["gold"].get(path), found["gate"].get(path)
+        if before is None or after is None:
+            return f"the instance {path} of {child} was not found by the reader of the design"
+        if before != after:
+            return f"the instance {path} of {child} has other parameter values in the gate than in the gold"
+    return None
 
 
 def _clean_same(same: Iterable[str]) -> list[str]:
@@ -820,13 +902,18 @@ def _boxes(modules: Mapping[str, Any], same: Sequence[str]) -> dict[tuple[str, s
     return boxes
 
 
-def _boxes_differ(same: Sequence[str]) -> str | None:
-    """None when each instance that is not looked into is the same on both sides, else the complaint."""
+def _hierarchies() -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """The netlists before the flattening, of the gold and of the gate, or None when they cannot be read."""
     try:
         gold = json.loads(Path("gold_h.json").read_text(encoding="utf-8"))["modules"]
         gate = json.loads(Path("gate_h.json").read_text(encoding="utf-8"))["modules"]
     except (OSError, ValueError, KeyError):
-        return "cannot read the children named in same"
+        return None
+    return gold, gate
+
+
+def _boxes_differ(gold: Mapping[str, Any], gate: Mapping[str, Any], same: Sequence[str]) -> str | None:
+    """None when each instance that is not looked into is the same on both sides, else the complaint."""
     before, after = _boxes(gold, same), _boxes(gate, same)
     for key in sorted(set(before) & set(after)):
         if before[key] != after[key]:
@@ -849,7 +936,8 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
     module: str = spec["module"]
     params: dict[str, str] = spec["params"]
     same: list[str] = spec["same"]
-    code, log = _run_yosys(ports_script(module, params, same), "ports")
+    inert: dict[str, list[str]] = spec.get("inert", {})
+    code, log = _run_yosys(ports_script(module, params, sorted({*same, *inert})), "ports")
     if code != 0:
         return "error", _problem(log)
     gold_side = _load("gold.json", module)
@@ -860,14 +948,30 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
         net = _initial_value(side)
         if net is not None:
             return "error", f"the {label} has an initial value on {net}: the proof does not model initial values"
-    if same:
-        complaint = _boxes_differ(same)
-        if complaint is not None:
-            return "error", complaint
+    pins: list[tuple[str, str]] = []
+    if same or inert:
+        hierarchies = _hierarchies()
+        if hierarchies is None:
+            return "error", "cannot read the children named in same or inert"
+        if same:
+            complaint = _boxes_differ(*hierarchies, same)
+            if complaint is not None:
+                return "error", complaint
+        if inert:
+            try:
+                pins, boxes = equiv_inert.interfaces(*hierarchies, module, same, inert)
+            except equiv_inert.Refusal as refusal:
+                if refusal.interface:
+                    Path("interface.flag").write_text("", encoding="utf-8")
+                return "error", str(refusal)
+            Path("boxes.json").write_text(json.dumps(boxes), encoding="utf-8")
     gold_ports, gate_ports = _ports_of(gold_side), _ports_of(gate_side)
     early, free, ties, drop = _decide_ports(gold_ports, gate_ports, spec["tie"])
     if early is not None:
         return early
+    problem = equiv_inert.pin_problem(gate_side, pins, ties)
+    if problem is not None:
+        return "error", problem
     code, log = _run_yosys(prepare_script(module, free, ties, drop), "prepare")
     if code != 0:
         return "error", _problem(log)

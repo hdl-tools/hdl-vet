@@ -36,6 +36,7 @@ $ cat myproj/out/hdl-vet.json
       "before": "7084fbd053841b11ec50fb6de4beecd141312c30e39526a05b9e2c78ead7ac83"
     }
   },
+  "enables": [],
   "equivalence": [],
   "filelist": "design.f",
   "files": [

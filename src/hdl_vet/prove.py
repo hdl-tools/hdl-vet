@@ -6,9 +6,13 @@ parameter values the module is elaborated with. The gold side is the module of t
 side is the edited design. The engine reads files, so both sides are written to a temporary folder that keeps
 the layout of the real tree (an `include` resolves as in the real tree), and the folder is removed after.
 
-The tie: every enable of an override in the module is tied to 0. The `same` list holds the children of the
-module whose own text, and the text of every module below them, is byte-identical in the two designs and
-that are not the subject of a logic operation. See `tests/ops/test_override.py` for the rules.
+The tie: every enable of an override in the module, and every enable that it carries up from a child, is tied
+to 0. The `same` list holds the children of the module whose own text, and the text of every module below them,
+is byte-identical in the two designs and that are not the subject of a logic operation. The `inert` map holds
+the modules that this run has proved on their own, with their enables: the comparisons go from the leaves
+upward, and a module whose records are all "proved" is a black box in the comparisons of the modules above it.
+The engine checks that each of its enable pins is the constant 0. See `tests/ops/test_override.py` and
+`tests/ops/test_override_levels.py` for the rules. `hdl_vet.enables` follows each enable up to the top.
 
 This module does not import pyslang; it talks to `hdl_vet.slang_adapter`, `hdl_vet.equiv` and the session.
 """
@@ -24,12 +28,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from hdl_vet import equiv
+from hdl_vet.enables import Enable, follow
 from hdl_vet.slang_adapter import Design
 
 if TYPE_CHECKING:
     from hdl_vet.session import Session
 
-__all__ = ["LogicOp", "Record", "prove"]
+__all__ = ["LogicOp", "Proof", "Record", "prove"]
 
 _STATUSES = ("proved", "refuted", "error")
 
@@ -107,22 +112,63 @@ class Record:
         }
 
 
-def prove(session: Session, design: Design, ops: Sequence[LogicOp]) -> list[Record]:
-    """One record for each module of `ops` and each set of parameter values of it. Never raises."""
+@dataclass(frozen=True)
+class Proof:
+    """What the sign-off found: the records of the comparisons, and the way of each enable to the top."""
+
+    records: list[Record] = field(default_factory=list)
+    enables: list[Enable] = field(default_factory=list)
+
+
+def prove(session: Session, design: Design, ops: Sequence[LogicOp]) -> Proof:
+    """One record for each module of `ops` and each set of parameter values of it, and the way of the enables.
+
+    The modules are compared from the leaves upward. The records are in the order of the first operation of each
+    module. An exception of the engine is an answer ("error") of the record, not an escape.
+    """
     if not ops:
-        return []
+        return Proof()
     by_module: dict[str, list[LogicOp]] = {}
     for op in ops:
         by_module.setdefault(op.module, []).append(op)
+    ways = follow(session, design, ops)
     logic = set(by_module) | _moved_modules(session, design)
-    records: list[Record] = []
+    below = {module: _below(design, module) for module in by_module}
+    order = sorted(by_module, key=lambda module: len(below[module] & set(by_module)))  # stable: ties keep script order
+    done: dict[str, list[Record]] = {}
+    inert: dict[str, list[str]] = {}
     with tempfile.TemporaryDirectory(prefix="hdl_vet_proof_", ignore_cleanup_errors=True) as folder:
         trees = _Trees(session, Path(folder))
         memo: dict[str, bool] = {}
-        for module, module_ops in by_module.items():
-            for params in _param_sets(design, module):
-                records.append(_judge(session, design, module, params, module_ops, trees, logic, memo))
-    return records
+        for module in order:
+            own = list(dict.fromkeys(op.enable for op in by_module[module]))
+            ties = list(dict.fromkeys([*own, *ways.carried.get(module, [])]))
+            use = {name: pins for name, pins in inert.items() if name in below[module]}
+            done[module] = [
+                _judge(session, design, module, params, by_module[module], trees, logic, memo, ties, use)
+                for params in _param_sets(design, module)
+            ]
+            if all(record.status == "proved" for record in done[module]):
+                inert[module] = ties
+    return Proof([record for module in by_module for record in done[module]], ways.records)
+
+
+def _children(design: Design, module: str) -> set[str]:
+    try:
+        return {inst.module for inst in design.module(module).instances}
+    except Exception:
+        return set()  # a module that the reader does not know holds nothing that is looked at
+
+
+def _below(design: Design, module: str) -> set[str]:
+    """The modules that an instance of `module` holds, at any depth (not `module` itself, unless it holds itself)."""
+    found: set[str] = set()
+    todo = [module]
+    while todo:
+        children = _children(design, todo.pop())
+        todo += sorted(children - found)
+        found |= children
+    return found
 
 
 # --- one comparison --------------------------------------------------------------------------------
@@ -137,19 +183,29 @@ def _judge(
     trees: _Trees,
     logic: set[str],
     memo: dict[str, bool],
+    enables: list[str],
+    inert: dict[str, list[str]],
 ) -> Record:
     labels = [op.label for op in ops]
-    enables = list(dict.fromkeys(op.enable for op in ops))
     waivers = [(op.label, op.waiver) for op in ops if op.waiver is not None]
     waiver = "; ".join(text for _, text in waivers) or None
     everything_waived = len(waivers) == len(ops)
     if everything_waived and not equiv.available():
         return Record(module, params, labels, "waived", "", waiver, None, enables, waivers)
+    try:
+        wrong = _other_types(design, module)
+    except Exception:
+        wrong = "the type parameters of the module could not be read"
+    if wrong is not None:  # the proof is at the values of the value parameters only: never proved, never inert
+        status = "waived" if everything_waived else "error"
+        return Record(module, params, labels, status, wrong, waiver, "error", enables, waivers)
     status, detail = "error", ""
     try:
         gold, gate = trees.sources()
         same = _same_children(session, design, module, logic, memo)
-        answer = equiv.check(gold, gate, module, params=params, tie=dict.fromkeys(enables, 0), same=same)
+        answer = equiv.check(gold, gate, module, params=params, tie=dict.fromkeys(enables, 0), same=same, inert=inert)
+        if answer.inert_refused:  # only the interface of a child was refused: compare with the children inside
+            answer = equiv.check(gold, gate, module, params=params, tie=dict.fromkeys(enables, 0), same=same)
         status, detail = answer.status, trees.clean(answer.detail)
     except Exception as exc:
         status, detail = "error", f"the check could not be run: {type(exc).__name__}: {exc}"
@@ -166,6 +222,23 @@ def _judge(
         enables,
         waivers,
     )
+
+
+def _other_types(design: Design, module: str) -> str | None:
+    """The complaint when an instance sets a type parameter of `module` to another type than its default.
+
+    The comparison is at the values of the value parameters. A type parameter is compared at its default
+    only, so a module with another type is not proved. A type is the default when the two texts are the
+    same without blanks.
+    """
+    info = design.module(module)
+    for name, text in design.overridden_types(module):
+        default = next((p.default for p in info.params if p.name == name), None)
+        if default is None or "".join(default.split()) != "".join(text.split()):
+            return (
+                f"the type parameter {name} is set to the type {text}, not to its default: the check does not cover it"
+            )
+    return None
 
 
 def _param_sets(design: Design, module: str) -> list[dict[str, str]]:

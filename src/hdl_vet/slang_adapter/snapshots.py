@@ -104,6 +104,36 @@ class _SnapshotOps(_DesignHost):
                 conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
         return InstanceSnap(body.definition.name, params, ports, conns, port_types)
 
+    def parameters_of(self, names: frozenset[str]) -> dict[str, dict[str, str]]:
+        """The parameter values of each instance of a module in `names`, by hierarchical path.
+
+        A value parameter is its value as text, a type parameter its type, as in `snapshot()`.
+        """
+        sk = pyslang.ast.SymbolKind
+        out: dict[str, dict[str, str]] = {}
+        for sym in self._instances():
+            body = sym.body
+            if body.definition.name in names:
+                out[str(sym.hierarchicalPath)] = {
+                    p.name: str(p.value) if p.kind == sk.Parameter else str(p.targetType.type) for p in body.parameters
+                }
+        return out
+
+    def overridden_types(self, module: str) -> list[tuple[str, str]]:
+        """(name, type) of each type parameter that an instance of `module` sets, over every instance.
+
+        The type is as slang prints it. A type parameter that no instance sets is at its default.
+        """
+        sk = pyslang.ast.SymbolKind
+        found: dict[tuple[str, str], None] = {}
+        for sym in self._instances():
+            body = sym.body
+            if body.definition.name == module:
+                for p in body.parameters:
+                    if p.kind == sk.TypeParameter and p.isOverridden:
+                        found[(str(p.name), str(p.targetType.type))] = None
+        return list(found)
+
     def gate_snapshot(self) -> dict[str, InstanceSnap]:
         """The snapshot of the instances that are not module instances: primitives and checkers.
 

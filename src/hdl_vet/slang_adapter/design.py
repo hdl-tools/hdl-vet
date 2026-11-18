@@ -11,6 +11,7 @@ from hdl_vet.filelist import Filelist
 from hdl_vet.slang_adapter.diagnostics import _DiagnosticsOps
 from hdl_vet.slang_adapter.hierrefs import _HierRefOps
 from hdl_vet.slang_adapter.model import _ModelOps
+from hdl_vet.slang_adapter.pins import _PinOps
 from hdl_vet.slang_adapter.records import AdapterError, Diag, InstanceSnap, ModuleInfo
 from hdl_vet.slang_adapter.snapshots import _SnapshotOps
 from hdl_vet.slang_adapter.text import _BOM, _key
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from hdl_vet.slang_adapter.loading import _Loader, _Shared
 
 
-class Design(_DiagnosticsOps, _SnapshotOps, _HierRefOps, _ModelOps):
+class Design(_DiagnosticsOps, _SnapshotOps, _HierRefOps, _ModelOps, _PinOps):
     def __init__(
         self,
         fl: Filelist,

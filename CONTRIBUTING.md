@@ -17,7 +17,7 @@ The package has these parts:
 | `cli.py`, `project.py` | the command line and the project file |
 | `filelist.py`, `splice.py`, `listedit.py`, `paths.py` | the file list, the edits of text, small helpers |
 | `session.py`, `signoff.py`, `output.py`, `archive.py` | the session, the sign-off, the output tree, saved sessions |
-| `equiv.py`, `prove.py` | the equivalence check with Yosys, and the proof of the logic operations at the sign-off |
+| `equiv.py`, `equiv_inert.py`, `prove.py`, `enables.py` | the equivalence check with Yosys, its checks of a child that stays a black box, the proof of the logic operations at the sign-off, and the way of each enable up to the top |
 | `ops/` | the scripting interface |
 | `slang_adapter/` | all that reads the design with pyslang |
 
@@ -48,6 +48,7 @@ The package `slang_adapter` is the only place that imports `pyslang`:
 | `snapshots.py` | the structure of the design, for the comparison of the sign-off |
 | `diagnostics.py` | diagnostics, drivers, signals that are undriven or unused |
 | `hierrefs.py` | hierarchical references, the drivers and the constants of a signal |
+| `pins.py` | the connection of a pin on every elaborated instance of a module |
 | `records.py`, `text.py` | the data classes, helpers for tokens and identifiers |
 | `host.py` | types only, for the type checker |
 
