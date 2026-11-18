@@ -30,6 +30,7 @@ from typing import Any
 from hdl_vet.archive import need_bool, need_dict, need_int, need_list, need_str
 from hdl_vet.enables import Enable
 from hdl_vet.filelist import Filelist, read_filelist
+from hdl_vet.paths import same_file
 from hdl_vet.prove import Proof, Record
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
@@ -884,6 +885,7 @@ class Session:
         changed = [under(v) for v in need_list(index["changed"])]
         if len(set(paths)) != len(paths) or len(set(changed)) != len(changed):
             raise ValueError("a file is listed twice")
+        _refuse_one_file_under_two_names(paths)
         if not set(fl.files) <= set(paths) or not set(changed) <= set(paths):
             raise ValueError("the file lists disagree")
         added_in = [need_dict(a) for a in need_list(index["added"])]
@@ -988,6 +990,27 @@ class Session:
 
 
 _DEVICE = re.compile(r"(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?", re.IGNORECASE)
+
+
+def _refuse_one_file_under_two_names(paths: Sequence[Path]) -> None:
+    """Refuse an index that names one file twice, under spellings that differ only in case.
+
+    Where the archive was saved the two names were two files, and the index is honest. Here
+    they are one file, and the session would hold it twice: the output tree would write it
+    twice to one place, and the manifest would record a hash of bytes that are not on disk.
+
+    The file system is asked only about names that could collide, so a design whose names
+    are all distinct costs no syscall. Two names that really are two files are kept, which
+    is why this asks rather than folding the case and refusing.
+    """
+    groups: dict[str, list[Path]] = {}
+    for path in paths:
+        groups.setdefault(str(path).casefold(), []).append(path)
+    for same in groups.values():
+        first = same[0]
+        for other in same[1:]:
+            if same_file(first, other):
+                raise ValueError(f"{first.name} and {other.name} are one file here, and both are listed")
 
 
 def _unwritable(part: str) -> bool:
