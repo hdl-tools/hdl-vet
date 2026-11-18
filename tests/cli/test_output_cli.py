@@ -69,7 +69,7 @@ from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import HEADER_MARK, Session
 from hdl_vet.slang_adapter import load
 from repo import REPO
-from vetkit import ignores_case, make_design, span, tree_bytes
+from vetkit import ignores_case, keeps_the_asked_spelling, make_design, span, tree_bytes
 
 GOOD = """\
 def apply(vet):
@@ -260,8 +260,8 @@ def test_a_header_included_in_two_cases_keeps_its_real_name(tmp_path: Path):
     Two spellings of one `include used to make two files of the design, and the tree
     was written under whichever spelling came last.
     """
-    if not ignores_case(tmp_path):
-        pytest.skip("this filesystem keeps case, so the two spellings are two files")
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("a wrong spelling cannot survive here, so one header cannot become two")
     root = tmp_path / "in"
     (root / "inc").mkdir(parents=True)
     (root / "rtl").mkdir()

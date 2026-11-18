@@ -122,3 +122,20 @@ def ignores_case(where: Path) -> bool:
         return (Path(where) / "HDL_VET_CASE_PROBE").is_dir()
     finally:
         probe.rmdir()
+
+
+def keeps_the_asked_spelling(where: Path) -> bool:
+    """True when a name that is not the one on disk survives `Path.resolve()`.
+
+    Two conditions, and both matter: the filesystem ignores case, so the wrong spelling
+    opens the file at all, and `resolve()` does not canonicalise it away. Windows meets
+    the first and not the second, so a path there is already the one on disk and a
+    header cannot become two files of the design.
+    """
+    probe = Path(where) / "hdl_vet_case_probe"
+    probe.mkdir()
+    try:
+        variant = Path(where) / "HDL_VET_CASE_PROBE"
+        return variant.is_dir() and variant.resolve().name == variant.name
+    finally:
+        probe.rmdir()
