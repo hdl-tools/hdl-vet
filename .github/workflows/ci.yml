@@ -64,8 +64,9 @@ jobs:
           - { os: windows-2022, python: "3.13", select: "not bigproof" }
           # macOS is the only runner whose file system ignores case while `resolve()`
           # leaves a name that is not the one on disk alone. Several tests can only run
-          # there, and skip with a reason elsewhere.
-          - { os: macos-15, python: "3.11", select: "not bigproof" }
+          # there, and skip with a reason elsewhere. One job, not two: what those tests
+          # depend on is the file system, not the version of Python, and both versions
+          # are covered on Linux and on Windows. `pyslang` is one abi3 wheel for both.
           - { os: macos-15, python: "3.13", select: "not bigproof" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
