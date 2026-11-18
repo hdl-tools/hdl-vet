@@ -191,13 +191,37 @@ edited. It makes one comparison for each set of parameter values with which the 
 elaborates the module. The rules of a comparison are these:
 
 \begin{itemize}
-\item hdl-vet ties the enable of every override in the module to 0.
+\item hdl-vet ties to 0 the enable of every override in the module. It ties to 0 also each
+  enable that the module carries up from a child (section~\ref{sec:enable}).
 \item All other edits of the run in the module are part of the edited module. A new input
   must have no effect. A changed connection counts as a change of behaviour.
 \item hdl-vet does not look into a child module when nothing changed in it or below it.
   The text of the child and the text of everything below it must be the same in the run.
   The check compares the children on both sides. It gives an error when they differ.
+\item hdl-vet compares the modules from the leaves upward. A child that has an override
+  too is compared first. If every comparison of the child is \code{proved}, the child is a
+  \term{black box} on both sides, and the check does not look into it. A child that is
+  waived, refuted or not checked is not a black box. The module is then compared with that
+  child inside.
 \end{itemize}
+
+The check tests each black box itself. Each instance of the child must be on both sides.
+Apart from the enable pins that only the edited child has, the two boxes have the same ports
+and the same parameter values.
+
+After the ties, each of these pins must be the constant 0. The check reads this
+from the netlists, not from the text. If one pin is not 0, the answer is \code{error}, and
+the detail names the instance and the pin. A pin on a net with more than one driver is not
+0. All other connections of the child are compared as for a child that did not change.
+
+If the check cannot take the interface of a black box, hdl-vet compares the module with the
+child inside. This happens for a pin name that the check cannot handle, as in an instance
+array. It happens also for a new port of the child other than the enable pins. The record is what that
+comparison says. It never happens for a pin that is not 0.
+
+A module is compared at the values of its value parameters. If an instance sets a type
+parameter to another type than its default, the record of that module is \code{error}. The
+detail names the parameter. The module is never a black box.
 
 The check reads files. So hdl-vet writes the input design and the edited design to a
 temporary folder. The folder has the layout of the real tree, so that an include
@@ -222,9 +246,9 @@ The check can give three answers:
 
 \subsection*{What the check does not prove}
 
-The proof is of the edited module only. A parent that ties the enable to 1 is not seen by
-the proof. The comparison of the structure shows the new port and its connection. The check
-does not prove what the connection does. Chapter~\ref{ch:limits} lists the other limits.
+The proof is of the edited module only. The check does not prove what a connection of the
+enable does. The sign-off looks at the connection only (section~\ref{sec:enable}).
+Chapter~\ref{ch:limits} lists the other limits.
 
 A raw edit of logic in a module that has no logic operation is not proved.
 
@@ -252,10 +276,58 @@ In the tests, a module with about twenty children took about one minute.
 The output tree keeps the result. \file{hdl-vet.json} has the list \code{equivalence}. Each
 entry has \code{module}, \code{params}, \code{operations}, \code{status} and
 \code{detail}. The list \code{waivers} has one entry for each operation with a waiver. Each
-entry has \code{operation}, \code{waiver} and \code{check}. Both lists are empty when no
-logic operation ran.
+entry has \code{operation}, \code{waiver} and \code{check}.
 
-The transcript in section~\ref{sec:logic} shows each of the report lines.
+The list \code{enables} has one
+entry for each pin of an enable that hdl-vet looked at. Each entry has \code{module},
+\code{instance}, \code{pin}, \code{connection} and \code{status}. The three lists are empty
+when no logic operation ran.
+
+The transcript in section~\ref{sec:logic} shows the lines of the check.
+
+\subsection*{The way of the enable}
+\label{sec:enable}
+
+The proof ties the enable of an override to 0. The edited design must then have the enable
+at 0 in fact. For each module that has a logic operation, hdl-vet looks at each instance of
+the module in every elaboration of the edited design. It reads the connection of the pin of
+the enable from the design, as the compiler resolves it. It needs no Yosys.
+
+A module with two elaborations gives a record for each connection. The instance in a record is the path of
+the instance inside the parent, with the names of the generate blocks. A pin has one of
+these states:
+
+\begin{description}
+\item[off] The pin connects a literal with the value 0, with no x or z digit. The base and
+  the size are free. Examples are \code{1'b0}, \code{'0}, \code{'b0}, \code{8'h00},
+  \code{1'o0} and \code{0}. A literal with a sign marker, such as \code{1'sb0}, is not off.
+  A literal in brackets, a parameter and a macro are not off.
+\item[carried] The pin connects an expression that is only the name of an input port of
+  the parent. The compiler must resolve the name to that port. A local signal of a generate
+  block with the same name is another signal. The parent of the input design does not have the
+  port. The port is an enable of the parent now. hdl-vet applies the same rules to the
+  instances of the parent.
+\item[not off] The pin connects anything else. Examples are a constant 1, a signal or a
+  port that the input design has, an expression, and no connection. A pin that is left out
+  counts as no connection. A \code{.*} connection counts as the signal of the same name.
+\item[waived] The state was \emph{not off}, and every operation that uses the enable has a
+  waiver.
+\end{description}
+
+The way ends at a new input port of the top module. A record that is \emph{not off} fails
+the sign-off. The report shows it in one of these forms. The name is the module, the
+instance and the pin:
+
+\begin{itemize}
+\item \code{enable not off: top.u_core.test_en_i is connected to 1'b1 (override_net
+  core.rst_sync_n)}
+\item \code{waived: enable top.u_core.test_en_i is connected to 1'b1 (override_net
+  core.rst_sync_n)}
+\end{itemize}
+
+The text says \code{is not connected} when the pin has no connection. A module that only
+carries an enable gets no comparison of its own. The way of the enable goes by the
+connection only. Chapter~\ref{ch:limits} gives the consequences.
 
 \section{Expectations}
 

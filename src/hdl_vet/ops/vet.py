@@ -17,7 +17,7 @@ from hdl_vet.ops.plans import _PlanOps
 from hdl_vet.ops.raw import _RawOps
 from hdl_vet.ops.scope import _Scope, _ScopeOps
 from hdl_vet.ops.text import _did_you_mean
-from hdl_vet.prove import LogicOp, Record, prove
+from hdl_vet.prove import LogicOp, Proof, prove
 from hdl_vet.session import Result, Session, SessionError, describe
 from hdl_vet.slang_adapter import AdapterError, Design, InstanceInfo, ModuleInfo
 
@@ -214,7 +214,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         session = self.session
         return [partial(_evaluate, session, c) for c in self._checks]
 
-    def _proof(self) -> Callable[[Session, Design], list[Record]] | None:
+    def _proof(self) -> Callable[[Session, Design], Proof] | None:
         """The equivalence check of the logic operations registered so far, as `Session.finish` takes it."""
         ops = [
             LogicOp(c.args[0] or "", c.args[1] or "", c.args[2] or "", c.args[5])
@@ -224,7 +224,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         if not ops:
             return None
 
-        def proof(session: Session, design: Design) -> list[Record]:
+        def proof(session: Session, design: Design) -> Proof:
             return prove(session, design, ops)
 
         return proof

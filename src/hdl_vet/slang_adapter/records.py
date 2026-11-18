@@ -225,3 +225,19 @@ class InstanceSite:
     start: int
     end: int
     from_macro: bool
+
+
+@dataclass(frozen=True)
+class PinConn:
+    """How one elaborated instance connects one pin.
+
+    `parent` is the module that holds the instance, `instance` the path of the instance inside it (with the
+    names of generate blocks, without indexes). `kind` is "zero" (a literal with the value 0), "port" (the
+    name of an input port of the parent: `port`) or "other". `text` is the connection as written.
+    """
+
+    parent: str
+    instance: str
+    text: str
+    kind: str
+    port: str = ""

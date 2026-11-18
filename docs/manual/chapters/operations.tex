@@ -335,6 +335,12 @@ the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
   The waiver is one line. The report shows it in quotes, as JSON does. The waiver of the
   latest call counts. A call that is skipped sets the waiver of that
   override to what the call gives. A call without a waiver takes the waiver away.
+\item[The way of the enable] The proof ties the enable to 0. The sign-off also follows the
+  enable up to the top module (section~\ref{sec:enable}). It looks at the pin of the enable
+  on each instance of the module in every elaboration of the edited design. A pin is
+  \emph{off} when it connects a literal with the value 0. A pin is \emph{carried} when the
+  compiler resolves its connection to a new input port of the parent. Any other connection is \emph{not off}, and the sign-off fails unless every
+  operation that uses the enable has a waiver.
 \item[was] The operation has no \code{was}.
 \item[Again] hdl-vet skips the operation when the net is driven by the line
   \code{assign net = enable ? value : keep;} that the operation writes. If that line has
@@ -345,6 +351,10 @@ the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
   \file{override_waiver.py} gives a waiver. The script \file{override_refused.py} names an
   enable with two bits. The script \file{override_wrong.py} swaps the two branches of the
   multiplexer by hand. The sign-off then says that the module is not equivalent.
+
+  The script \file{override_levels.py} puts one enable on an override in \code{rst_sync} and
+  on an override in \code{soc_top}. The script \file{override_not_off.py} connects the pin of
+  the enable of \code{rst_sync} to 1. The sign-off then says that the enable is not off.
 \end{entry}
 
 \lstinputlisting[style=script]{examples/scripts/override.py}
@@ -352,12 +362,15 @@ the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
 \lstinputlisting[style=script]{examples/scripts/override_waiver.py}
 \lstinputlisting[style=script]{examples/scripts/override_refused.py}
 \lstinputlisting[style=script]{examples/scripts/override_wrong.py}
+\lstinputlisting[style=script]{examples/scripts/override_levels.py}
+\lstinputlisting[style=script]{examples/scripts/override_not_off.py}
 
 \lstinputlisting[style=console]{examples/console/override.txt}
 
 The first command shows the diff and the line of the check. The second command shows the
 second run. The third command shows a waiver. The fourth command shows a refusal. The fifth
-command shows a failed check.
+command shows a failed check. The sixth command shows two levels, and the seventh command
+shows an enable that is not off.
 
 \section{Through the hierarchy}
 

@@ -19,6 +19,9 @@ C5  (From the review.) An override of an output that an instance drives in
     proved for each of the three sets. Two of them were answered "the child
     i_dw is named in same but is not the same" by a comparison that depended
     on the numbers the reader gives to the bits of a netlist.
+C6  (Part 3.) The bypass in the top together with an override in `aon_wrapper`,
+    one enable for both: the two modules are proved. Before, the top was
+    compared with the wrapper inside and had flops on more than one clock.
 """
 
 from __future__ import annotations
@@ -119,4 +122,16 @@ def test_an_override_in_a_module_with_three_parameter_sets_and_unchanged_childre
     found = [(r.module, r.status, r.detail) for r in result.equivalence]
     assert [f[:2] for f in found] == [("bag_axi_dw", "proved")] * 3, found
     assert len({tuple(sorted(r.params.items())) for r in result.equivalence}) == 3
+    assert result.ok, result.report()
+
+
+def test_the_bypass_and_an_override_one_level_down_are_both_proved(demo):
+    """C6."""
+    vet = Vet(Session(demo.filelist, top=demo.top))
+    dft_bypass(vet)
+    vet.punch_port("dft_en_i", "input", to=f"{TOP}.u_aon_wrapper")
+    vet.module("aon_wrapper").override_net("itcm0_ahb_hsel", "1'b0", enable="dft_en_i")
+    result = vet.finish()
+    assert {r.module: r.status for r in result.equivalence} == {TOP: "proved", "aon_wrapper": "proved"}, result.report()
+    assert [(e.module, e.instance, e.status) for e in result.enables] == [(TOP, "u_aon_wrapper", "carried")]
     assert result.ok, result.report()

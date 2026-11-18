@@ -41,6 +41,7 @@ class _HierRefOps(_DesignHost):
         its own port connection is not reported.
         """
         out: list[Driver] = []
+        self._analyze()  # the canonical bodies are known only after the analysis
         for body in self._canonical_bodies(module).values():
             sym = body.find(name)
             if sym is None:
@@ -66,6 +67,7 @@ class _HierRefOps(_DesignHost):
         sk = pyslang.ast.SymbolKind
         kinds = {sk.ContinuousAssign: "assign", sk.ProceduralBlock: "process", sk.Instance: "instance"}
         out: list[tuple[int, list[DriverDetail]]] = []
+        self._analyze()  # the canonical bodies are known only after the analysis
         for body in self._canonical_bodies(module).values():
             sym = body.find(name)
             if sym is None:

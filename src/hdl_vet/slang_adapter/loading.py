@@ -129,7 +129,7 @@ class _Shared:
     the same, `entries` is read only while loading.
     """
 
-    def __init__(self, fl: Filelist, top: str | None) -> None:
+    def __init__(self, fl: Filelist, top: str | None, overrides: Mapping[str, str] | None = None) -> None:
         # A driver is used only for its configured diagnostic engine, option defaults
         # and SourceManager; "-" is a placeholder input that is never read.
         driver = pyslang.driver.Driver()
@@ -164,6 +164,8 @@ class _Shared:
         if top is not None:
             comp_opts = bag.compilationOptions
             comp_opts.topModules = {top}
+            if overrides:  # the values of the parameters of the top module, as the tool option -G gives them
+                comp_opts.paramOverrides = [f"{name}={value}" for name, value in overrides.items()]
             bag.compilationOptions = comp_opts
         self.bag = bag
 

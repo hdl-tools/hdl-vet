@@ -65,9 +65,21 @@ two items can give a \code{proved} that you must read with care. A waiver is the
 on when the check cannot judge.
 
 \begin{itemize}
-\item \textbf{One module.} The proof is of the edited module only. A parent that ties the
-  enable to 1 is not seen by the proof. The comparison of the structure shows the new port
-  and its connection. The check does not prove what the connection does.
+\item \textbf{One module.} The proof is of the edited module only. The check does not
+  prove what a connection of the enable does. The sign-off follows the enable up to the top
+  module and looks at the connections (section~\ref{sec:enable}). That is not a proof.
+\item \textbf{The way of an enable goes by the connection.} A pin is off only when it
+  connects a constant 0 or a new input port of the parent. An enable that goes through a
+  gate, a register or a wire is \emph{not off}, although it can be 0 in fact. Give the
+  operation a waiver. The sign-off then passes, and it shows the waiver.
+\item \textbf{A module that only carries an enable.} Such a module has no comparison. The
+  sign-off trusts its connections as section~\ref{sec:enable} reads them.
+\item \textbf{The top.} The way of an enable ends at a new input port of the top module of
+  the session. If that module is a wrapper inside a larger design, the way ends at its new
+  port. hdl-vet does not look above it.
+\item \textbf{Not checked.} Nobody tested an inout port or an interface port of a black
+  box, a parent that \apiname{Vet.add_file} or \apiname{Instance.replace_module} made, and
+  \code{defparam}.
 \item \textbf{The enable must be new.} The check ties the enable to 0 in the edited module
   only. So the enable must be a port that the run added, with \apiname{Module.add_port} or
   \apiname{Vet.punch_port}. For an input port that the input design has, hdl-vet refuses
@@ -94,10 +106,22 @@ on when the check cannot judge.
 \item \textbf{Renamed registers.} A renamed chain of more than five registers is
   \code{refuted}. A rewrite that keeps the name of an internal signal but changes what it
   carries is \code{refuted} too.
-\item \textbf{Overrides at two levels.} Take a module that has an override, and a child
-  that has one too. hdl-vet compares the module with that child flattened. If the two then
-  have flops on more than one clock, the answer is \code{error}, and the override of the
-  upper module needs a waiver.
+\item \textbf{A child that is not proved.} A module can have an override, and a child can
+  have one too. If every comparison of the child is \code{proved}, the child is a black box
+  in the comparison of the module. If the child is waived, refuted or not checked, hdl-vet
+  compares the module with that child flattened. If the two then have flops on more than one
+  clock, the answer is \code{error}, and the override of the upper module needs a waiver.
+\item \textbf{A black box with other values.} The check gives \code{error} when an
+  instance of a black box is on one side only. It gives \code{error} when the instance has
+  other parameter values in the edited design than in the input design. It gives
+  \code{error} when a pin of an enable is not the constant 0 after the ties. It gives
+  \code{error} when the pin is on a net with more than one driver. It does not follow a pin
+  through a gate, so a pin that is 0 only by logic gives \code{error}.
+\item \textbf{A black box that the check cannot take.} The check cannot take the interface
+  of a black box in two cases. A pin has a name that it cannot handle, as in an instance
+  array or a generate loop. Or the child has a new port other than the enable pins. hdl-vet then
+  compares the module with the child inside. This holds for the interface only, never for a
+  pin that is not 0.
 \item \textbf{A loop through other nets.} hdl-vet refuses a value that reads the net
   itself. It does not refuse a value that reads a net which the overridden net drives. The
   comparison ties the enable to 0, so it does not see this loop.
@@ -112,7 +136,9 @@ on when the check cannot judge.
 \item \textbf{Delays.} A driver with a delay, such as \code{assign #1 n = x;}, gives
   \code{error}.
 \item \textbf{Parameters.} A parameter with a string value gives \code{error}. The check
-  compares a type parameter at its default only.
+  does not cover a type parameter that an instance sets to another type than its default.
+  The record of that module is \code{error}, and the detail names the parameter. The module
+  is never a black box. A type parameter at its default is compared as before.
 \item \textbf{Values and names.}
   A define with a value that has a dollar sign, a backslash or a line break gives
   \code{error}. A file name or an include folder with a quote, a backslash, a dollar sign

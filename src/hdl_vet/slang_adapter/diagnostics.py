@@ -163,8 +163,8 @@ class _DiagnosticsOps(_DesignHost):
                 body = sym.canonicalBody or sym.body
                 bodies[name].setdefault(str(body.hierarchicalPath), body)
 
+        analysis = self._analyze()  # first: the canonical bodies are known only after the analysis
         self._visit_instances(one)
-        analysis = self._analyze()
         out: dict[tuple[str, str], dict[str, tuple[tuple[int, int], ...]] | None] = {}
         for module, name in signals:
             found: dict[str, tuple[tuple[int, int], ...]] = {}

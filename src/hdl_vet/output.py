@@ -107,6 +107,7 @@ def write_tree(
             "scripts": [{"name": n, "sha256": h} for n, h in scripts],
             "changed": changed,
             "added": added,
+            "enables": [enable.manifest() for enable in result.enables],
             "equivalence": [record.manifest() for record in result.equivalence],
             "waivers": [
                 {"operation": op, "waiver": text, "check": record.check}

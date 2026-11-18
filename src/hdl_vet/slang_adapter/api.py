@@ -24,6 +24,7 @@ def load(
     *,
     check_overrides: bool = True,
     cache: LoadCache | None = None,
+    param_overrides: Mapping[str, str] | None = None,
 ) -> Design:
     """Load a design.
 
@@ -31,7 +32,10 @@ def load(
     `check_overrides`, an override for a file that is neither a source nor an
     included file is an error. `cache` carries what stays valid from one load
     of a session to the next (see LoadCache): file-system answers and parse trees.
+    `param_overrides` gives values to parameters of `top` (like the tool option `-G`); it needs no `cache`.
     """
+    if param_overrides and (cache is not None or top is None):
+        raise ValueError("param_overrides needs a top module and no cache")
     fl = filelist if isinstance(filelist, Filelist) else read_filelist(filelist, base=base)
     if cache is None:
         ov = {Path(k).resolve(): bytes(v) for k, v in (overrides or {}).items()}
@@ -50,7 +54,7 @@ def load(
     for _attempt in (0, 1):
         reused = shared is not None
         if shared is None:
-            shared = _Shared(fl, top)
+            shared = _Shared(fl, top, param_overrides)
             if use.reuse:
                 use._shared = shared
         try:
@@ -177,3 +181,22 @@ def parameter_names(
     return frozenset(
         d.name.valueText for decl in declarations if _param_kind(decl) == "value" for d in _items(decl.declarators)
     )
+
+
+def instance_parameters(
+    files: Sequence[Path | str],
+    incdirs: Sequence[Path | str],
+    defines: Mapping[str, str | None],
+    module: str,
+    params: Mapping[str, str],
+    names: frozenset[str],
+) -> dict[str, dict[str, str]]:
+    """The parameter values of each instance of a module of `names` below `module`, by hierarchical path.
+
+    `params` gives values to the parameters of `module`, as the tool option `-G` does. Raises AdapterError
+    when the design cannot be loaded.
+    """
+    paths = [Path(f).resolve() for f in files]
+    root = paths[0].parent if paths else Path.cwd()
+    listing = Filelist(paths, [Path(d).resolve() for d in incdirs], dict(defines), root)
+    return load(listing, module, param_overrides=params).parameters_of(names)
