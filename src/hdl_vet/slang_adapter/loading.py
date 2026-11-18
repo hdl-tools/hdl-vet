@@ -12,6 +12,7 @@ from typing import Any
 import pyslang
 
 from hdl_vet.filelist import Filelist
+from hdl_vet.paths import true_case
 from hdl_vet.slang_adapter.records import AdapterError
 from hdl_vet.slang_adapter.text import _BOM, _key, _read
 
@@ -325,15 +326,19 @@ class _Loader:
                         keys.append(raw)
                         child_raw = raw.parent
             keys.append(self.mirror(header))
+            # The keys follow the spelling of the `include, because that is what slang
+            # looks up. The file they are recorded against is the one the filesystem
+            # holds, so two spellings of one header are one file of the design.
+            real = true_case(header)
             fresh = False
             for key in keys:
                 k = _key(key)
                 known = sh.real.get(k)
                 if known is not None:
-                    if known != header and self.strict:
+                    if known != real and self.strict:
                         raise _Unsafe()
                     continue
-                sh.real[k] = header
+                sh.real[k] = real
                 self.sm.assignText(str(key), body)
                 fresh = True
             if fresh:
@@ -346,9 +351,12 @@ class _Loader:
             return seen
         for name in _INCLUDE_RE.findall(text):
             header = self._resolve(name, real_dir)
-            if header is None or header in seen:
+            if header is None:
                 continue
-            seen.add(header)
+            real = true_case(header)  # one file, however the `include spelled it
+            if real in seen:
+                continue
+            seen.add(real)
             self.deps(self._body(header), header.parent, seen, depth + 1)
         return seen
 

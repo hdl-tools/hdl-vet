@@ -50,6 +50,7 @@ import pytest
 
 from hdl_vet import slang_adapter
 from hdl_vet.slang_adapter import load, syntax_equivalent
+from vetkit import ignores_case
 
 FIXTURES = Path(__file__).resolve().parent.parent / "support" / "fixtures"
 SMALL = FIXTURES / "small"
@@ -316,3 +317,21 @@ def test_only_the_adapter_imports_pyslang():
             if any(n.split(".")[0] == "pyslang" for n in names):
                 offenders.append(p.name)
     assert offenders == []
+
+
+def test_a_header_included_in_two_cases_is_one_file(tmp_path: Path):
+    """On a case-insensitive filesystem two spellings of one include used to resolve to
+    two paths, so the design held one header twice and the output tree renamed it."""
+    if not ignores_case(tmp_path):
+        pytest.skip("this filesystem keeps case, so the two spellings are two files")
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "inc" / "defs.svh").write_text("`ifndef DEFS\n`define DEFS\n`define W 4\n`endif\n")
+    (tmp_path / "rtl" / "t.sv").write_text(
+        '`include "defs.svh"\n`include "DEFS.svh"\nmodule t(input logic [`W-1:0] a);\nendmodule\n'
+    )
+    (tmp_path / "t.f").write_text("+incdir+inc\nrtl/t.sv\n")
+    design = load(tmp_path / "t.f", top="t")
+    assert [d for d in design.diagnostics() if d.severity == "error"] == []
+    assert design.included == [tmp_path / "inc" / "defs.svh"], design.included
+    assert list(design.included_bytes) == [tmp_path / "inc" / "defs.svh"]

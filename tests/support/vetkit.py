@@ -108,3 +108,17 @@ def tree_bytes(root: Path) -> dict[str, bytes]:
     """Every file under `root`, keyed by POSIX relative path."""
     root = Path(root)
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def ignores_case(where: Path) -> bool:
+    """True when the filesystem holding `where` ignores case in names.
+
+    Probed by writing, not by asking the platform: a case-sensitive volume on macOS and
+    a case-insensitive one on Linux both exist, so `sys.platform` is not the question.
+    """
+    probe = Path(where) / "hdl_vet_case_probe"
+    probe.mkdir()
+    try:
+        return (Path(where) / "HDL_VET_CASE_PROBE").is_dir()
+    finally:
+        probe.rmdir()
