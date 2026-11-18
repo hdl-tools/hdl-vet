@@ -161,6 +161,8 @@ You can use an AI tool. You do not have to say that you used one. You answer for
 - Do not give the tool material that you have no right to share.
 - Do not submit text that you have no right to license under Apache-2.0.
 
+The file `AGENTS.md` tells an AI agent how work is done in this repository. Give it to your tool.
+
 ## Writing
 
 The text of the manual, of the README and of this file follows the writing rules of ASD-STE100, Simplified Technical English. The file `tests/docs/test_manual_style.py` states the rules. Tests check these rules:
