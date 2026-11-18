@@ -80,6 +80,10 @@ def test_the_guard_agrees_with_the_filesystem_about_case(tmp_path: Path):
     assert within(variant, design) is same_place
     assert within(design, variant) is same_place
     assert within(variant / "rtl", design) is same_place
+    # The output directory of a first run does not exist yet, so the spelling that has to
+    # be placed is usually one whose last part is missing. Only its parent can answer.
+    assert within(variant / "out", design) is same_place
+    assert within(variant / "out" / "deep", design) is same_place
 
 
 def test_the_guard_sees_through_a_symlink(tmp_path: Path):
@@ -134,3 +138,11 @@ def test_same_file_when_one_side_is_missing(tmp_path: Path):
     listing.write_text("rtl/top.sv\n")
     assert not same_file(listing, tmp_path / "new.yaml")
     assert not same_file(tmp_path / "gone.f", tmp_path / "also-gone.f")
+
+
+def test_same_file_on_one_missing_path_named_twice(tmp_path: Path):
+    """The filesystem has no identity to give for a file that is not there yet, so the
+    spelling is what is left to go on: `--save` may name a script that a run will write."""
+    missing = tmp_path / "later.yaml"
+    assert same_file(missing, missing)
+    assert same_file(missing, tmp_path / "sub" / ".." / "later.yaml")
