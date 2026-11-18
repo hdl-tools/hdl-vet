@@ -51,7 +51,7 @@ import pytest
 from hdl_vet import slang_adapter
 from hdl_vet.session import Session
 from hdl_vet.slang_adapter import load, syntax_equivalent
-from vetkit import keeps_the_asked_spelling
+from vetkit import ignores_case, keeps_the_asked_spelling
 
 FIXTURES = Path(__file__).resolve().parent.parent / "support" / "fixtures"
 SMALL = FIXTURES / "small"
@@ -360,3 +360,44 @@ def test_an_edit_to_a_header_included_in_two_cases_is_kept(tmp_path: Path):
     result = s.finish()
     assert header in result.files
     assert b"`define W 8" in result.files[header]
+
+
+def test_a_header_asked_for_in_another_case_is_found(tmp_path: Path):
+    """Issue #71: on Windows this header was not found at all.
+
+    slang looks an `include up in the mirror, and that lookup is case-sensitive on every
+    platform. On Windows `resolve()` canonicalises the case, so the only key registered
+    was the one on disk, and `include "DEFS.svh"` had nowhere to resolve. Registering the
+    asked-for spelling as well was not enough on its own: `_key` folds case on Windows,
+    so both keys collapsed to one entry of `shared.real`, and that dict also recorded
+    which buffers slang already held. The second spelling was skipped as a repeat.
+    """
+    if not ignores_case(tmp_path):
+        pytest.skip("the two spellings are two files here, so one of them is simply absent")
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "inc" / "defs.svh").write_text("`ifndef DEFS\n`define DEFS\n`define W 4\n`endif\n")
+    (tmp_path / "rtl" / "t.sv").write_text(
+        '`include "DEFS.svh"\nmodule t(input logic [`W-1:0] a);\nendmodule\n'
+    )
+    (tmp_path / "t.f").write_text("+incdir+inc\nrtl/t.sv\n")
+    design = load(tmp_path / "t.f", top="t")
+    assert [d for d in design.diagnostics() if d.severity == "error"] == []
+    assert design.included == [tmp_path / "inc" / "defs.svh"]
+
+
+def test_both_spellings_of_one_header_resolve(tmp_path: Path):
+    """Either order, and in two different sources, so neither spelling is privileged."""
+    if not ignores_case(tmp_path):
+        pytest.skip("the two spellings are two files here, so one of them is simply absent")
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "inc" / "defs.svh").write_text("`ifndef DEFS\n`define DEFS\n`define W 4\n`endif\n")
+    (tmp_path / "rtl" / "a.sv").write_text('`include "defs.svh"\nmodule a(input logic [`W-1:0] x);\nendmodule\n')
+    (tmp_path / "rtl" / "t.sv").write_text(
+        '`include "DEFS.svh"\nmodule t(input logic [`W-1:0] p);\n  a u (.x(p));\nendmodule\n'
+    )
+    (tmp_path / "t.f").write_text("+incdir+inc\nrtl/a.sv\nrtl/t.sv\n")
+    design = load(tmp_path / "t.f", top="t")
+    assert [d for d in design.diagnostics() if d.severity == "error"] == []
+    assert design.included == [tmp_path / "inc" / "defs.svh"]
