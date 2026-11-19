@@ -52,8 +52,8 @@ stays as it is, and stays with those operations.
 Not covered at sign-off (slang reports nothing in these cases):
     - a signal that loses the driver of only some of its bits through a
       phase 3 operation or a raw splice;
-    - a signal or port whose only driver sits in a generate branch that a
-      parameter change switches off;
+    - a signal or port whose only driver sits in a generate branch that the
+      elaboration does not take. The tests G1 to G4 below pin this one;
     - an inout port or the net behind it;
     - a new reader of something the baseline already left undriven (the
       entry is not new).
@@ -352,3 +352,93 @@ def test_an_undriven_output_carried_up_to_a_top_output_is_refused(vet):
     assert not r.ok
     assert dangling(r) == [("UndrivenPort", "undriven output port 'dbg_o'")]
     assert r.dangling[0].path.name == "mid.sv"
+
+
+# --- the untaken generate branch: a limit of the compiler ---------------------------------
+#
+# G1 to G4 state a limit. They pass while the limit is there, and they fail when it goes.
+# A failure here is good news: the compiler was fixed, and these tests, the entry in the
+# specification above and the entry in the manual can all go.
+#
+# Measured on 2026-11-20 with pyslang 12.1.0. An assignment inside a generate branch that
+# the elaboration does not take still counts as a driver of the signal. The branch is no
+# part of the design, so nothing drives the signal, and yet nothing is reported.
+#
+# The dead assignment is the cause, not the generate block: G2 differs from G1 by one
+# identifier and is reported. The hole needs no parameter, no instance and no operation of
+# hdl-vet. It loses an output port in the same way (G3), and a generate case behaves like a
+# generate if (G4).
+
+
+def found(tmp_path: Path, text: str, top: str = "top") -> list[tuple[str, str | None]]:
+    """What the compiler's own analysis reports for `text`, loaded as it stands."""
+    root = tmp_path / "g"
+    root.mkdir()
+    (root / "d.sv").write_bytes(text.encode())
+    (root / "d.f").write_bytes(b"d.sv\n")
+    return [(d.code, d.symbol) for d in load(root / "d.f", top).dangling()]
+
+
+def test_a_driver_in_an_untaken_generate_branch_hides_an_undriven_signal(tmp_path: Path):
+    # G1. In the elaborated design `w` has no driver, and `y` reads it. Nothing is said.
+    assert (
+        found(
+            tmp_path,
+            "module top (input logic a, output logic y);\n"
+            "  logic w;\n"
+            "  if (0) begin : g\n"
+            "    assign w = a;\n"
+            "  end\n"
+            "  assign y = w;\n"
+            "endmodule\n",
+        )
+        == []
+    )
+
+
+def test_the_undriven_signal_is_reported_when_the_dead_branch_drives_another(tmp_path: Path):
+    # G2. One identifier apart from G1: the dead branch drives `other`, not `w`. The
+    # signal is reported, so the generate block is not what hides G1.
+    assert found(
+        tmp_path,
+        "module top (input logic a, output logic y);\n"
+        "  logic w;\n"
+        "  logic other;\n"
+        "  if (0) begin : g\n"
+        "    assign other = a;\n"
+        "  end\n"
+        "  assign y = w;\n"
+        "endmodule\n",
+    ) == [("UnassignedVariable", "w")]
+
+
+def test_the_limit_loses_an_undriven_output_port_as_well(tmp_path: Path):
+    # G3. The same shape on a port of the module itself. Without the branch this is
+    # reported as UndrivenPort, as the first tests of this file show.
+    assert (
+        found(
+            tmp_path,
+            "module top (input logic a, output logic y);\n  if (0) begin : g\n    assign y = a;\n  end\nendmodule\n",
+        )
+        == []
+    )
+
+
+def test_the_limit_holds_for_a_generate_case_too(tmp_path: Path):
+    # G4. A generate case whose taken branch drives nothing, with a parameter this time,
+    # which is the form the manual describes.
+    assert (
+        found(
+            tmp_path,
+            "module top #(parameter int SEL = 0) (input logic a, output logic y);\n"
+            "  logic w;\n"
+            "  case (SEL)\n"
+            "    1: begin : g\n"
+            "      assign w = a;\n"
+            "    end\n"
+            "  endcase\n"
+            "  assign y = w;\n"
+            "endmodule\n",
+        )
+        == []
+    )

@@ -41,11 +41,17 @@ Items that say so were not checked by a test.
 \item \textbf{More that the dangling check does not see.} The dangling check does not see
   these things:
   \begin{itemize}
-  \item a parameter change that switches off a driver in a generate branch
   \item an inout port
   \item a new reader of a signal that had no driver already in the baseline
   \end{itemize}
-  These cases were not checked by a test. The specification of the check lists them.
+  These two cases were not checked by a test. The specification of the check lists them.
+\item \textbf{A driver in a generate branch that is not taken.} The compiler counts an
+  assignment inside a generate branch as a driver, also when the elaboration does not take
+  that branch. The signal then has no driver in the design that is built, and nothing is
+  reported, so the sign-off accepts the run. A parameter change that switches off a branch
+  is one way to reach this, and \code{if (0)} alone is enough. A generate case behaves in
+  the same way, and both an undriven signal and an undriven output port are lost. This is a
+  limit of the compiler and not of hdl-vet, and it was measured with pyslang 12.1.0.
 \item \textbf{One configuration.} The sign-off sees the design with the defines of the
   file list. An operation refuses a list that holds a conditional compilation directive,
   because it cannot check another configuration.
