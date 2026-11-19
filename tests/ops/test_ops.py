@@ -742,3 +742,60 @@ def test_unrequired_expectation_and_checks_on_session(kit):
     assert not r.ok
     assert r.unmatched_expects == [] and r.failed_checks == ["custom check failed: x"]
     assert Session(kit.filelist, top="top").finish().failed_checks == []
+
+
+# --- operations that cancel each other (#57) -----------------------------------------
+
+
+def test_add_port_then_remove_port_leaves_no_stale_expectation(vet, kit):
+    """#57. The two operations cancel, so the design is the one we started from.
+
+    Each registers a structural expectation. Neither can be seen afterwards, because
+    the text is back as it was, so the sign-off used to fail on two expectations that
+    nothing could satisfy.
+    """
+    vet.module("mid").add_port("dft_en", "input")
+    vet.module("mid").remove_port("dft_en")
+    r = vet.finish()
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert r.files == {}
+
+
+def test_add_param_then_remove_param_leaves_no_stale_expectation(vet, kit):
+    """#57, the same for a parameter."""
+    vet.module("mid").add_param("DFT", 0)
+    vet.module("mid").remove_param("DFT")
+    r = vet.finish()
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert r.files == {}
+
+
+def test_a_pair_that_cancels_is_still_in_the_log(vet, kit):
+    """Both operations ran, so both are logged. Neither is hidden because they cancelled.
+
+    `OpRecord.status` stays "applied" | "skipped": a third value would be a change to
+    what `vet apply` prints, and #57 asks only that the expectations cancel.
+    """
+    vet.module("mid").add_port("dft_en", "input")
+    vet.module("mid").remove_port("dft_en")
+    assert vet.finish().ok
+    assert [(e.op, e.target) for e in vet.log] == [("add_port", "mid"), ("remove_port", "mid")]
+    assert {e.status for e in vet.log} <= {"applied", "skipped"}
+
+
+def test_removing_a_parameter_the_design_already_had_still_expects_the_change(vet, kit):
+    """The guard against cancelling too much.
+
+    A parameter of the design we started from is a real change when it goes, so its
+    expectation must stay and the change must be seen. An earlier draft of the fix keyed
+    the cancellation on "is an expectation of this kind registered", which
+    `Module._expect_param` also does for `set_param`, and would have dropped an
+    expectation for a change that is still there.
+    """
+    vet.module("leaf", instances=3).remove_param("DEPTH")
+    r = vet.finish()
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert [c.kind for c in r.changes] == ["param-changed"] * 3, [str(c) for c in r.changes]
+    assert r.files, "the text of the design must have changed"
