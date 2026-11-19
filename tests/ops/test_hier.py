@@ -610,3 +610,46 @@ def test_propagate_param_is_idempotent(vet):
     vet.propagate_param("DEPTH", to="top.u_mid.u_l1")
     assert [s for _, _, s in ops(vet)].count("skipped") == 4
     assert vet.finish().ok
+
+
+# --- escaped instance names on a path (#54) ------------------------------------------
+
+
+ESC_LEAF = "module leaf (\n  input  logic d,\n  output logic q\n);\n  assign q = d;\nendmodule\n"
+ESC_MID = "module mid (\n  input  logic d,\n  output logic q\n);\n  leaf \\u/esc (.d(d), .q(q));\nendmodule\n"
+ESC_TOP = "module t (\n  input  logic d,\n  output logic q\n);\n  mid u_mid (.d(d), .q(q));\nendmodule\n"
+
+
+def escaped_design(root: Path) -> Path:
+    """A design whose middle instance has an escaped name, as the snapshot spells it."""
+    (root / "rtl").mkdir(parents=True)
+    (root / "rtl" / "leaf.sv").write_text(ESC_LEAF)
+    (root / "rtl" / "mid.sv").write_text(ESC_MID)
+    (root / "rtl" / "t.sv").write_text(ESC_TOP)
+    (root / "t.f").write_text("rtl/leaf.sv\nrtl/mid.sv\nrtl/t.sv\n")
+    return root / "t.f"
+
+
+def test_punch_port_through_an_escaped_instance_name(tmp_path: Path):
+    """#54. The path is given as the design prints it, a backslash and a closing blank.
+
+    The snapshot spells such a name that way and the model names the same instance
+    without it, so a segment has to be turned back before it is looked up. Two places
+    needed it: the names the walk returns, and the instance names taken from a snapshot
+    path when the targets are collected.
+    """
+    vet = Vet(Session(escaped_design(tmp_path), top="t"))
+    vet.punch_port("dft_en", "input", "t.u_mid.\\u/esc ")
+    r = vet.finish()
+    assert r.ok, r.report()
+    kinds = {(c.kind, c.path) for c in r.changes}
+    assert ("port-added", "t.u_mid.\\u/esc ") in kinds, sorted(str(k) for k in kinds)
+    assert ("port-added", "t.u_mid") in kinds
+    assert ("port-added", "t") in kinds
+
+
+def test_a_path_through_an_unknown_instance_still_says_so(tmp_path: Path):
+    """The guard: turning a segment back must not make an unknown name look escaped."""
+    vet = Vet(Session(escaped_design(tmp_path), top="t"))
+    with pytest.raises(VetError, match="no instance"):
+        vet.punch_port("dft_en", "input", "t.u_mid.\\nope ")
