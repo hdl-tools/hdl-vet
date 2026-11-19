@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from hdl_vet.ops.common import VetError, _Check, _Plan
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.ops.instance import Instance
-from hdl_vet.ops.text import _IDENT, _bare_name, _did_you_mean, _logic_type, _range
+from hdl_vet.ops.text import _IDENT, _bare_name, _did_you_mean, _logic_type, _range, _unsegment
 from hdl_vet.slang_adapter import AdapterError, InstanceInfo, ModuleInfo, is_simple_identifier, tokens
 
 
@@ -42,7 +42,7 @@ class _HierOps(_VetHost):
                     info = self.session.loaded.module(mods[-1])
                 except AdapterError as e:
                     raise VetError(str(e)) from e
-                hit = next((i for i in info.instances if i.name == seg), None)
+                hit = next((i for i in info.instances if i.name == _unsegment(seg)), None)
                 if hit is not None and hit.is_array:
                     raise VetError(f"{op}: {seg!r} in module {mods[-1]!r} is an instance array, which is not supported")
                 if hit is not None and hit.in_generate:
@@ -55,7 +55,7 @@ class _HierOps(_VetHost):
                     f"{op}: module {mods[-1]!r} has no instance {seg!r}"
                     f"{_did_you_mean(seg, [i.name for i in info.instances])}"
                 )
-            names.append(seg)
+            names.append(_unsegment(seg))
             path = nxt
             paths.append(path)
             mods.append(snap[path].module)
@@ -144,7 +144,9 @@ class _HierOps(_VetHost):
                         f"{op}: {p} is an instance of {m!r} in module {snap[parent].module!r}, "
                         f"which is not on the path to {to!r}, so it would have no {name!r} to connect"
                     )
-                targets[(snap[parent].module, iname)] = m
+                # `iname` comes from a snapshot path, so an escaped name arrives spelled as
+                # SystemVerilog writes it. The model names it without that (#54).
+                targets[(snap[parent].module, _unsegment(iname))] = m
         sig = signal if signal is not None else (name if out else None)
         self._refresh_for(mods)
         # After the refresh, so a copy added by an earlier raw splice is seen.

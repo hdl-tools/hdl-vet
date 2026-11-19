@@ -23,6 +23,16 @@ def _segment(name: str) -> str:
     return name if _IDENT.fullmatch(name) else f"\\{name} "
 
 
+def _unsegment(seg: str) -> str:
+    """The instance name in the path segment `seg`: the inverse of `_segment`.
+
+    A snapshot path spells an escaped name as SystemVerilog writes it, a backslash and a
+    closing blank. The model names the same instance without them, so a path segment has
+    to be turned back before it is looked up (#54).
+    """
+    return seg[1:-1] if len(seg) > 2 and seg.startswith("\\") and seg.endswith(" ") else seg
+
+
 _DIRECTIONS = ("input", "output", "inout")
 _BASED = re.compile(r"'[sS]?[bBoOdDhH]")
 _DIGITS = re.compile(r"[0-9a-fA-FxXzZ?_]+")
