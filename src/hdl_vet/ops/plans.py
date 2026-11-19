@@ -62,6 +62,10 @@ class _PlanOps(_VetHost):
                 out.extend((host, base) for base in driven_bases(c.expr))
         return out
 
+    def _drop_check(self, key: tuple[str, ...]) -> None:
+        """Forget the post-condition registered under `key`: an operation of this run undid it."""
+        self._checks = [c for c in self._checks if c.key != key]
+
     def _drop_registered(self, module: str, name: str) -> None:
         """Forget the post-conditions earlier operations registered for the instance `name` of `module`."""
         self._checks = [
@@ -131,6 +135,13 @@ class _PlanOps(_VetHost):
         if plan.added is not None:
             mod, name, value = plan.added
             self._added.setdefault(mod, {})[name] = value
+        for kind, path, name in plan.cancels:
+            self.session.drop_expect(kind, [path], name)
+        if plan.drops is not None:
+            self._drop_check(plan.drops)
+        if plan.unadded is not None:
+            mod, name = plan.unadded
+            self._added.get(mod, {}).pop(name, None)
         for kind, path, name in plan.expects:
             self.session.expect(kind, path, name, exact=True)
         for kind, path, name in plan.permits:

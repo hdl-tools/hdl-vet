@@ -48,6 +48,12 @@ class _Plan:
     expects: list[tuple[str, str, str]] = field(default_factory=list)
     permits: list[tuple[str, str, str]] = field(default_factory=list)
     check: _Check | None = None
+    # The inverses, for an operation that undoes one of this run (see `_commit`). They are
+    # data on the plan, not something the operation does while it looks at the design: a
+    # `run` can be tried again after a re-load, so it must only read.
+    cancels: list[tuple[str, str, str]] = field(default_factory=list)  # expectations to forget
+    drops: tuple[str, ...] | None = None  # the key of a post-condition to forget
+    unadded: tuple[str, str] | None = None  # (module, name) to forget from `_added`
     quiet: bool = False  # part of an operation whose first plan is logged
 
 

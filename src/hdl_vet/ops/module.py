@@ -355,6 +355,16 @@ class Module:
                         f"{op} {mod}: port {nxt.name!r} takes its direction and type from {name!r}; "
                         f"remove or declare it first"
                     )
+            # If this run added the port, the pair cancels: the text goes back to what it
+            # was, so neither change can be seen at the sign-off and neither expectation
+            # could be met. The inverses go on the plan, because `run` can be tried again
+            # after a re-load and so must only read (#57).
+            # Only when the design we started from had no such port: then this run added
+            # it, and removing it goes back to that design, so neither change can be seen.
+            # An expectation is the wrong signal, because `_expect_param` and others
+            # register the same kind for a change that does remain visible.
+            base = v.session.baseline_snapshot()
+            undone = all(name not in base[p].ports for p in paths if p in base)
             items = [(p.start, p.end) for p in info.ports]
             splices = edit_list(data, items, {at}, info.ports_close, _eol(data))
             if splices is None:
@@ -368,7 +378,10 @@ class Module:
                     path=info.path,
                     splices=splices,
                     mark=("ports", mod),
-                    expects=[("port-removed", p, name) for p in paths],
+                    expects=[] if undone else [("port-removed", p, name) for p in paths],
+                    cancels=[("port-added", p, name) for p in paths] if undone else [],
+                    drops=("add_port", mod, name) if undone else None,
+                    unadded=(mod, name) if undone else None,
                     permits=[("connection-changed", p, name) for p in paths],
                     check=_Check((op, mod, name), op, (mod, name)),
                 )
@@ -432,6 +445,10 @@ class Module:
                     splices = [(info.name_end, info.params_close + 1, _list_gap(data, info.params_close))]
                 else:
                     splices = [remove_all(data, decls)]
+            # If this run added the parameter, the pair cancels; see remove_port (#57).
+            # Only when the design we started from had no such parameter; see remove_port.
+            base = v.session.baseline_snapshot()
+            undone = all(name not in base[p].params for p in paths if p in base)
             hosts = v._instances_of(mod)
             plans = [
                 _Plan(
@@ -440,7 +457,10 @@ class Module:
                     path=info.path,
                     splices=splices,
                     mark=("params", mod),
-                    expects=[("param-changed", p, name) for p in paths],
+                    expects=[] if undone else [("param-changed", p, name) for p in paths],
+                    cancels=[("param-changed", p, name) for p in paths] if undone else [],
+                    drops=("add_param", mod, name) if undone else None,
+                    unadded=(mod, name) if undone else None,
                     check=_Check((op, mod, name), op, (mod, name)),
                 )
             ]

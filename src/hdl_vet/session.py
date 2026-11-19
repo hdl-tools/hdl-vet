@@ -469,6 +469,25 @@ class Session:
             if not (e.required and (e.path in mine or any(e.path.startswith(p + ".") for p in mine)))
         ]
 
+    def expected_at(self, kind: str, name: str) -> list[str]:
+        """The paths where `kind` of `name` is required: what an operation of this run registered.
+
+        `Vet._added` cannot answer this. It holds only what is waiting for the next load,
+        and it is cleared by one, so an operation that re-loads before it looks sees
+        nothing there. An expectation lives for the whole run, which is the question.
+        """
+        return [e.path for e in self._expects if e.required and e.kind == kind and e.name == name]
+
+    def drop_expect(self, kind: str, paths: Collection[str], name: str) -> None:
+        """Forget one expectation: an operation of this run undid what registered it.
+
+        Narrower than `drop_expects`, which forgets everything at a path and below it
+        because the instance there is going. Here the instance stays and only this one
+        expectation is moot, so the rest must still be met.
+        """
+        mine = set(paths)
+        self._expects = [e for e in self._expects if not (e.kind == kind and e.path in mine and e.name == name)]
+
     def compare_since(self, cp: object, drove: Sequence[tuple[str, str]] = ()) -> Comparison | None:
         """What the loaded design has that the design at `cp` did not; None if it is that design.
 
