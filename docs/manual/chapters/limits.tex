@@ -195,6 +195,11 @@ or with a raw splice.
 \section{Known problems}
 
 \begin{itemize}
+\item \textbf{A folder that cannot be read.} hdl-vet spells every part of a path as the
+  file system holds it. The output tree and the record in \file{hdl-vet.json} then name
+  the same files. A folder that hdl-vet cannot read leaves that part as the file list
+  spelled it. The record can then name a path in another case than the tree holds. The
+  tree itself is right.
 \item \textbf{Escaped names in hierarchical paths.} An instance handle works with an
   escaped identifier, such as \texttt{\textbackslash u/esc}. A hierarchical path
   that goes through such an instance does not work in the same way.
