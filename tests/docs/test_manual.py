@@ -65,7 +65,8 @@ M11 `.github/workflows/manual.yml` builds the PDF: on pull requests and pushes t
     texlive packages do not pull it in), runs
     `latexmk -pdf -interaction=nonstopmode -halt-on-error hdl-vet.tex` in
     `docs/manual`, fails when the log reports an undefined or multiply defined
-    reference, and uploads `hdl-vet.pdf` as the artifact `hdl-vet-manual`.
+    reference, or two pages claiming one destination, and uploads `hdl-vet.pdf`
+    as the artifact `hdl-vet-manual`.
     Third-party actions other than actions/checkout and actions/upload-artifact
     are not used. LaTeX build products are ignored by git; the sources are not.
 M12 The message for an output directory that exists says `--force`, the option's
