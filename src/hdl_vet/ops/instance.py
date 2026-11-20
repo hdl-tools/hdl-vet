@@ -315,6 +315,7 @@ class Instance:
         drop_ports: Iterable[str] = (),
         drop_params: Iterable[str] = (),
         unconnected: Iterable[str] = (),
+        accept_types: Iterable[str] = (),
         was: str | None = None,
     ) -> None:
         """Instantiate `module` instead of the current one; see `tests/ops/test_instances.py`."""
@@ -328,6 +329,7 @@ class Instance:
             list(drop_ports),
             list(drop_params),
             list(unconnected),
+            list(accept_types),
             was,
         )
         self.vet._checked("replace_module", self.target, lambda: self._replace(*args), tried=True)
@@ -342,6 +344,7 @@ class Instance:
         drop_ports: list[str],
         drop_params: list[str],
         unconnected: list[str],
+        accept_types: list[str],
         was: str | None,
     ) -> None:
         v, op, target = self.vet, "replace_module", self.target
@@ -452,6 +455,11 @@ class Instance:
                 )
             elif new_ports[n].direction == "input":
                 problems.append(f"unconnected names {n!r}, an input port, which cannot be left unconnected")
+        for n in accept_types:
+            if n not in new_ports:
+                problems.append(
+                    f"accept_types names {n!r}, which is not a port of module {module!r}{_did_you_mean(n, new_ports)}"
+                )
         for n in set_params:
             if n not in new_values:
                 pkind = new_info.param_kinds.get(n)
@@ -633,13 +641,15 @@ class Instance:
             raise VetError(f"{op} {target}: the edited design cannot be loaded: {e}") from e
         v._sync()
         after = v.session.loaded
+        compared: dict[str, str] = {}  # waived port -> note, for the whole swap
+        wrong: list[str] = []
         for p in paths:
             old_snap, new_snap = before.instance_snap(p), after.instance_snap(p)
             if new_snap is None:
                 raise VetError(f"{op} {target}: there is no instance at {p} in the edited design")
             if old_snap is None:
                 continue
-            wrong: list[str] = []
+            found = len(wrong)
             for old in old_conns:
                 if old in drop_ports:
                     continue
@@ -655,10 +665,18 @@ class Instance:
                         f"port {old!r} of {cur!r} is {x[1]} bits wide but port {new!r} of {module!r} "
                         f"is {y[1]} bits wide"
                     )
+                elif tx is not None and ty is not None and new in accept_types:
+                    if _type_key(tx) == _type_key(ty):
+                        continue
+                    compared.setdefault(
+                        new,
+                        f"replace_module {target}: accept_types accepts the type of port {new!r}: "
+                        f"{tx} in {cur!r}, {ty} in {module!r}",
+                    )
                 elif tx is not None and ty is not None and _type_key(tx) != _type_key(ty):
                     wrong.append(f"port {old!r} of {cur!r} has type {tx} but port {new!r} of {module!r} has type {ty}")
-            if wrong:
-                raise VetError(f"{op} {target}: " + "; ".join(wrong))
+            if len(wrong) > found:
+                continue
             for n in new_values:
                 if n in set_params:
                     continue
@@ -672,6 +690,14 @@ class Instance:
                         f"the value differently from {cur!r}; keep the value with set_params={{{n!r}: ...}} "
                         f"or accept the new one with an explicit set_params"
                     )
+        wrong += [
+            f"accept_types names {n!r}, which covers nothing: the port is not carried, or its types agree"
+            for n in accept_types
+            if n not in compared
+        ]
+        if wrong:
+            raise VetError(f"{op} {target}: " + "; ".join(wrong))
+        v.notes.extend(compared[n] for n in accept_types if n in compared)
         for old in drop_ports:
             conn = old_conns[old]
             direction = next((q.direction for q in old_info.ports if q.name == old), None)

@@ -585,6 +585,11 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
   parameter with the same resolved type is no difference. The message names both ports.
   It also refuses the edit when the edit gives another value to a parameter that both modules
   have and nothing overrides.
+\item[accept_types] A list of ports of the new module. A renamed port keeps the name it
+  lands on. The list waives a difference of type for these ports only. A difference of
+  direction or bit width is never waived. Each waived port adds a note with both types to the
+  sign-off report. The operation refuses a name that is not a port of the new module, and a
+  waiver that covers nothing.
 \item[was] The name of the module that you expect the instance to use now. If the
   instance uses neither the module in \code{was} nor the new module, the operation
   stops with a drift error. The error names the module that the instance uses. Without

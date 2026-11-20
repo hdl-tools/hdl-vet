@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,8 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
         if self._scope is not None:
             raise VetError("finish: not allowed inside a scope")
-        return self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+        result = self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+        return replace(result, notes=list(self.notes))
 
     def _idle(self, op: str) -> None:
         """Refuse `op` inside a `group` block and after `finish`."""
@@ -81,7 +83,8 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         dirty, everything = set(self._dirty), self._all
         added = {mod: dict(names) for mod, names in self._added.items()}
         try:
-            return self.session.check([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+            result = self.session.check([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+            return replace(result, notes=list(self.notes))
         finally:
             self._dirty, self._all, self._added = dirty, everything, added
             self._seen = self.session.reloads

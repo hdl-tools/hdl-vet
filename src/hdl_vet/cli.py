@@ -342,7 +342,7 @@ def _apply(args: argparse.Namespace) -> int:
                 sys.stderr.write("".join(f"{line}\n" for line in status.equivalence_lines()))
             else:
                 sys.stdout.write("sign-off so far: FAILED\n")
-                sys.stderr.write(status.report())
+                sys.stderr.write("".join(ln for ln in status.report().splitlines(True) if ln.strip() not in notes))
             return 0
     result = vet.finish(ident)
     saved_lines = [] if args.save is None else [f"saved {args.save}"]

@@ -69,6 +69,7 @@ class Result:
     dangling: list[Diag] = field(default_factory=list)  # dangling entries the baseline did not have
     equivalence: list[Record] = field(default_factory=list)  # one record for each comparison of the proof
     enables: list[Enable] = field(default_factory=list)  # one record for each pin of an enable that was looked at
+    notes: list[str] = field(default_factory=list)  # the notes of the operations, set by `Vet.finish` and `Vet.check`
 
     def _rel(self, path: Path | None) -> str:
         if path is None:
@@ -99,6 +100,7 @@ class Result:
             lines.append(f"  expected change not seen: {e.kind} path={e.path} name={e.name}")
         for msg in self.failed_checks:
             lines.append(f"  failed check: {msg}")
+        lines.extend(f"  note: {note}" for note in self.notes)
         lines.extend(self.equivalence_lines())
         return "\n".join(lines) + "\n"
 
