@@ -58,6 +58,79 @@ class _HierRefOps(_DesignHost):
                 out.append(Driver(False))
         return out
 
+    def combinational_closure(self, module: str, net: str) -> frozenset[str]:
+        """Every module-level name that `net` drives through combinational logic in `module`.
+
+        The walk follows `assign` and combinational procedural blocks (`always_comb`,
+        `always_latch`, and any `always` that is not edge-clocked on every event) inside the
+        one module body. It does not enter a child instance: the drivers of a net that a
+        child drives stop there. It does not follow a clocked block. In doubt a block is
+        combinational, so the walk refuses more, not less. The result is the union over every
+        elaborated body of `module`.
+        """
+        sk, ek, pk = pyslang.ast.SymbolKind, pyslang.ast.ExpressionKind, pyslang.ast.ProceduralBlockKind
+        an = self._analyze()
+
+        def reads(node: Any) -> set[str]:
+            out: set[str] = set()
+
+            def go(n: Any) -> None:
+                sym = getattr(n, "symbol", None)
+                if getattr(n, "kind", None) == ek.NamedValue and sym is not None and getattr(sym, "name", ""):
+                    out.add(str(sym.name))
+
+            node.visit(go)
+            return out
+
+        def clocked(blk: Any) -> bool:
+            if blk.procedureKind in (pk.AlwaysComb, pk.AlwaysLatch):
+                return False
+            events: list[Any] = []
+            blk.visit(lambda n: events.append(n) if str(getattr(n, "kind", "")).endswith("SignalEvent") else None)
+            return bool(events) and all(str(getattr(e, "edge", "")) != "EdgeKind.None_" for e in events)
+
+        result: set[str] = set()
+        for body in self._canonical_bodies(module).values():
+
+            def sources(name: str, body: Any = body) -> set[str]:
+                sym = body.find(name)
+                if sym is None:
+                    return set()
+                try:
+                    drivers = an.getDrivers(sym)
+                except TypeError:
+                    return set()
+                out: set[str] = set()
+                for d in drivers:
+                    cs = d.containingSymbol
+                    if d.isInputPort:
+                        continue
+                    if cs.kind == sk.ContinuousAssign:
+                        out |= reads(cs.assignment.right)
+                    elif cs.kind == sk.ProceduralBlock and not clocked(cs):
+                        found: list[Any] = []
+                        cs.visit(lookup_table={ek.Assignment: found.append})
+                        for a in found:
+                            out |= reads(a.right)
+                return {x for x in out if body.find(x) is not None}
+
+            if body.find(net) is None:
+                raise AdapterError(f"module {module!r} has no member {net!r}")
+            fanout: dict[str, set[str]] = {}
+            for member in body:
+                if member.name:
+                    for src in sources(str(member.name)):
+                        fanout.setdefault(src, set()).add(str(member.name))
+            seen: set[str] = set()
+            stack = [net]
+            while stack:
+                for nxt in fanout.get(stack.pop(), ()):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            result |= seen
+        return frozenset(result)
+
     def driver_details(self, module: str, name: str) -> list[tuple[int, list[DriverDetail]]]:
         """For each elaborated body of `module`: the width of the signal `name` and each driver of it.
 

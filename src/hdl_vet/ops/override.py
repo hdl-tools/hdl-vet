@@ -83,6 +83,15 @@ def override_net(module: Module, net: str, value: object, enable: str, keep: str
     if keep is not None and (not isinstance(keep, str) or not is_simple_identifier(keep)):
         raise VetError(f"{_OP} {mod}: {keep!r} is not a simple identifier (or is a SystemVerilog keyword)")
     paths = module._confirm_instances(_OP)
+    try:
+        closure = v.session.loaded.combinational_closure(mod, net)
+    except AdapterError:
+        closure = frozenset()  # a missing net is refused by the run with its own message
+    if hit := min(closure & value_identifiers(text), default=None):
+        raise VetError(
+            f"{_OP} {mod}: the value {text!r} reads {hit!r}, which {net!r} drives through "
+            "combinational logic, so it would make a loop"
+        )
     v._checked(_OP, f"{mod}.{net}", lambda: _run(module, paths, net, text, enable, keep, waiver))
 
 

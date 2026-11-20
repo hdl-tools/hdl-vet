@@ -144,9 +144,15 @@ on when the check cannot judge.
   array or a generate loop. Or the child has a new port other than the enable pins. hdl-vet then
   compares the module with the child inside. This holds for the interface only, never for a
   pin that is not 0.
-\item \textbf{A loop through other nets.} hdl-vet refuses a value that reads the net
-  itself. It does not refuse a value that reads a net which the overridden net drives. The
-  comparison ties the enable to 0, so it does not see this loop.
+\item \textbf{A loop through other nets.} \apiname{Module.override_net} refuses a value
+  that reads the net itself. It also refuses one that reads a net which the net drives
+  through combinational logic in the same module. Two routes stay open. A loop that closes
+  through the output pin of a child instance is not refused. A loop that closes through a
+  hierarchical reference from another module is not refused either.
+
+  The walk does not enter another module, because the names inside it belong to another
+  namespace. The comparison ties the enable to 0, so it does not see such a loop. A flop
+  on the route is not a combinational loop, and it is not refused.
 \item \textbf{A rare answer of not the same.} The check compares the children that it does
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.

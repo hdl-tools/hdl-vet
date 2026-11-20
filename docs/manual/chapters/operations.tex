@@ -310,8 +310,10 @@ the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
   \item a \code{value} that is not one expression. Examples are a comma at the top level, an
     unbalanced bracket, a second statement and a comment.
   \item a \code{value} with a line break. A value is one line.
-  \item a \code{value} that reads the net itself. The message says \emph{loop}. hdl-vet reads
-    the names from the syntax of the value, not from its text.
+  \item a \code{value} that reads the net itself, or one the net drives through
+    combinational logic in the module. The message says \emph{loop}. hdl-vet reads
+    the names from the syntax of the value, not from its text. A route through a child
+    instance, or through a hierarchical reference, is not seen (chapter~\ref{ch:limits}).
   \item a \code{value} with a width other than the width of the net. The message says
     \emph{width}.
   \item a module that the design instantiates more than once, when you did not give the
