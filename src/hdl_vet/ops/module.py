@@ -142,6 +142,7 @@ class Module:
                 v._record("add_wire", mod, "skipped")
                 return
             raise DriftError(f"add_wire {mod}: {name!r} was already added with a different type")
+        v._refuse_disabled("add_wire", mod, info, name)
         data = v.session.text(info.path)
         nl = data.find(b"\n", info.header_end)
         if nl < 0 or nl + 1 > info.body_end:

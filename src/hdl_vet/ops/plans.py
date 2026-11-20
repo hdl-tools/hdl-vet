@@ -165,6 +165,7 @@ class _PlanOps(_VetHost):
                 return _Plan("add_port", mod, skip=True)
             raise DriftError(f"add_port {mod}: port {name!r} was already added with a different declaration")
         _refuse_directive(f"add_port {mod}", "port", info.ports_directive)
+        self._refuse_disabled("add_port", mod, info, name)
         if info.ports_close is None:
             raise VetError(f"add_port {mod}: cannot find the end of the port list")
         eol = _eol(data)
@@ -220,6 +221,7 @@ class _PlanOps(_VetHost):
                 return _Plan("add_param", mod, skip=True)
             raise DriftError(f"add_param {mod}: parameter {name!r} was already added with a different default")
         _refuse_directive(f"add_param {mod}", "parameter", info.params_directive)
+        self._refuse_disabled("add_param", mod, info, name)
         data = self.session.text(info.path)
         item = decl.encode()
         if info.params_close is None:
@@ -251,6 +253,7 @@ class _PlanOps(_VetHost):
                 raise VetError(f"add_assign {mod}: no net, variable or port {target!r}{_did_you_mean(target, names)}")
             if any(a.left == target and _same(a.right, expr) for a in info.assigns):
                 return _Plan("add_assign", mod, skip=True)
+            self._refuse_disabled("add_assign", mod, info, target)
             if target in ports and ports[target].direction == "input":
                 raise VetError(f"add_assign {mod}: {target!r} is an input port and cannot be assigned")
             try:
