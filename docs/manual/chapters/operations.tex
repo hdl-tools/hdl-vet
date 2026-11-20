@@ -555,6 +555,9 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
     removes it. The operation keeps a connection that you name in neither, if the new
     module has a port with that name.
   \item \code{params} and \code{drop_params} do the same for parameter overrides.
+    This holds for an override of a type parameter too. The operation keeps it when the
+    new module has a type parameter of that name. \code{params} renames it onto a type
+    parameter. The text of the override does not change.
   \item Every port of the new module needs a connection. The connection is one of these:
     \begin{itemize}
     \item the target of a kept or renamed connection
@@ -574,10 +577,12 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
   \item an input in \code{unconnected}
   \item two things on one port or parameter
   \item a \code{set_params} name that is not an overridable value parameter
+  \item a \code{params} map from a type parameter to a value parameter, or the reverse
   \end{itemize}
   The operation also refuses a module with a non-ANSI port list, an interface port, and
   positional overrides. It tries the edit. It refuses the edit when a kept or renamed port
-  has another direction, width or type in the new module. The message names both ports.
+  has another direction, width or resolved type in the new module. A typedef or a type
+  parameter with the same resolved type is no difference. The message names both ports.
   It also refuses the edit when the edit gives another value to a parameter that both modules
   have and nothing overrides.
 \item[was] The name of the module that you expect the instance to use now. If the

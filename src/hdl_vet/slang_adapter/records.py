@@ -191,6 +191,7 @@ class InstanceSnap:
     ports: dict[str, tuple[str, int]]
     connections: dict[str, str]
     port_types: dict[str, str] = field(default_factory=dict)
+    port_resolved: dict[str, str] = field(default_factory=dict)  # the type behind any alias
 
 
 @dataclass(frozen=True)

@@ -402,6 +402,7 @@ class Instance:
         old_ovr = {o.name: o for o in inst.param_overrides if o.name is not None}
         new_ports = {p.name: p for p in new_info.ports}
         new_values = [n for n, k in new_info.param_kinds.items() if k == "value"]
+        new_types = [n for n, k in new_info.param_kinds.items() if k == "type"]
         problems: list[str] = []
 
         for what, names, pool in (
@@ -427,11 +428,16 @@ class Instance:
                     f"{_did_you_mean(new, new_ports)}"
                 )
         for old, new in params.items():
-            if new not in new_values:
-                problems.append(
-                    f"params maps {old!r} to {new!r}, which is not an overridable value parameter of module "
-                    f"{module!r}{_did_you_mean(new, new_values)}"
-                )
+            is_type = old_info.param_kinds.get(old) == "type"
+            targets = new_types if is_type else new_values
+            if new not in targets:
+                word = "type" if is_type else "value"
+                other = new_values if is_type else new_types
+                if new in other:
+                    why = f"a {'value' if is_type else 'type'} parameter, and override {old!r} is a {word} parameter"
+                else:
+                    why = f"not an overridable {word} parameter of module {module!r}{_did_you_mean(new, targets)}"
+                problems.append(f"params maps {old!r} to {new!r}, which is {why}")
         for n, expr in connect.items():
             if n not in new_ports:
                 problems.append(
@@ -487,12 +493,23 @@ class Instance:
                 continue
             if n in params:
                 carried.setdefault(params[n], []).append(("renamed", n))
-            elif n in new_values:
+            elif n in (new_types if old_info.param_kinds.get(n) == "type" else new_values):
                 carried.setdefault(n, []).append(("kept", n))
+            elif old_info.param_kinds.get(n) == "type":
+                hint = (
+                    "rename it with params= onto one of its type parameters"
+                    if new_types
+                    else "it has no type parameter to rename onto"
+                )
+                problems.append(
+                    f"override {n!r} is not accounted for: module {module!r} has no type parameter {n!r} "
+                    f"({hint}, or remove it with drop_params=, which leaves the port types of {module!r} in force)"
+                )
             else:
+                hint = "rename it with params= or remove it" if new_values else "remove it"
                 problems.append(
                     f"override {n!r} is not accounted for: module {module!r} has no overridable parameter {n!r} "
-                    f"(rename it with params= or remove it with drop_params=)"
+                    f"({hint} with drop_params=)"
                 )
         for t, olds in carried.items():
             if len(olds) > 1:
@@ -630,7 +647,7 @@ class Instance:
                 x, y = old_snap.ports.get(old), new_snap.ports.get(new)
                 if x is None or y is None:
                     continue
-                tx, ty = old_snap.port_types.get(old), new_snap.port_types.get(new)
+                tx, ty = old_snap.port_resolved.get(old), new_snap.port_resolved.get(new)
                 if x[0] != y[0]:
                     wrong.append(f"port {old!r} of {cur!r} is an {x[0]} but port {new!r} of {module!r} is an {y[0]}")
                 elif x[1] != y[1] and x[1] > 0 and y[1] > 0:
