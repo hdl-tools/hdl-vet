@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
@@ -16,6 +17,7 @@ from hdl_vet.ops.text import (
     _refuse_directive,
     _same,
 )
+from hdl_vet.paths import same_file
 from hdl_vet.session import SessionError
 from hdl_vet.slang_adapter import AdapterError, InstanceInfo, ModuleInfo, driven_bases
 
@@ -29,17 +31,52 @@ class _PlanOps(_VetHost):
 
         def run() -> None:
             try:
-                added = self.session.add_file(path)
+                resolved = self._script_path(path)
+            except VetError as e:
+                raise VetError(f"add_file {name}: {e}") from e
+            try:
+                added = self.session.add_file(resolved)
             except SessionError as e:
                 raise VetError(f"add_file {name}: {e}") from e
             self._sync()
             if not added:
                 self._record("add_file", name, "skipped")
                 return
-            self._set_check(_Check(("add_file", name), "add_file", (name, str(Path(path).resolve()))))
+            self._set_check(_Check(("add_file", name), "add_file", (name, str(resolved.resolve()))))
             self._record("add_file", name, "applied")
 
         self._checked("add_file", name, run, tried=True)
+
+    def _script_path(self, path: Path | str) -> Path:
+        """A relative `path` starts from the folder of the running script when a file is there.
+
+        Two branches look wider than they need to be, and both are there for a reason (#63).
+
+        `Path.is_file()` hides the error for a name that is absent, but it raises for a folder
+        that cannot be searched and for a name the filesystem cannot hold. A question that
+        cannot be answered takes the plain route, so `Session.add_file` refuses it the way it
+        did before this rule existed. Nothing is chosen on a guess.
+
+        The test for the current folder asks whether it holds the name, not whether it holds a
+        readable file. A dangling link, a pipe and a folder are all things the owner of the
+        tree put there, so hdl-vet refuses instead of reaching for the file by the script.
+        """
+        p = Path(path)
+        if p.is_absolute() or self._script_dir is None:
+            return p
+        beside = self._script_dir / p
+        try:
+            if not beside.is_file():
+                return p
+            here = p.exists() or p.is_symlink()
+        except OSError:  # the filesystem cannot answer: the plain route reports it
+            return p
+        if here and not same_file(beside, p):
+            raise VetError(
+                f"{os.path.abspath(beside)} is next to the script and {os.path.abspath(p)} is in the current folder, "
+                "and they are not one file: give an absolute path to say which one to add"
+            )
+        return beside
 
     def _driven_by(self, host: str, inst: InstanceInfo, only: str | None = None) -> list[tuple[str, str]]:
         """(module, signal) pairs that the output connections of `inst` (in `host`) drive.

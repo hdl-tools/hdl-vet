@@ -26,6 +26,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def __init__(self, session: Session) -> None:
         self.session = session
         self.log: list[OpRecord] = []
+        self._script_dir: Path | None = None  # folder of the running script, set by the CLI per script
         self.notes: list[str] = []
         self._depth = 0  # open `group` blocks (a checked operation counts as one while it runs)
         self._scope: _Scope | None = None  # the open `scope` block, if any

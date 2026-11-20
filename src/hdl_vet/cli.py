@@ -100,7 +100,7 @@ def _read_script(path: Path) -> bytes:
         raise _InputError(f"{path}: cannot read script ({e})") from e
 
 
-def _load_script(path: Path) -> tuple[str, str, Any]:
+def _load_script(path: Path) -> tuple[str, str, Any, Path]:
     """Compile and exec a script from its bytes (never imported, so no __pycache__)."""
     data = _read_script(path)
     namespace: dict[str, Any] = {"__name__": "__hdl_vet_script__", "__file__": str(path)}
@@ -115,7 +115,7 @@ def _load_script(path: Path) -> tuple[str, str, Any]:
     func = namespace.get("apply")
     if not callable(func):
         raise _InputError(f"{path}: the script must define apply(vet)")
-    return path.name, hashlib.sha256(data).hexdigest(), func
+    return path.name, hashlib.sha256(data).hexdigest(), func, path
 
 
 @dataclass(frozen=True)
@@ -269,7 +269,7 @@ def _apply(args: argparse.Namespace) -> int:
         vet = Vet.restore(args.resume)
         session = vet.session
         saved = session.scripts
-        for number, ((name, sha, _), path) in enumerate(
+        for number, ((name, sha, _, _), path) in enumerate(
             zip(loaded[: plan.project_scripts], plan.scripts, strict=False), start=1
         ):
             if number > len(saved) or (name, sha) == saved[number - 1]:
@@ -284,7 +284,7 @@ def _apply(args: argparse.Namespace) -> int:
             )
         # The project's scripts the save did not have run first, then those of -s.
         scripts = [*loaded[len(saved) : plan.project_scripts], *loaded[plan.project_scripts :]]
-        for name, sha, _ in scripts:
+        for name, sha, _, _ in scripts:
             if (name, sha) in session.scripts:
                 raise _InputError(f"script {name}: already applied by the session saved in {args.resume}")
     else:
@@ -300,7 +300,8 @@ def _apply(args: argparse.Namespace) -> int:
         if within(args.save, session.layout_root):
             raise _InputError(f"--save {args.save} is inside the input tree {session.layout_root}")
     first_record, first_note = len(vet.log), len(vet.notes)  # what the saved session did is not reported again
-    for name, _, func in scripts:
+    for name, _, func, script_path in scripts:
+        vet._script_dir = script_path.resolve().parent
         try:
             func(vet)
         except VetError as e:
@@ -321,7 +322,7 @@ def _apply(args: argparse.Namespace) -> int:
         # resume. A state that cannot be loaded is left for sign-off to report.
         with contextlib.suppress(AdapterError):
             session.refresh()
-    ident = [(name, sha) for name, sha, _ in scripts]
+    ident = [(name, sha) for name, sha, _, _ in scripts]
     everything = [*session.scripts, *ident]
     ran = vet.log[first_record:]
     applied = sum(1 for r in ran if r.status == "applied")

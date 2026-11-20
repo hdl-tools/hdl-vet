@@ -26,6 +26,7 @@ class _VetHost:
         _depth: int
         _dirty: set[tuple[str, ...]]
         _scope: _Scope | None
+        _script_dir: Path | None
         session: Session
 
         def _begin(self, label: str) -> _VetState: ...
