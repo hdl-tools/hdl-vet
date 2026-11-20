@@ -29,21 +29,22 @@ Items that say so were not checked by a test.
   \code{irq_o} of \code{periph_wrap} has no driver, and the top module reads it. The
   sign-off accepts the run. Checked operations see this case (chapter~\ref{ch:operations},
   \file{remove\_timer.py}).
-\item \textbf{Operations that cancel each other.} When a script adds something and then
-  removes it again, the pair leaves nothing behind. That holds for a port, a parameter, a
-  connection, a declaration and an assignment. Other orders can still fail the sign-off:
+\item \textbf{Operations that cancel each other.} A port, a parameter, a connection, a
+  declaration and an assignment each hold one check for a module and a name. The later
+  operation replaces the check of the earlier one, so a pair that cancels leaves nothing
+  behind in any order. These cases still fail the sign-off:
   \begin{itemize}
-  \item an operation that is undone and then done again, such as
-    \apiname{Module.add_wire}, \apiname{Module.remove_wire} and \apiname{Module.add_wire}
-    of one name, as the third transcript below shows
-  \item a port or a parameter of the input design that is removed, added again and
-    removed again
+  \item a parameter of the input design that is removed and added again, because
+    \apiname{Instance.set_param} registers the same expectation
+  \item a port of the input design that is removed and added again with another width,
+    type or direction
   \item \apiname{Instance.replace_module} and the replacement back
   \item \apiname{Vet.punch_port} undone with \apiname{Module.remove_port} in each module
     of the path
   \end{itemize}
-  Take such a pair out of the script, or make the change in another run. After a pair that
-  cancels, a raw edit that declares the name again inside a generate block is not seen.
+  No operation changes a port, so declare a change of width or direction with
+  \apiname{Vet.expect}. After a pair that cancels, a raw edit that declares the name again
+  inside a generate block is not seen.
 \item \textbf{Delays and strengths of a primitive.} The sign-off compares gate
   primitives, user-defined primitives and checkers by their type and their connections.
   It does not compare their delays or drive strengths. A raw edit that changes only
@@ -69,7 +70,6 @@ Items that say so were not checked by a test.
 
 \lstinputlisting[style=script]{examples/scripts/logic_change.py}
 \lstinputlisting[style=script]{examples/scripts/partial.py}
-\lstinputlisting[style=script]{examples/scripts/cancel.py}
 
 \lstinputlisting[style=console]{examples/console/limits.txt}
 

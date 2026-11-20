@@ -62,17 +62,14 @@ class _PlanOps(_VetHost):
                 out.extend((host, base) for base in driven_bases(c.expr))
         return out
 
-    def _drop_check(self, key: tuple[str, ...]) -> None:
-        """Forget the post-condition registered under `key`: an operation of this run undid it."""
-        self._checks = [c for c in self._checks if c.key != key]
-
     def _drop_registered(self, module: str, name: str) -> None:
         """Forget the post-conditions earlier operations registered for the instance `name` of `module`."""
         self._checks = [
             c
             for c in self._checks
             if not (
-                len(c.key) >= 3 and c.key[0] in ("replace_module", "conn", "param") and c.key[1:3] == (module, name)
+                c.key[1:3] == (module, name)
+                and (c.key[0] in ("replace_module", "conn") or (c.key[0] == "param" and len(c.key) == 4))
             )
         ]
 
@@ -137,11 +134,6 @@ class _PlanOps(_VetHost):
             self._added.setdefault(mod, {})[name] = value
         for kind, path, name in plan.cancels:
             self.session.drop_expect(kind, [path], name)
-        if plan.drops is not None:
-            self._drop_check(plan.drops)
-        if plan.unadded is not None:
-            mod, name = plan.unadded
-            self._added.get(mod, {}).pop(name, None)
         for kind, path, name in plan.expects:
             self.session.expect(kind, path, name, exact=True)
         for kind, path, name in plan.permits:
@@ -183,6 +175,9 @@ class _PlanOps(_VetHost):
             last = info.ports[-1]
             splices = _append_to_list(data, last.start, last.end, info.ports_close, item, eol)
 
+        base = self.session.baseline_snapshot()
+        had = any(name in base[p].ports for p in paths if p in base)
+        removed = set(self.session.expected_at("port-removed", name))
         return _Plan(
             "add_port",
             mod,
@@ -190,9 +185,10 @@ class _PlanOps(_VetHost):
             splices=splices,
             mark=("ports", mod),
             added=(mod, name, ("port", _norm(decl))),
-            expects=[("port-added", p, name) for p in paths],
+            expects=[("port-added", p, name) for p in paths if not had],
+            cancels=[("port-removed", p, name) for p in paths if p in removed],
             permits=[("connection-changed", p, name) for p in paths],
-            check=_Check(("add_port", mod, name), "add_port", (mod, name, decl)),
+            check=_Check(("port", mod, name), "add_port", (mod, name, decl)),
         )
 
     def _plan_add_param(
@@ -243,7 +239,7 @@ class _PlanOps(_VetHost):
             mark=("params", mod),
             added=(mod, name, ("param", _norm(decl))),
             expects=[("param-changed", p, name) for p in paths],
-            check=_Check(("add_param", mod, name), "add_param", (mod, name, str(default), str(type))),
+            check=_Check(("param", mod, name), "add_param", (mod, name, str(default), str(type))),
         )
 
     def _plan_assign(self, mod: str, info: ModuleInfo, target: str, expr: object, planned_port: bool = False) -> _Plan:
@@ -276,5 +272,5 @@ class _PlanOps(_VetHost):
             path=info.path,
             splices=[(ls, ls, text)],
             mark=("decls", mod),
-            check=_Check(("add_assign", mod, target, _norm(expr)), "add_assign", (mod, target, str(expr))),
+            check=_Check(("assign", mod, target), "add_assign", (mod, target, str(expr))),
         )

@@ -121,7 +121,13 @@ class Module:
             raise VetError(f"add_wire {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         type_text = f"{type}{_range(width)}"
         info = v._info(mod)
-        existing = next((d for d in info.decls if d.name == name), None)
+        # Inside a group a `remove_wire` of this name is queued but not loaded, so `info`
+        # still shows the declaration. Skipping on it signed off on a design without the
+        # wire, and left the name undeclared for the next operation. The registered check of
+        # the removal says so without a re-load, which would place the declaration above the
+        # one an earlier call of this run added instead of below it (#57).
+        gone = any(c.kind == "remove_wire" and c.key == ("wire", mod, name) for c in v._checks)
+        existing = None if gone else next((d for d in info.decls if d.name == name), None)
         if existing is not None:
             if _same(existing.type_text, type_text):
                 v._record("add_wire", mod, "skipped")
@@ -148,7 +154,7 @@ class Module:
         v._mark("decls", mod)
         v._added.setdefault(mod, {})[name] = ("decl", _norm(type_text))
 
-        v._set_check(_Check(("add_wire", mod, name), "add_wire", (mod, name, type_text)))
+        v._set_check(_Check(("wire", mod, name), "add_wire", (mod, name, type_text)))
         v._record("add_wire", mod, "applied")
 
     def add_assign(self, target: str, expr: object) -> None:
@@ -261,12 +267,6 @@ class Module:
                 )
             data = v.session.text(info.path)
             a, b = line_rule(data, decl.stmt_start, decl.stmt_end)
-            # A registered add_wire check means this session added the wire, so the pair cancels
-            # and that check can never hold again. The drop goes on the plan, because `run` can be
-            # tried again after a re-load and so must only read (#57). The kind is compared too:
-            # a key alone could come from a damaged archive under another kind.
-            made = next((c.key for c in v._checks if c.kind == "add_wire" and c.key == ("add_wire", mod, name)), None)
-
             v._commit_all(
                 op,
                 [
@@ -276,8 +276,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
-                        drops=made,
-                        check=_Check((op, mod, name), op, (mod, name)),
+                        check=_Check(("wire", mod, name), op, (mod, name)),
                     )
                 ],
             )
@@ -314,13 +313,6 @@ class Module:
             data = v.session.text(info.path)
             a, b = line_rule(data, assign.stmt_start, assign.stmt_end)
             v._drove.extend((mod, base) for base in driven_bases(assign.left))
-            # The same as in `remove_wire`, but the key of add_assign ends in the expression, so
-            # only its first three parts name the assignment.
-            made = next(
-                (c.key for c in v._checks if c.kind == "add_assign" and c.key[:3] == ("add_assign", mod, target)),
-                None,
-            )
-
             v._commit_all(
                 op,
                 [
@@ -330,8 +322,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
-                        drops=made,
-                        check=_Check((op, mod, "assign", target), op, (mod, target)),
+                        check=_Check(("assign", mod, target), op, (mod, target)),
                     )
                 ],
             )
@@ -368,16 +359,13 @@ class Module:
                         f"{op} {mod}: port {nxt.name!r} takes its direction and type from {name!r}; "
                         f"remove or declare it first"
                     )
-            # If this run added the port, the pair cancels: the text goes back to what it
-            # was, so neither change can be seen at the sign-off and neither expectation
-            # could be met. The inverses go on the plan, because `run` can be tried again
-            # after a re-load and so must only read (#57).
-            # Only when the design we started from had no such port: then this run added
-            # it, and removing it goes back to that design, so neither change can be seen.
-            # An expectation is the wrong signal, because `_expect_param` and others
-            # register the same kind for a change that does remain visible.
+            # An expectation of port-added means this run added the port, so the pair cancels
+            # and neither change can be seen. The cancel goes on the plan: `run` can be tried
+            # again after a re-load, so it must only read (#57). A real removal still expects
+            # port-removed when the design we started from had the port.
             base = v.session.baseline_snapshot()
-            undone = all(name not in base[p].ports for p in paths if p in base)
+            had = any(name in base[p].ports for p in paths if p in base)
+            added = set(v.session.expected_at("port-added", name))
             items = [(p.start, p.end) for p in info.ports]
             splices = edit_list(data, items, {at}, info.ports_close, _eol(data))
             if splices is None:
@@ -391,12 +379,10 @@ class Module:
                     path=info.path,
                     splices=splices,
                     mark=("ports", mod),
-                    expects=[] if undone else [("port-removed", p, name) for p in paths],
-                    cancels=[("port-added", p, name) for p in paths] if undone else [],
-                    drops=("add_port", mod, name) if undone else None,
-                    unadded=(mod, name) if undone else None,
+                    expects=[("port-removed", p, name) for p in paths] if had else [],
+                    cancels=[("port-added", p, name) for p in paths if p in added],
                     permits=[("connection-changed", p, name) for p in paths],
-                    check=_Check((op, mod, name), op, (mod, name)),
+                    check=_Check(("port", mod, name), op, (mod, name)),
                 )
             ]
             for host, inst in hosts:
@@ -458,8 +444,8 @@ class Module:
                     splices = [(info.name_end, info.params_close + 1, _list_gap(data, info.params_close))]
                 else:
                     splices = [remove_all(data, decls)]
-            # If this run added the parameter, the pair cancels; see remove_port (#57).
-            # Only when the design we started from had no such parameter; see remove_port.
+            # If this run added the parameter, the pair cancels (#57). The baseline decides here,
+            # not an expectation: `_expect_param` registers param-changed for a change that stays.
             base = v.session.baseline_snapshot()
             undone = all(name not in base[p].params for p in paths if p in base)
             hosts = v._instances_of(mod)
@@ -472,9 +458,7 @@ class Module:
                     mark=("params", mod),
                     expects=[] if undone else [("param-changed", p, name) for p in paths],
                     cancels=[("param-changed", p, name) for p in paths] if undone else [],
-                    drops=("add_param", mod, name) if undone else None,
-                    unadded=(mod, name) if undone else None,
-                    check=_Check((op, mod, name), op, (mod, name)),
+                    check=_Check(("param", mod, name), op, (mod, name)),
                 )
             ]
             for host, inst in hosts:

@@ -83,8 +83,9 @@ it. Two names differ: `.instance(name)` returns an Instance handle and
         differs or the name is taken by anything else. VetError for a non-ANSI
         or absent port list, or when the module header (name through its ";")
         contains macro tokens; macros in the body do not matter.
-        Requires: port-added on every path. Permits: connection-changed for
-        that port on every path.
+        Requires: port-added on every path, but only when the design we started
+        from had no such port (rule W12). Forgets a registered port-removed.
+        Permits: connection-changed for that port on every path.
     .add_param(name, default, type="int")
         Declaration `parameter {type} {name} = {default}`, placed after the last
         parameter by the same rule as ports. A module without a parameter port
@@ -807,8 +808,57 @@ def test_removing_a_parameter_the_design_already_had_still_expects_the_change(ve
 #   W3  Only the check of the operation that was undone goes. Every other check stays.
 #   W4  A declaration or an assignment of the design we started from is a real change
 #       when it goes. Its check stays.
-#   W5  What decides the cancellation is a registered check of the add, not the design we
-#       started from. A wire of that design can be removed, added again and removed again.
+#   W5  A wire of the design we started from can be removed, added again and removed
+#       again. Part 1 decided this from a registered check of the add; W6 replaced that
+#       mechanism with one shared key, and the behaviour this rule names stays.
+#
+# Rules for every pair, in every order (#57, part 2). They replace the mechanism behind W1,
+# W2 and W5. What W1 to W5 promise stays as it is.
+#   W6  A pair holds ONE check for a module and a name. The pairs are add_wire and
+#       remove_wire, add_assign and remove_assign, add_port and remove_port, add_param and
+#       remove_param. The check of the later operation replaces the check of the earlier
+#       one, in every order. The key of an assignment does not hold the expression.
+#   W7  An item that is added, removed and added again signs off. The text is the text of
+#       one addition, and the check that is left is the check of the last addition.
+#   W8  An item of the design we started from that is removed, added again and removed
+#       again signs off as one removal.
+#   W9  remove_port forgets a `port-added` expectation when one is registered for the path
+#       and the name. Only add_port registers that kind, so it proves that this run added
+#       the port. remove_port still expects `port-removed` when the design we started from
+#       had the port.
+#   W10 remove_param does NOT follow W9. `param-changed` is also registered by set_param,
+#       so a registered expectation proves nothing. remove_param forgets and expects by
+#       the design we started from, as before.
+#   W11 A declaration or an assignment of the design we started from that is removed and
+#       added again signs off. This pair has a check and no structural expectation.
+#   W12 The mirror of W9, for add_port. It has two halves, and both are needed.
+#       (a) add_port forgets a `port-removed` expectation when one is registered for the
+#           path and the name. Only remove_port registers that kind, so it proves that
+#           this run removed the port.
+#       (b) add_port expects `port-added` only when the design we started from had no such
+#           port. This changes add_port, which expected `port-added` in every case before.
+#       So for a port, what a call expects is decided from the design we started from, and
+#       what it forgets is decided from a registered expectation of the other operation.
+#       With (a) alone, a port that is removed and added again leaves `port-added`
+#       unmatched. With both, it signs off with no expectation left.
+#       What makes this safe is worth stating, because it is not the structural layer.
+#       remove_port deletes the port's connection from every instance and add_port does
+#       not put it back, and both register `connection-changed` as a permit only, so the
+#       sign-off's own layer accepts the pair with nothing unexpected, unmatched or
+#       failed. The run is caught by the compiler instead, which reports
+#       UnconnectedInputPort, UnconnectedOutputPort or UnconnectedInOutPort for the port
+#       by name. Anyone who makes those warnings non-fatal opens a hole here.
+#   W13 A check of a module parameter has the key `param`, the module and the name. A
+#       check of `set_param` has the key `param`, the module, the instance and the name.
+#       remove_instance drops only the second form, whatever the instance is called.
+#   Stated limit, and the correct outcome: no operation changes a port. A port of the
+#   design we started from that is removed and added again with another width or
+#   direction shows a `port-changed` that nothing expects, and the sign-off fails. The
+#   script must declare that change itself with `vet.expect`. Do not make it pass silently.
+#   Stated limit, not fixed: a PARAMETER of the design we started from that is removed and
+#   added again (two steps) does not sign off. Each step registers `param-changed`, and
+#   the final design shows no change. `param-changed` is shared with set_param, so there
+#   is no sound signal that this run removed the parameter (see W10).
 
 HELD = (
     "module top (\n"
@@ -912,13 +962,16 @@ def test_removing_an_assignment_the_design_already_had_is_still_a_checked_change
 
 
 def test_a_wire_of_the_input_design_can_be_removed_added_and_removed_again(tmp_path: Path) -> None:
-    """#57, rule W5. This is why the cancellation is keyed on a registered check.
+    """#57, rule W5. A removal, an addition and a removal of one name, in one run.
 
     The design we started from held `u`. The run takes it out, puts it back with another
-    width, and takes it out again. The final design has no `u`, and the `add_wire` of the
-    middle step was undone, so its check has to go. Keying the decision on the design we
-    started from would keep that check, because that design did hold `u`, and the sign-off
-    would fail a run that is correct.
+    width, and takes it out again. The final design has no `u`, so the run is correct and
+    has to sign off.
+
+    Part 1 reached this by retiring the check of the middle `add_wire`, and the rule it
+    used had to be a registered check rather than the design we started from, because that
+    design did hold `u`. W6 replaced the mechanism: one shared key per pair, so the last
+    operation's check is simply the one left. The behaviour this test names is unchanged.
     """
     vet, path = held(tmp_path / "a")
     top = vet.module("top")
@@ -930,3 +983,293 @@ def test_a_wire_of_the_input_design_can_be_removed_added_and_removed_again(tmp_p
     assert r.ok, r.report()
     assert b"logic [3:0] u;" not in r.files[path]
     assert b"logic [7:0] u;" not in r.files[path]
+
+
+# --- every pair, in every order (#57, part 2): rules W6 to W11 ---------------------------
+
+PAIRED = (
+    "module child #(\n"
+    "  parameter int W = 1,\n"
+    "  parameter int SPARE = 0\n"
+    ") (\n"
+    "  input  logic a,\n"
+    "  input  logic spare,\n"
+    "  output logic q\n"
+    ");\n"
+    "  assign q = a;\n"
+    "endmodule\n"
+    "\n"
+    "module top (\n"
+    "  input  logic a,\n"
+    "  output logic q\n"
+    ");\n"
+    "  child u (.a(a), .spare(1'b0), .q(q));\n"
+    "endmodule\n"
+)
+
+
+def paired(root: Path) -> tuple[Vet, Path]:
+    """A design whose `child` already holds a port (`spare`) and a parameter (`SPARE`) that nothing needs."""
+    root.mkdir()
+    (root / "d.sv").write_bytes(PAIRED.encode())
+    (root / "d.f").write_bytes(b"d.sv\n")
+    return Vet(Session(root / "d.f", top="top")), root / "d.sv"
+
+
+def seen(r) -> list[tuple[str, str, str]]:
+    return sorted((c.kind, c.path, c.name) for c in r.changes)
+
+
+def test_a_wire_can_be_added_removed_and_added_again(vet: Vet) -> None:
+    """#57, rules W6 and W7, for a declaration.
+
+    The check of `remove_wire` used to stay under a key of its own. The wire is there at
+    the sign-off, so that check failed a run that is correct.
+    """
+    top = vet.module("top")
+    top.add_wire("t", width=4)
+    top.remove_wire("t")
+    top.add_wire("t", width=4)
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == ["+  logic [3:0] t;"]
+    assert [(op, status) for op, _, status in statuses(vet)] == [
+        ("add_wire", "applied"),
+        ("remove_wire", "applied"),
+        ("add_wire", "applied"),
+    ]
+
+
+def test_an_assignment_can_be_added_removed_and_added_again(vet: Vet) -> None:
+    """#57, rules W6 and W7, for an assignment.
+
+    The second expression differs from the first. The key holds no expression, so the
+    check of the second `add_assign` replaces the check of the `remove_assign`.
+    """
+    top = vet.module("top")
+    top.add_wire("t", width=4)
+    top.add_assign("t", "a")
+    top.remove_assign("t")
+    top.add_assign("t", "~a")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == ["+  logic [3:0] t;", "+  assign t = ~a;"]
+
+
+def test_a_port_can_be_added_removed_and_added_again(vet: Vet) -> None:
+    """#57, rules W6, W7 and W9, for a port.
+
+    The `remove_port` forgets the `port-added` expectation of the first `add_port`. The
+    second `add_port` registers it again, and the final design shows that change once.
+    """
+    top = vet.module("top")
+    top.add_port("dft_en", "input")
+    top.remove_port("dft_en")
+    top.add_port("dft_en", "input")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == ["-  output logic [3:0] y1", "+  output logic [3:0] y1,", "+  input  logic dft_en"]
+    assert r.changes == [Change("port-added", "top", "dft_en", None, "input 1")]
+
+
+def test_a_parameter_can_be_added_removed_and_added_again(vet: Vet) -> None:
+    """#57, rules W6, W7 and W10, for a parameter."""
+    mid = vet.module("mid")
+    mid.add_param("DFT", 0)
+    mid.remove_param("DFT")
+    mid.add_param("DFT", 0)
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == ["-module mid (", "+module mid #(parameter int DFT = 0) ("]
+    assert seen(r) == [("param-changed", "top.u_mid", "DFT")]
+
+
+def test_an_assignment_of_the_input_design_can_be_removed_added_and_removed_again(tmp_path: Path) -> None:
+    """#57, rule W8, for an assignment. A guard: this order already signed off."""
+    vet, _ = held(tmp_path / "a")
+    top = vet.module("top")
+    top.remove_assign("t")
+    top.add_assign("t", "~a")
+    top.remove_assign("t")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == ["-  assign t = a;"]
+
+
+def test_a_port_of_the_input_design_can_be_removed_added_and_removed_again(tmp_path: Path) -> None:
+    """#57, rules W8 and W9, for a port.
+
+    The design we started from had `spare`, so the old rule did not see the second
+    `remove_port` as undoing the `add_port`. The check and the `port-added` expectation of
+    the `add_port` stayed, and both failed. The run is one removal and must sign off as one.
+    """
+    vet, _ = paired(tmp_path / "a")
+    child = vet.module("child")
+    child.remove_port("spare")
+    child.add_port("spare", "input")
+    child.remove_port("spare")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == [
+        "-  input  logic spare,",
+        "-  child u (.a(a), .spare(1'b0), .q(q));",
+        "+  child u (.a(a), .q(q));",
+    ]
+    assert seen(r) == [("connection-changed", "top.u", "spare"), ("port-removed", "top.u", "spare")]
+
+
+def test_a_parameter_of_the_input_design_can_be_removed_added_and_removed_again(tmp_path: Path) -> None:
+    """#57, rules W8 and W10, for a parameter.
+
+    The expectation was never the fault here, because the final design does differ from the
+    one we started from. The check of the `add_param` stayed and failed.
+    """
+    vet, _ = paired(tmp_path / "a")
+    child = vet.module("child")
+    child.remove_param("SPARE")
+    child.add_param("SPARE", 0)
+    child.remove_param("SPARE")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert edits(r.diff) == ["-  parameter int W = 1,", "-  parameter int SPARE = 0", "+  parameter int W = 1"]
+    assert seen(r) == [("param-changed", "top.u", "SPARE")]
+
+
+def test_a_wire_of_the_input_design_can_be_removed_and_added_again(tmp_path: Path) -> None:
+    """#57, rules W6 and W11, for a declaration. The check of the `remove_wire` used to stay and fail."""
+    vet, path = held(tmp_path / "a")
+    top = vet.module("top")
+    top.remove_wire("u")
+    top.add_wire("u", width=4)
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert r.files[path].count(b"  logic [3:0] u;\n") == 1
+
+
+def test_an_assignment_of_the_input_design_can_be_removed_and_added_again(tmp_path: Path) -> None:
+    """#57, rules W6 and W11, for an assignment."""
+    vet, path = held(tmp_path / "a")
+    top = vet.module("top")
+    top.remove_assign("t")
+    top.add_assign("t", "~a")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert b"  assign t = ~a;\n" in r.files[path]
+    assert b"assign t = a;" not in r.files[path]
+
+
+def test_removing_a_port_the_design_already_had_is_still_a_checked_change(tmp_path: Path) -> None:
+    """#57, rules W4 and W9. The guard against cancelling too much, for a port.
+
+    No `port-added` expectation is registered, so nothing is forgotten. The removal is
+    expected and seen, and the check of `remove_port` fires when the port comes back.
+    """
+    vet, path = paired(tmp_path / "a")
+    vet.module("child").remove_port("spare")
+    r = vet.finish()
+    assert r.ok, r.report()
+    assert seen(r) == [("connection-changed", "top.u", "spare"), ("port-removed", "top.u", "spare")]
+    assert b"spare" not in r.files[path]
+
+    vet, path = paired(tmp_path / "b")
+    vet.module("child").remove_port("spare")
+    corrupt(vet, path, b"  output logic q\n);\n  assign q", b"  output logic q,\n  input  logic spare\n);\n  assign q")
+    assert vet.finish().failed_checks == ["remove_port child spare: the port is still there in the final design"]
+
+
+def test_removing_a_parameter_the_design_already_had_is_still_a_checked_change(tmp_path: Path) -> None:
+    """#57, rules W4 and W10. The guard against cancelling too much, for a parameter."""
+    vet, path = paired(tmp_path / "a")
+    vet.module("child").remove_param("SPARE")
+    r = vet.finish()
+    assert r.ok, r.report()
+    assert seen(r) == [("param-changed", "top.u", "SPARE")]
+    assert b"SPARE" not in r.files[path]
+
+    vet, path = paired(tmp_path / "b")
+    vet.module("child").remove_param("SPARE")
+    corrupt(vet, path, b"  parameter int W = 1\n", b"  parameter int W = 1,\n  parameter int SPARE = 0\n")
+    assert vet.finish().failed_checks == ["remove_param child SPARE: the parameter is still there in the final design"]
+
+
+def test_remove_param_after_set_param_still_expects_the_change(vet: Vet) -> None:
+    """#57, rule W10. Why `remove_param` cannot follow rule W9.
+
+    `set_param` registers a `param-changed` expectation for `DEPTH` on one instance. The
+    design we started from had `DEPTH`, so the removal is a real change on all three
+    instances. A `remove_param` that forgot on a registered expectation would drop the
+    expectation of one instance and leave a change that nothing expects.
+
+    This test does not assert `r.ok`. The check of the `set_param` is stale after the
+    removal, which is a fault of another pair and not of this rule.
+    """
+    vet.module("mid").instance("u_l1").set_param("DEPTH", 4, was=3)
+    vet.module("leaf", instances=3).remove_param("DEPTH")
+    r = vet.finish()
+    why = "remove_param forgot an expectation that set_param registered (rule W10): "
+    assert r.unexpected_changes == [], why + str([str(c) for c in r.unexpected_changes])
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert [c.kind for c in r.changes] == ["param-changed"] * 3, [str(c) for c in r.changes]
+
+
+def test_a_port_of_the_input_design_can_be_removed_and_added_again(tmp_path: Path) -> None:
+    """#57, rules W6 and W12, for a port.
+
+    The two steps used to leave `port-removed` and `port-added` unmatched, because the
+    final design has the port as the design we started from had it. The `add_port` forgets
+    the `port-removed`, and its own `port-added` is not registered for a port that this
+    run only put back.
+
+    The port is connected again to another signal. An input that is left open is a new
+    warning, and a `connect` to the old value expects a change that cannot be seen. Both
+    are faults of the script or of another pair, so this test avoids them.
+    """
+    vet, path = paired(tmp_path / "a")
+    child = vet.module("child")
+    child.remove_port("spare")
+    child.add_port("spare", "input")
+    vet.module("top").instance("u").connect("spare", "a")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert seen(r) == [("connection-changed", "top.u", "spare")]
+    assert r.files[path].count(b"  input  logic spare\n") == 1
+    assert b"  child u (.a(a), .q(q), .spare(a));\n" in r.files[path]
+
+
+def test_remove_instance_keeps_the_check_of_a_module_parameter(vet: Vet, kit) -> None:
+    """#57, rule W13. The key of a module parameter must not read as the key of an override.
+
+    A parameter and an instance cannot share a name in one module, and no operation can
+    produce that shape. The only way to reach a check of a parameter and an instance of the
+    same name is a raw splice, which is a public operation. This test uses one.
+
+    The parameter `DFT` is added and removed. A raw splice then renames an instance to
+    `DFT`, and the instance is removed. That must not drop the check of the `remove_param`,
+    which has to fire when the parameter comes back.
+    """
+    top = vet.module("top")
+    top.add_param("DFT", 0)
+    top.remove_param("DFT")
+    corrupt(vet, kit.top, b"leaf u_spare (", b"leaf DFT (")
+    top.remove_instance("DFT")
+    corrupt(vet, kit.top, b"module top (", b"module top #(parameter int DFT = 0) (")
+    r = vet.finish()
+    assert "remove_param top DFT: the parameter is still there in the final design" in r.failed_checks

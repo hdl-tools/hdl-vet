@@ -242,7 +242,17 @@ def _retarget(module: Module, net: str, keep: str, found: _Found) -> None:
     out: list[_Check] = []
     for c in v._checks:
         if found.kind == "assign" and c.kind == "add_assign" and c.args[:2] == (mod, net):
-            c = _Check((c.key[0], c.key[1], keep, *c.key[3:]), c.kind, (mod, keep, *c.args[2:]))
+            moved = (c.key[0], c.key[1], keep, *c.key[3:])
+            # This rewrite does not go through `_set_check`, so it has to refuse a key that
+            # another post-condition already holds. An assignment and its removal share one
+            # key, so a `keep` name an earlier operation of this run touched would give two
+            # checks under one key. `save` accepts that and `restore` refuses it as damaged.
+            if any(other.key == moved for other in v._checks if other is not c):
+                raise VetError(
+                    f"{_OP} {mod}: the keep name {keep!r} already has a post-condition from an "
+                    f"earlier operation of this run; choose a name this run has not touched"
+                )
+            c = _Check(moved, c.kind, (mod, keep, *c.args[2:]))
         elif (
             found.kind == "instance"
             and c.kind == "conn"

@@ -24,7 +24,7 @@ Reading an archive
         SessionError naming the file (exit 2 on the command line, no
         traceback). That includes index JSON nested too deeply to parse.
     R2  Types in the index are checked, not coerced: `format` must be the
-        integer 1 (not true, not 1.0, not "1"); strings must be strings,
+        integer 2 (not true, not 2.0, not "2"); strings must be strings,
         counts and offsets integers (booleans are not integers), lists lists.
         Unknown fields are ignored.
     R3  Size: before anything is read into memory, the uncompressed sizes the
@@ -210,8 +210,8 @@ def test_deeply_nested_index_json_is_a_clean_refusal(kit, tmp_path: Path, capsys
     assert "Traceback" not in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("value", [True, 1.0, "1", None, [1]])
-def test_the_format_must_be_the_integer_one(kit, tmp_path: Path, value):
+@pytest.mark.parametrize("value", [True, 2.0, "2", None, [2]])
+def test_the_format_must_be_the_integer_two(kit, tmp_path: Path, value):
     def change(index):
         index["format"] = value
         return index

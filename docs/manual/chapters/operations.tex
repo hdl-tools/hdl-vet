@@ -706,8 +706,10 @@ override), the rule is:
   \item any instance whose connection list cannot be edited
   \end{itemize}
 \item[Again] hdl-vet skips the operation when the module has no such port.
-\item[Sign-off] The sign-off requires \code{port-removed} at every path. It permits
-  \code{connection-changed} for the port.
+\item[Sign-off] The sign-off requires \code{port-removed} at every path when the input
+  design had the port. It permits \code{connection-changed} for the port. When
+  \apiname{Module.add_port} of this run added the port, the removal forgets that
+  expectation instead, so the pair leaves nothing behind.
 \item[Example] \file{retire.py}.
 \end{entry}
 
