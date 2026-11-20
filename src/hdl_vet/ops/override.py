@@ -170,6 +170,8 @@ def _run(
     other = v._other_use(info, keep_name, _OP)
     if other is not None:
         raise fail(f"the name {keep_name!r} is already used by {other}")
+    v._refuse_disabled(_OP, mod, info, keep_name)
+    v._refuse_disabled(_OP, mod, info, net)
     if waiver is None and not equiv.available():
         raise fail(
             "the equivalence check needs Yosys, which is not installed (install the extra hdl-vet[equiv]); "

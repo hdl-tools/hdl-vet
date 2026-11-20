@@ -143,7 +143,9 @@ def _disabled_names(syn: Any) -> dict[str, str]:
             label = kind if expr is None else f"{kind} {str(expr).strip()}"
             for tok in disabled:
                 if tok.kind == ident:
-                    out.setdefault(tok.rawText, label)
+                    # valueText, not rawText: IEEE 1800 says an escaped identifier of simple-identifier characters
+                    # IS that simple identifier, so '\hidden ' must key as 'hidden'.
+                    out.setdefault(tok.valueText, label)
 
     syn.visit(scan)
     return out

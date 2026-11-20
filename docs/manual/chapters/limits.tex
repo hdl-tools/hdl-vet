@@ -66,6 +66,12 @@ Items that say so were not checked by a test.
 \item \textbf{One configuration.} The sign-off sees the design with the defines of the
   file list. An operation refuses a list that holds a conditional compilation directive,
   because it cannot check another configuration.
+\item \textbf{An expression that names a signal of one configuration.} The value of
+  \apiname{Module.override_net} and the expression of \apiname{Module.add_assign} are
+  written into text that no directive guards. Such an expression can name a signal that
+  only the active branch of a conditional directive declares. The edited design then does
+  not compile in the other configuration, and the sign-off accepts the run. hdl-vet does
+  not check an expression against the directives.
 \end{itemize}
 
 \lstinputlisting[style=script]{examples/scripts/logic_change.py}
@@ -194,6 +200,16 @@ or with a raw splice.
 \item modules with a non-ANSI port list (for port operations), and module headers with
   a macro
 \item ports and parameters inside conditional compilation directives
+\item any name that text disabled by a conditional directive holds. Such a name can stop
+  the module compiling in the other configuration. Every operation that adds or removes a
+  name refuses it, and so does \apiname{Module.override_net}, for the net and the name it
+  keeps. The set of such names is coarse:
+  \begin{itemize}
+  \item every identifier of the disabled text counts, also one that it only reads
+  \item the name of a macro defined in that text counts, and so do the names of its
+    arguments
+  \item a name that a macro spells is not seen at all, so nothing refuses it
+  \end{itemize}
 \item modules that are not instantiated under the top module
 \item modules that come from an added file. hdl-vet never edits an added file.
 \item interface ports. \apiname{Vet.punch_port} refuses them and
