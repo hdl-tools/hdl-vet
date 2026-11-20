@@ -61,12 +61,14 @@ class _HierRefOps(_DesignHost):
     def combinational_closure(self, module: str, net: str) -> frozenset[str]:
         """Every module-level name that `net` drives through combinational logic in `module`.
 
-        The walk follows `assign` and combinational procedural blocks (`always_comb`,
-        `always_latch`, and any `always` that is not edge-clocked on every event) inside the
-        one module body. It does not enter a child instance: the drivers of a net that a
-        child drives stop there. It does not follow a clocked block. In doubt a block is
-        combinational, so the walk refuses more, not less. The result is the union over every
-        elaborated body of `module`.
+        Fails closed: what the walk cannot classify, it follows. Every driver of a net is followed
+        (an `assign`, a combinational block, a gate primitive), and of each driver the WHOLE
+        symbol is read, so a condition, a case selector, a loop bound and an index on the left
+        side count as reads, and so does a name that the driver itself writes. A net declared
+        with an initialiser (`wire t = n;`) also reads the initialiser. Only two things end the
+        walk: a driver that is a child instance (a stated limit), and a driver that is an
+        edge-clocked procedural block (a register). An input port is skipped. The walk stays in
+        the one module body. The result is the union over every elaborated body of `module`.
         """
         sk, ek, pk = pyslang.ast.SymbolKind, pyslang.ast.ExpressionKind, pyslang.ast.ProceduralBlockKind
         an = self._analyze()
@@ -103,15 +105,13 @@ class _HierRefOps(_DesignHost):
                 out: set[str] = set()
                 for d in drivers:
                     cs = d.containingSymbol
-                    if d.isInputPort:
+                    if d.isInputPort or cs.kind == sk.Instance:
                         continue
-                    if cs.kind == sk.ContinuousAssign:
-                        out |= reads(cs.assignment.right)
-                    elif cs.kind == sk.ProceduralBlock and not clocked(cs):
-                        found: list[Any] = []
-                        cs.visit(lookup_table={ek.Assignment: found.append})
-                        for a in found:
-                            out |= reads(a.right)
+                    if cs.kind == sk.ProceduralBlock and clocked(cs):
+                        continue
+                    out |= reads(cs)
+                if getattr(sym, "initializer", None) is not None:
+                    out |= reads(sym.initializer)
                 return {x for x in out if body.find(x) is not None}
 
             if body.find(net) is None:

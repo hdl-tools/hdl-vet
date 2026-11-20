@@ -133,9 +133,10 @@ def check_expression(text: str) -> str | None:
 
 
 def value_identifiers(text: str) -> frozenset[str]:
-    """The names that the expression `text` writes (also the first name of a select or a path).
+    """Every name that the expression `text` writes, each name of a select or a path included.
 
-    Read from the syntax tree, not from the text. An escaped name is given without its backslash.
+    `top.u_o.t` gives `t`, `top` and `u_o`. Read from the syntax tree, not from the text.
+    An escaped name is given without its backslash.
     """
     tree = pyslang.syntax.SyntaxTree.fromText(f"module _p;\nassign _x = _e ? {text} : _k;\nendmodule\n")
     kinds = (pyslang.syntax.SyntaxKind.IdentifierName, pyslang.syntax.SyntaxKind.IdentifierSelectName)
@@ -146,6 +147,25 @@ def value_identifiers(text: str) -> frozenset[str]:
             found.add(str(node.identifier.valueText))
 
     tree.root.visit(visit)
+    return frozenset(found - {"_x", "_e", "_k"})
+
+
+def value_head_identifiers(text: str) -> frozenset[str]:
+    """The names that the expression `text` reads in this scope: the first name of each path, not the rest.
+
+    `top.u_o.t` gives `top`; `t[i]` gives `t` and `i`. A name on the right of a `.` belongs to
+    another scope. Its own select indexes are still read. Same syntax tree as `value_identifiers`.
+    """
+    tree = pyslang.syntax.SyntaxTree.fromText(f"module _p;\nassign _x = _e ? {text} : _k;\nendmodule\n")
+    kinds = (pyslang.syntax.SyntaxKind.IdentifierName, pyslang.syntax.SyntaxKind.IdentifierSelectName)
+    nodes: list[Any] = []
+    tree.root.visit(
+        lambda n: (
+            nodes.append(n) if getattr(n, "kind", None) in (*kinds, pyslang.syntax.SyntaxKind.ScopedName) else None
+        )
+    )
+    tails = {n.right.sourceRange.start.offset for n in nodes if n.kind == pyslang.syntax.SyntaxKind.ScopedName}
+    found = {str(n.identifier.valueText) for n in nodes if n.kind in kinds and n.sourceRange.start.offset not in tails}
     return frozenset(found - {"_x", "_e", "_k"})
 
 
