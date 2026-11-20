@@ -242,6 +242,8 @@ class Module:
     def remove_wire(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_wire"
         v._refuse_scope(op, mod)
+        if not is_simple_identifier(name):
+            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         self._confirm_instances(op)
 
         def run() -> None:
@@ -333,6 +335,8 @@ class Module:
     def remove_port(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_port"
         v._refuse_scope_with_hosts(op, mod)
+        if not is_simple_identifier(name):
+            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         paths = self._confirm_instances(op)
 
         def run() -> None:
@@ -409,6 +413,8 @@ class Module:
     def remove_param(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_param"
         v._refuse_scope_with_hosts(op, mod)
+        if not is_simple_identifier(name):
+            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         paths = self._confirm_instances(op)
 
         def run() -> None:

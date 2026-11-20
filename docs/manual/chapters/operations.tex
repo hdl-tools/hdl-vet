@@ -683,11 +683,13 @@ override), the rule is:
   (line rule).
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a name that is not a simple identifier, or that is a SystemVerilog keyword
   \item a name that is a port or something other than a net or variable
   \item a declaration that declares several names, comes from a macro or an include, or
     is in a generate block
   \end{itemize}
-\item[Again] hdl-vet skips the operation when nothing of that name is declared.
+\item[Again] hdl-vet skips the operation when the name is valid and nothing of that name
+  is declared.
 \item[Example] \file{group.py}.
 \end{entry}
 
@@ -711,13 +713,15 @@ override), the rule is:
   to it at every instance of the module.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a name that is not a simple identifier, or that is a SystemVerilog keyword
   \item a port whose successor takes its direction or type from it (a declaration like
     \code{output logic [3:0] y0, y1})
   \item a non-ANSI port list
   \item a header with a macro
   \item any instance whose connection list cannot be edited
   \end{itemize}
-\item[Again] hdl-vet skips the operation when the module has no such port.
+\item[Again] hdl-vet skips the operation when the name is valid and the module has no
+  such port.
 \item[Sign-off] The sign-off requires \code{port-removed} at every path when the input
   design had the port. It permits \code{connection-changed} for the port. When
   \apiname{Module.add_port} of this run added the port, the removal forgets that
@@ -730,11 +734,13 @@ override), the rule is:
   override at every instance.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a name that is not a simple identifier, or that is a SystemVerilog keyword
   \item a parameter that is declared in the body
   \item a declaration of several names
   \item a header with a macro
   \end{itemize}
-\item[Again] hdl-vet skips the operation when the module has no such parameter.
+\item[Again] hdl-vet skips the operation when the name is valid and the module has no
+  such parameter.
 \item[Sign-off] The sign-off requires \code{param-changed} at every path.
 \item[Example] \file{retire.py}.
 \end{entry}
