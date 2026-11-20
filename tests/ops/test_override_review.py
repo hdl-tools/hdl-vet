@@ -93,7 +93,8 @@ import pytest
 
 from hdl_vet import equiv
 from hdl_vet.cli import main
-from hdl_vet.ops import DriftError, VetError
+from hdl_vet.ops import DriftError, Vet, VetError
+from hdl_vet.session import Session
 from override_design import CORE, FILES, TOP, Design, needs_yosys, records, statuses, with_enable
 
 pytestmark = [pytest.mark.equiv]
@@ -494,3 +495,47 @@ def test_the_detail_names_no_work_folder_of_the_engine(tmp_path: Path, monkeypat
     for work in seen:
         assert work.as_posix().lower() not in flat
         assert work.name.lower() not in flat
+
+
+# --- the keep name and the shared key of an assignment (#57) ---------------------------------------
+#
+# K1  `_retarget` moves the post-condition of an `add_assign` onto the keep name, and it does
+#     not go through `_set_check`. An assignment and its removal share one key since #57, so a
+#     keep name an earlier operation of this run touched would leave two checks under one key.
+#     `Vet.save` accepted that and `Vet.restore` refused the archive it wrote as damaged, so
+#     `override_net` refuses the name instead.
+
+
+KEEP_TAKEN = (
+    "module top (input logic a, output logic o);\n"
+    "  M u (.a(a), .o(o));\n"
+    "endmodule\n"
+    "module M (input logic a, output logic o);\n"
+    "  logic n;\n"
+    "  logic k;\n"
+    "  assign k = a;\n"
+    "  assign o = n;\n"
+    "endmodule\n"
+)
+
+
+def test_a_keep_name_this_run_touched_is_refused(tmp_path: Path, monkeypatch) -> None:
+    """K1. The run frees `k` and then asks for it as the keep name.
+
+    Removing the assignment and the declaration of `k` leaves post-conditions under the key
+    `("assign", "M", "k")` and `("wire", "M", "k")`. The keep name then collides with the
+    first of them. The refusal names the operation and the module, as every refusal does.
+    """
+    monkeypatch.setattr(equiv, "available", lambda: False)
+    (tmp_path / "d.sv").write_bytes(KEEP_TAKEN.encode())
+    (tmp_path / "d.f").write_bytes(b"d.sv\n")
+    vet = Vet(Session(tmp_path / "d.f", top="top"))
+    with pytest.raises(VetError, match=r"override_net M: the keep name 'k' already has"):
+        with vet.group():
+            mod = vet.module("M")
+            mod.remove_assign("k")
+            mod.remove_wire("k")
+            mod.add_port("en", "input")
+            vet.module("top").instance("u").connect("en", "a")
+            mod.add_assign("n", "a")
+            mod.override_net("n", "1'b0", enable="en", keep="k", waiver="no prover in this test")

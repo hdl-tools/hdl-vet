@@ -169,9 +169,9 @@ examples:
 \end{itemize}
 
 If you see one, look at the later operations of your script (or of a later script).
-One of them changed what this operation wrote. Two operations that cancel each
-other, such as \apiname{Module.add_wire} and \apiname{Module.remove_wire} on the same name,
-fail in this way.
+One of them changed what this operation wrote. A pair that cancels, such as
+\apiname{Module.add_wire} and \apiname{Module.remove_wire} on one name, does not fail in
+this way. The two share one check, and the later one replaces it.
 
 Skipped operations register no check.
 
@@ -380,8 +380,8 @@ numbers in \code{<TYPE:N>} shift. The report then shows several changes for one 
 
 An expectation or a permission must cover every change, and every
 expectation must match a change. Operations register their own. For example,
-\apiname{Module.add_port} requires \code{port-added} at every path of the module, and
-permits \code{connection-changed} for the port. You add your own with \apiname{Vet.expect}
+\apiname{Module.add_port} requires \code{port-added} at every path of the module when the
+input design had no such port, and permits \code{connection-changed} for the port. You add your own with \apiname{Vet.expect}
 and \apiname{Vet.permit}.
 
 \section{Name the top module}

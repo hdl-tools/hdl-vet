@@ -36,6 +36,12 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         self._checks: list[_Check] = []  # in the order registered; a key is there once
         self._dirty: set[tuple[str, ...]] = set()
         self._all = False
+        # What this run added, per module: an `add_*` consults it to skip or to report drift.
+        # `_sync` clears it on every re-load, and nothing removes a single entry any more
+        # (#57 deleted `_Plan.unadded`). That is safe only because every removal re-loads
+        # before the next addition reads this, through `_begin` or `_refresh_all_dirty`. An
+        # addition that stopped re-loading would read a stale entry here
+        # and skip, leaving the sign-off to pass a design without the item.
         self._added: dict[str, dict[str, tuple[str, str]]] = {}
         self._seen = session.reloads
         self._paths: dict[str, list[str]] | None = None

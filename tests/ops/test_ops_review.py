@@ -86,6 +86,15 @@ The removal check after a cancelled addition (#57)
     still there when any generate block declares its own local `tmp`. A
     name-only set cannot tell the two apart. The same holds for
     `generate_assigned` and `remove_assign`.
+
+One check for a pair (#57, part 2)
+    An addition and its removal share one key, so the later operation replaces
+    the post-condition of the earlier one. See rules W6 to W11 in `test_ops.py`.
+    C3  Exactly one post-condition is left for the pair, and it is the one of
+        the last operation, with its own evaluator and its own arguments. It
+        fires when the design does not show what that operation did. Sharing
+        the key must not lose the check, and must not run the evaluator of the
+        other operation.
 """
 
 from __future__ import annotations
@@ -475,3 +484,103 @@ def test_an_assignment_back_as_a_part_select_fails_the_removal(tmp_path: Path):
     r = vet.finish()
     assert not r.ok
     assert r.failed_checks == ["remove_assign t dbg: the assignment is still there in the final design"]
+
+
+# --- C3: one check for a pair, the one of the last operation ---------------------------------
+
+CHILD = (
+    b"module child (\n  input  logic a,\n  input  logic spare,\n  output logic q\n);\n  assign q = a;\nendmodule\n"
+    b"module t (input logic a, output logic q);\n  child u (.a(a), .spare(1'b0), .q(q));\nendmodule\n"
+)
+
+
+def test_the_check_of_the_last_addition_is_the_one_left_for_a_wire_and_an_assignment(tmp_path: Path) -> None:
+    """C3. Added, removed and added again, and then the assignment goes behind the back.
+
+    The checks of the two removals were replaced, so they cannot fire on the wire that is
+    there. The check of the second `add_assign` holds the second expression and fires.
+    """
+    vet = vet_for(tmp_path, PLAIN)
+    top = vet.module("t")
+    top.add_wire("dbg", width=4)
+    top.add_assign("dbg", "a")
+    top.remove_assign("dbg")
+    top.remove_wire("dbg")
+    top.add_wire("dbg", width=4)
+    top.add_assign("dbg", "~a")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  assign dbg = ~a;\n", b"")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["add_assign t dbg: the assignment 'assign dbg = ~a;' is missing"]
+
+
+def test_the_check_of_the_last_addition_is_the_one_left_for_a_parameter(tmp_path: Path) -> None:
+    """C3. Added, removed and added again, and then the default changes behind the back."""
+    vet = vet_for(tmp_path, PLAIN)
+    top = vet.module("t")
+    top.add_param("DFT", 0)
+    top.remove_param("DFT")
+    top.add_param("DFT", 0)
+    _behind_the_back(vet, tmp_path / "t.sv", b"DFT = 0", b"DFT = 1")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["add_param t DFT: expected default '0', found '1'"]
+
+
+def test_the_check_of_the_last_removal_is_the_one_left_for_a_port(tmp_path: Path) -> None:
+    """C3. A port of the input design is removed, added and removed, and then comes back.
+
+    The check of the `add_port` was replaced. The check of the last `remove_port` fires.
+    """
+    vet = vet_for(tmp_path, CHILD)
+    child = vet.module("child")
+    child.remove_port("spare")
+    child.add_port("spare", "input")
+    child.remove_port("spare")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  output logic q\n);", b"  output logic q,\n  input  logic spare\n);")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["remove_port child spare: the port is still there in the final design"]
+
+
+# --- an addition after a removal inside a group (#57) ----------------------------------------
+#
+# C4  Inside a group, `add_wire` used to see the declaration a `remove_wire` had queued
+#     away, because it loads no fresh module info of its own. It recorded "skipped", and the
+#     sign-off passed on a design that did not hold the wire the script asked for. A wrong
+#     "ok", and it also made the next operation fail with "no net, variable or port".
+#     It now reads the registered check of the removal, which says the declaration is on its
+#     way out without a re-load. A re-load would place a second declaration above the first
+#     instead of below it, so consecutive calls would appear in reverse order.
+
+
+def test_an_addition_after_a_removal_inside_a_group_is_applied(vet: Vet) -> None:
+    """C4. The same three operations as rule W7, inside a group this time."""
+    mid = vet.module("mid")
+    with vet.group():
+        mid.add_wire("w", width=4)
+        mid.remove_wire("w")
+        mid.add_wire("w", width=4)
+    assert [(e.op, e.status) for e in vet.log] == [
+        ("add_wire", "applied"),
+        ("remove_wire", "applied"),
+        ("add_wire", "applied"),
+    ]
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert b"logic [3:0] w;" in r.files[mid.path]
+
+
+def test_an_assignment_can_follow_an_addition_after_a_removal_in_a_group(vet: Vet) -> None:
+    """C4. The knock-on: the stale skip used to leave the name undeclared for the next call."""
+    mid = vet.module("mid")
+    with vet.group():
+        mid.add_wire("w", width=4)
+        mid.remove_wire("w")
+        mid.add_wire("w", width=4)
+        mid.add_assign("w", "a")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert b"assign w = a;" in r.files[mid.path]
