@@ -49,8 +49,16 @@ class _Plan:
     permits: list[tuple[str, str, str]] = field(default_factory=list)
     check: _Check | None = None
     # The inverses, for an operation that undoes one of this run (see `_commit`). They are
-    # data on the plan, not something the operation does while it looks at the design: a
-    # `run` can be tried again after a re-load, so it must only read.
+    # data on the plan, not something the operation does while it looks at the design.
+    #
+    # The rule a checked body has to keep is narrower than "only read", which this comment
+    # used to say. A body runs inside `Vet._begin` / `Vet._rollback`, which take back the
+    # text, the queue, the stages, the expectations, the added files, the loaded design,
+    # `log`, `notes`, `_checks`, `_swapped` and the tail of `_drove`. A mutation of any of
+    # those is safe, because a refusal or a rolled-back group restores it; `remove_instance`
+    # relies on that for `drop_expects`, `_drop_registered` and `_drove` (#95, checked, not
+    # reachable). Anything the checkpoint does NOT hold must go on the plan instead, and so
+    # must a decision that the body would otherwise make twice.
     cancels: list[tuple[str, str, str]] = field(default_factory=list)  # expectations to forget
     quiet: bool = False  # part of an operation whose first plan is logged
 
