@@ -257,8 +257,10 @@ or with a raw splice.
   references that reach outside a scope does not see a name in code that the compiler does
   not elaborate. Its message names only one reference when a block adds several.
 \item \textbf{Added files.} A relative file name in \apiname{Vet.add_file} starts from the
-  current folder, not from the script. Use \code{Path(__file__).resolve().parent} as in the
-  example scripts.
+  folder of the script. It starts from the current folder when no file of that name is next
+  to the script. So the folder you run the script from can still decide which file it adds.
+  The rule is for \apiname{Vet.add_file} alone. Another path that a script builds starts
+  from the current folder.
 \item \textbf{Saved sessions of an older version.} A session that you saved before
   hdl-vet recorded the nested file lists protects only the top-level file list when you
   resume it. With such a session, \opt{--save} onto a nested file list outside the input

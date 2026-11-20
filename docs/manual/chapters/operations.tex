@@ -510,11 +510,13 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
   \item \file{hdl-vet.json} lists the file under \code{added}.
   \end{itemize}
   On the console, hdl-vet prints \code{added hdl_vet_added/NAME}. A relative file name
-  in the argument \code{path} starts from the current folder, not from the script. To make
-  the script independent of where you run it, use
-  \code{Path(__file__).resolve().parent}.
+  in the argument \code{path} starts from the folder of the script. It starts from the
+  current folder when no file of that name is next to the script. An absolute file name
+  stays as it is. Outside a script, a relative file name starts from the current folder.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a relative file name that is next to the script and also in the current folder, but
+    not one file: give an absolute file name
   \item a file that cannot be read
   \item a second added file with the same name
   \item an input tree that has the folder \file{hdl_vet_added} at its root
