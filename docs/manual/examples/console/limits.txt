@@ -8,5 +8,5 @@ wrote out/partial
 changed rtl/periph_wrap.sv
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/cancel.py --dry-run
 hdl-vet sign-off: FAILED
-  failed check: add_wire soc_top tmp: declaration not found in the final design
+  failed check: remove_wire soc_top tmp: the declaration is still there in the final design
 [exit status 1]

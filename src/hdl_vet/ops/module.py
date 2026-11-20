@@ -261,6 +261,11 @@ class Module:
                 )
             data = v.session.text(info.path)
             a, b = line_rule(data, decl.stmt_start, decl.stmt_end)
+            # A registered add_wire check means this session added the wire, so the pair cancels
+            # and that check can never hold again. The drop goes on the plan, because `run` can be
+            # tried again after a re-load and so must only read (#57). The kind is compared too:
+            # a key alone could come from a damaged archive under another kind.
+            made = next((c.key for c in v._checks if c.kind == "add_wire" and c.key == ("add_wire", mod, name)), None)
 
             v._commit_all(
                 op,
@@ -271,6 +276,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
+                        drops=made,
                         check=_Check((op, mod, name), op, (mod, name)),
                     )
                 ],
@@ -308,6 +314,12 @@ class Module:
             data = v.session.text(info.path)
             a, b = line_rule(data, assign.stmt_start, assign.stmt_end)
             v._drove.extend((mod, base) for base in driven_bases(assign.left))
+            # The same as in `remove_wire`, but the key of add_assign ends in the expression, so
+            # only its first three parts name the assignment.
+            made = next(
+                (c.key for c in v._checks if c.kind == "add_assign" and c.key[:3] == ("add_assign", mod, target)),
+                None,
+            )
 
             v._commit_all(
                 op,
@@ -318,6 +330,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
+                        drops=made,
                         check=_Check((op, mod, "assign", target), op, (mod, target)),
                     )
                 ],
