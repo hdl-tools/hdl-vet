@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+import sys
 from typing import Any
 
 import pyslang
@@ -9,6 +11,36 @@ import pyslang
 from hdl_vet.slang_adapter.host import _DesignHost
 from hdl_vet.slang_adapter.records import InstanceSnap
 from hdl_vet.slang_adapter.text import _clean_text
+
+_UNNAMED = re.compile(r"\$\d+")  # slang numbers an unnamed struct or union per compilation
+
+
+def _resolved(t: Any) -> str:
+    """The type behind the aliases, as a key that two compilations agree on.
+
+    The printed canonical form is not a key by itself. Two corrections make it one, and both
+    were found by a review after the first attempt used the printed form as it comes.
+
+    Slang ends an unnamed struct or union with a counter (`s$3`). The counter belongs to one
+    compilation and moves with the set of elaborated types, so the same typedef prints `s$8`
+    on one instance and `s$1` on another, in one compilation. Without the pattern below, an
+    identical struct on both sides of a swap is refused, with a message that prints the same
+    type twice. The pattern leaves the unpacked-array form `logic$[0:1]`, whose `$` has no
+    digit after it.
+
+    The printed form of an enum lists the members and the typedef name, not the base type.
+    A four-state and a two-state enum with the same members print the same text. Without the
+    marker below, a swap between them is accepted and the sign-off passes, and nothing later
+    catches it, because Yosys has no four-state value. A four-state type gets no marker,
+    which is the common case, so the usual refusal message stays clean.
+
+    The bit width is not part of the key. The caller compares it on its own. The result is
+    interned, because a design has few distinct types and many ports.
+    """
+    c = t.canonicalType
+    text = _UNNAMED.sub("", str(c))
+    return sys.intern(text if c.isFourState else f"{text} (two-state)")
+
 
 _DIRECTIONS = {
     "In": "input",
@@ -93,16 +125,18 @@ class _SnapshotOps(_DesignHost):
             params[p.name] = str(p.value) if p.kind == sk.Parameter else str(p.targetType.type)
         ports: dict[str, tuple[str, int]] = {}
         port_types: dict[str, str] = {}
+        port_resolved: dict[str, str] = {}
         conns: dict[str, str] = {}
         for port in body.portList:
             if port.kind == sk.Port:
                 ports[port.name] = (_DIRECTIONS[port.direction.name], port.type.bitWidth)
                 port_types[port.name] = str(port.type)
+                port_resolved[port.name] = _resolved(port.type)
             else:
                 ports[port.name] = ("interface", 0)
             if not is_top:
                 conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
-        return InstanceSnap(body.definition.name, params, ports, conns, port_types)
+        return InstanceSnap(body.definition.name, params, ports, conns, port_types, port_resolved)
 
     def parameters_of(self, names: frozenset[str]) -> dict[str, dict[str, str]]:
         """The parameter values of each instance of a module in `names`, by hierarchical path.

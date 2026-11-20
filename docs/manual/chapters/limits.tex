@@ -216,12 +216,11 @@ or with a raw splice.
   \apiname{Instance.replace_module} refuses a module that has one. There is no operation
   that adds an interface port.
 \item a replacement (\apiname{Instance.replace_module}) by a module whose port has another
-  direction, width or type than the port that it replaces. There is no option to accept
-  such a difference.
-\item type parameters. \apiname{Instance.replace_module} does not carry an override of a
-  type parameter to the new module. This holds even if the new module has a type parameter
-  of that name. The message says that the new module has \emph{no overridable parameter}.
-  Edit such an instance by hand.
+  direction, width or type than the port that it replaces. The comparison is on the type
+  that the port resolves to. A typedef or a type parameter that resolves to the same type
+  is not a difference. The comparison rests on the printed form of the type, which shows
+  signedness and the fields of a struct. hdl-vet adds the state count, because the printed
+  form of an enum hides it. There is no option to accept a real difference.
 \end{itemize}
 
 \section{Known problems}
