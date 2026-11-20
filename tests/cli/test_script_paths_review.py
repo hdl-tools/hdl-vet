@@ -142,7 +142,10 @@ def test_a_dangling_link_in_the_current_folder_is_not_replaced_silently(kit, tmp
     (tmp_path / "scripts" / "cells").mkdir()
     (tmp_path / "scripts" / "cells" / "extra_cell.sv").write_bytes(OTHER)
     (tmp_path / "cells" / "extra_cell.sv").unlink()
-    (tmp_path / "cells" / "extra_cell.sv").symlink_to(tmp_path / "cells" / "gone.sv")
+    try:
+        (tmp_path / "cells" / "extra_cell.sv").symlink_to(tmp_path / "cells" / "gone.sv")
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform does not let the test make a symlink")
     s = script(tmp_path, "scripts/add.py", "cells/extra_cell.sv")
     r = run(kit, s, cwd=tmp_path)
     assert "add_file extra_cell.sv:" in r.stderr, r.stderr
