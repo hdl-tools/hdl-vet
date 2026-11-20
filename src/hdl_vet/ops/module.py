@@ -12,6 +12,7 @@ from hdl_vet.ops.override import override_net as _override_net
 from hdl_vet.ops.text import (
     _DIRECTIONS,
     _IDENT,
+    _did_you_mean,
     _eol,
     _header_line_in_comment,
     _instance_name,
@@ -239,11 +240,22 @@ class Module:
 
         v._checked(op, target, run)
 
+    def _refuse_name(self, op: str, name: object, declared: list[str]) -> None:
+        mod = self._name
+        if not isinstance(name, str):
+            raise VetError(f"{op} {mod}: the name must be a str, not {type(name).__name__}")
+        if name.startswith("\\"):
+            hint = _did_you_mean(name, declared)
+            raise VetError(
+                f"{op} {mod}: {name!r} is an escaped spelling; give the identifier without the backslash{hint}"
+            )
+        if name not in declared and not is_simple_identifier(name):
+            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+
     def remove_wire(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_wire"
         v._refuse_scope(op, mod)
-        if not is_simple_identifier(name):
-            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+        self._refuse_name(op, name, [d.name for d in self._fresh().decls])
         self._confirm_instances(op)
 
         def run() -> None:
@@ -335,8 +347,7 @@ class Module:
     def remove_port(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_port"
         v._refuse_scope_with_hosts(op, mod)
-        if not is_simple_identifier(name):
-            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+        self._refuse_name(op, name, [d.name for d in v._info(mod).ports])
         paths = self._confirm_instances(op)
 
         def run() -> None:
@@ -413,8 +424,7 @@ class Module:
     def remove_param(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_param"
         v._refuse_scope_with_hosts(op, mod)
-        if not is_simple_identifier(name):
-            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+        self._refuse_name(op, name, [d.name for d in v._info(mod).params])
         paths = self._confirm_instances(op)
 
         def run() -> None:
