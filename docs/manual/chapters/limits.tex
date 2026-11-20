@@ -218,9 +218,14 @@ or with a raw splice.
 \item a replacement (\apiname{Instance.replace_module}) by a module whose port has another
   direction, width or type than the port that it replaces. The comparison is on the type
   that the port resolves to. A typedef or a type parameter that resolves to the same type
-  is not a difference. The comparison rests on the printed form of the type, which shows
-  signedness and the fields of a struct. hdl-vet adds the state count, because the printed
-  form of an enum hides it. There is no option to accept a real difference.
+  is not a difference. The comparison uses the printed form of the type and marks every type that is not
+  four-state. \code{accept_types} accepts a type difference per port, but nothing accepts
+  a difference of direction or width.
+\item a waiver with \code{accept_types} on a port whose width is reported as zero, such as an
+  unpacked array or a \code{string}. For this port the type is the only check of hdl-vet,
+  and the waiver removes it. The compiler then refuses the swap by a new diagnostic, which
+  does not name the two ports. Inside a \code{group} the new diagnostics are compared once at
+  the end. A later edit in the same group that retypes the connected net can hide that diagnostic.
 \end{itemize}
 
 \section{Known problems}

@@ -34,8 +34,9 @@ The exit status is 1 when the sign-off fails. Chapter~\ref{ch:cli} lists all exi
 
 \section{Every line of the report}
 
-Each problem is one line. The lines come in this order. The transcript after the list
-shows one failure of each kind.
+Each problem is one line. A note and the lines of the equivalence check are also one
+line each. The lines come in this order. The transcript after the list shows one failure
+of each kind.
 
 \begin{description}
 \item[the edited design cannot be loaded: REASON] The compiler cannot read the
@@ -86,6 +87,10 @@ shows one failure of each kind.
   cause is that the \code{expect} is wrong.
 
 \item[failed check: MESSAGE] A post-condition failed. See the section after next.
+
+\item[note: MESSAGE] An operation left something for you to read, for example an unused
+  signal or an accepted type difference. This line is no failure. It comes after the
+  failures and before the lines of the equivalence check.
 
 \item[equivalence proved: MODULE (OPERATIONS; equal when ENABLE is 0)] The check proved
   the module. This line is no failure. hdl-vet prints it on the error output also when
