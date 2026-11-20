@@ -67,6 +67,25 @@ Checks and the command line
     A check that raises is reported as a failed check ("check raised ..."),
     not as a traceback. With --dry-run the "<N> applied, <M> skipped" line goes
     to stderr so stdout stays a pure diff.
+
+The removal check after a cancelled addition (#57)
+    Once `remove_wire` or `remove_assign` retires the post-condition of the
+    addition that it undid, its own post-condition is the only one left. It has
+    to be at least as strong as the one it retired.
+    C2  `remove_assign` fails when an assignment drives the target under
+        another spelling, so `assign t[3:0] = ...` counts as an assignment to
+        `t`. The comparison is the text of the target OR a base name of it
+        (`driven_bases`). The text test stays because a target can be given as
+        the design spells it, such as `w[3:0]` or an escaped name, and
+        `driven_bases` answers only for a plain identifier. Matching on base
+        names alone made the check vacuous for every such target.
+    Stated limit, not fixed: a declaration that comes back inside a generate
+    construct is not seen. `ModuleInfo.generate_decls` holds bare names with no
+    scope and includes branches the elaboration does not take, so a check on it
+    fails correct runs: a module-level `tmp` that was removed is reported as
+    still there when any generate block declares its own local `tmp`. A
+    name-only set cannot tell the two apart. The same holds for
+    `generate_assigned` and `remove_assign`.
 """
 
 from __future__ import annotations
@@ -401,3 +420,58 @@ def test_disconnect_message_for_an_interface_port(tmp_path: Path):
     )
     with pytest.raises(VetError, match="an interface port"):
         vet.module("t").instance("u").disconnect("b")
+
+
+# --- the removal check after a cancelled addition (#57) --------------------------------
+
+PLAIN = b"module t (input logic [3:0] a, output logic [3:0] y);\n  assign y = a;\nendmodule\n"
+
+
+def _behind_the_back(vet: Vet, path: Path, old: bytes, new: bytes) -> None:
+    """Change the text the way the reviewer's probes did, so a post-condition has to catch it."""
+    _ = vet.design  # apply what is queued, so the text shows the result of the operations
+    data = vet.text(path)
+    at = data.find(old)
+    assert at >= 0, old
+    vet.splice(path, at, at + len(old), new, old=old)
+
+
+def test_a_target_that_is_not_a_plain_identifier_is_still_compared_as_text(tmp_path: Path):
+    """C2. The guard against making the check vacuous.
+
+    `remove_assign` takes the target as the design spells it, so it can be `w[3:0]`.
+    `driven_bases` answers only for a plain identifier, so a comparison on base names alone
+    could never match such a target and the check would pass whatever the design holds.
+    """
+    vet = vet_for(
+        tmp_path,
+        b"module t (input logic [3:0] a, output logic [3:0] y);\n"
+        b"  wire [7:0] w;\n"
+        b"  assign w = {a, a};\n"
+        b"  assign w[3:0] = a;\n"
+        b"  assign y = w[7:4];\n"
+        b"endmodule\n",
+    )
+    vet.module("t").remove_assign("w[3:0]")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  assign y = w[7:4];\n", b"  assign w[3:0] = a;\n  assign y = w[7:4];\n")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["remove_assign t w[3:0]: the assignment is still there in the final design"]
+
+
+def test_an_assignment_back_as_a_part_select_fails_the_removal(tmp_path: Path):
+    """C2. The assignment is added and removed again, and then comes back as a part select.
+
+    The check of the `add_assign` is retired. The check of the `remove_assign` used to
+    compare the target as text, so `dbg[3:0]` did not count as an assignment to `dbg` and
+    this design signed off with a net the script declared and a driver it never wrote.
+    """
+    vet = vet_for(tmp_path, PLAIN)
+    top = vet.module("t")
+    top.add_wire("dbg", width=4)
+    top.add_assign("dbg", "a")
+    top.remove_assign("dbg")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  assign y = a;\n", b"  assign dbg[3:0] = 4'b0;\n  assign y = a;\n")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["remove_assign t dbg: the assignment is still there in the final design"]

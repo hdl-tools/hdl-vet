@@ -799,3 +799,134 @@ def test_removing_a_parameter_the_design_already_had_still_expects_the_change(ve
     assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
     assert [c.kind for c in r.changes] == ["param-changed"] * 3, [str(c) for c in r.changes]
     assert r.files, "the text of the design must have changed"
+
+
+# Rules for declarations and assignments (#57, part 1):
+#   W1  add_wire then remove_wire of one name leaves no check of the add_wire.
+#   W2  add_assign then remove_assign of one target leaves no check of the add_assign.
+#   W3  Only the check of the operation that was undone goes. Every other check stays.
+#   W4  A declaration or an assignment of the design we started from is a real change
+#       when it goes. Its check stays.
+#   W5  What decides the cancellation is a registered check of the add, not the design we
+#       started from. A wire of that design can be removed, added again and removed again.
+
+HELD = (
+    "module top (\n"
+    "  input  logic [3:0] a,\n"
+    "  output logic [3:0] y\n"
+    ");\n"
+    "  logic [3:0] t;\n"
+    "  logic [3:0] u;\n"
+    "  assign t = a;\n"
+    "  assign y = a;\n"
+    "endmodule\n"
+)
+
+
+def held(root: Path) -> tuple[Vet, Path]:
+    """A design that already holds a wire nothing uses (`u`) and an assignment nothing reads (`t`)."""
+    root.mkdir()
+    (root / "d.sv").write_bytes(HELD.encode())
+    (root / "d.f").write_bytes(b"d.sv\n")
+    return Vet(Session(root / "d.f", top="top")), root / "d.sv"
+
+
+def test_add_wire_then_remove_wire_leaves_no_stale_check(vet: Vet) -> None:
+    """#57, rule W1. The two operations cancel, so the design is the one we started from.
+
+    `add_wire` registers a post-condition and no structural expectation. The declaration
+    is gone again at the sign-off, so the post-condition used to fail and nothing else did.
+    """
+    top = vet.module("top")
+    top.add_wire("t", width=4)
+    top.remove_wire("t")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert r.files == {}
+    assert statuses(vet) == [("add_wire", "top", "applied"), ("remove_wire", "top", "applied")]
+
+
+def test_add_assign_then_remove_assign_leaves_no_stale_check(vet: Vet) -> None:
+    """#57, rules W1 and W2, for an assignment and the wire that it needs.
+
+    The expression has spaces. The check of `add_assign` is keyed on the expression, so
+    `remove_assign` must find that key from the assignment that it removes.
+    """
+    top = vet.module("top")
+    top.add_wire("t", width=4)
+    top.add_assign("t", "a & spare_d")
+    top.remove_assign("t")
+    top.remove_wire("t")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert r.files == {}
+
+
+def test_removing_only_the_assignment_keeps_the_check_of_the_wire(vet: Vet) -> None:
+    """#57, rules W2 and W3. The assignment was undone and the wire was not.
+
+    The wire then disappears behind the back of the script. Its check must still fire,
+    and the check of the assignment must not, because `remove_assign` undid that one.
+    """
+    top = vet.module("top")
+    top.add_wire("t", width=4)
+    top.add_assign("t", "a")
+    top.remove_assign("t")
+    corrupt(vet, top.path, b"  logic [3:0] t;\n", b"")
+    r = vet.finish()
+    assert r.failed_checks == ["add_wire top t: declaration not found in the final design"]
+
+
+def test_removing_a_wire_the_design_already_had_is_still_a_checked_change(tmp_path: Path) -> None:
+    """#57, rule W4. The guard against cancelling too much, for a declaration.
+
+    The design we started from had the wire, so no operation of this run is undone. The
+    text changes, and the check of `remove_wire` stays and fires when the wire comes back.
+    """
+    vet, path = held(tmp_path / "a")
+    vet.module("top").remove_wire("u")
+    r = vet.finish()
+    assert r.ok, r.report()
+    assert b"logic [3:0] u;" not in r.files[path]
+
+    vet, path = held(tmp_path / "b")
+    vet.module("top").remove_wire("u")
+    corrupt(vet, path, b"  assign y", b"  logic [3:0] u;\n  assign y")
+    assert vet.finish().failed_checks == ["remove_wire top u: the declaration is still there in the final design"]
+
+
+def test_removing_an_assignment_the_design_already_had_is_still_a_checked_change(tmp_path: Path) -> None:
+    """#57, rule W4. The guard against cancelling too much, for an assignment."""
+    vet, path = held(tmp_path / "a")
+    vet.module("top").remove_assign("t")
+    r = vet.finish()
+    assert r.ok, r.report()
+    assert b"assign t = a;" not in r.files[path]
+
+    vet, path = held(tmp_path / "b")
+    vet.module("top").remove_assign("t")
+    corrupt(vet, path, b"  assign y", b"  assign t = a;\n  assign y")
+    assert vet.finish().failed_checks == ["remove_assign top t: the assignment is still there in the final design"]
+
+
+def test_a_wire_of_the_input_design_can_be_removed_added_and_removed_again(tmp_path: Path) -> None:
+    """#57, rule W5. This is why the cancellation is keyed on a registered check.
+
+    The design we started from held `u`. The run takes it out, puts it back with another
+    width, and takes it out again. The final design has no `u`, and the `add_wire` of the
+    middle step was undone, so its check has to go. Keying the decision on the design we
+    started from would keep that check, because that design did hold `u`, and the sign-off
+    would fail a run that is correct.
+    """
+    vet, path = held(tmp_path / "a")
+    top = vet.module("top")
+    top.remove_wire("u")
+    top.add_wire("u", width=8)
+    top.remove_wire("u")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert b"logic [3:0] u;" not in r.files[path]
+    assert b"logic [7:0] u;" not in r.files[path]
