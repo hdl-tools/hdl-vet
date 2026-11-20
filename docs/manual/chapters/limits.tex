@@ -81,12 +81,18 @@ Items that say so were not checked by a test.
 
 \section{What the equivalence check does not do}
 
-Chapter~\ref{ch:signoff} explains the check. These are its limits. The check gives
-\code{error} or \code{refuted} in these cases, and never a wrong \code{proved}. Only the last
-two items can give a \code{proved} that you must read with care. A waiver is the way to go
-on when the check cannot judge.
+Chapter~\ref{ch:signoff} explains the check. These are its limits. Most of them give
+\code{error} or \code{refuted}, and never a wrong \code{proved}. Four items are different,
+because they give a \code{proved} that you must read with care. They are the design with the
+enable at 1, a loop through other nets, the changes that the proof does not see, and
+undefined values. A waiver is the way to go on when the check cannot judge.
 
 \begin{itemize}
+\item \textbf{The design with the enable at 1.} The proof ties the enable to 0 and compares
+  the two modules in that state. A \code{proved} therefore says that the edited module
+  equals the input module while the override is off. It says nothing about the module with
+  the enable at 1. That state is the one the override exists for, and no check of hdl-vet
+  looks at it. The value you write is your responsibility.
 \item \textbf{One module.} The proof is of the edited module only. The check does not
   prove what a connection of the enable does. The sign-off follows the enable up to the top
   module and looks at the connections (section~\ref{sec:enable}). That is not a proof.
