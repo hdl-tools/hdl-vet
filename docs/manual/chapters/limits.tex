@@ -271,8 +271,9 @@ or with a raw splice.
   example \code{top.\m/esc .\l/esc }. Each escaped name ends with a blank.
 \item \textbf{Wrong types.} The operations check the names that you give, and the
   arguments of \apiname{Vet.splice} and \apiname{Vet.text}. They do not check the type of
-  every other argument. A name that is \code{None}, or a mapping that is a list, raises a
-  Python error and not a \code{VetError}.
+  every other argument. A name that is not text, such as \code{None}, is refused with a
+  \code{VetError}, because it is not a plain identifier. Another argument of a wrong type,
+  such as a mapping given as a list, raises a Python error and not a \code{VetError}.
 \item \textbf{Time.} An operation that reads a list that an earlier operation edited
   loads the whole design again. On a large design, a script with many such operations takes
   a long time. The load count rose after a \code{connect} that follows an
