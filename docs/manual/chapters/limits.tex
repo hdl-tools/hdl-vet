@@ -157,12 +157,17 @@ on when the check cannot judge.
   on purpose. A refusal costs a script an argument, and a missed loop reaches the sign-off
   as \code{ok}.
 
-  Three routes stay open, and each leaves a loop that the sign-off reports as
-  \code{proved}. One closes through the output pin of a child module. One the value reaches
-  through a hierarchical name, such as \code{other.sig}. That holds whether the name leaves
-  the module or enters a generate block of it. One the value reaches through a call of a
-  function. The walk judges a value by the name it starts with, and it enters no other
-  scope and no function body.
+  A value that hdl-vet cannot follow is refused. The walk judges a value by the name each
+  path in it starts with. That name must be a net, a variable or a parameter of the
+  module. A name that is an instance, a generate block, a function or nothing in the
+  module is refused. A struct member and a system call are not refused, because the name
+  they start with is a signal of the module.
+
+  One route stays open, and it leaves a loop that the sign-off reports as \code{proved}.
+  A net that the output pin of a child module drives looks like any other net. The value is
+  followed, and the walk then stops at the instance. A package constant, such as
+  \code{pk::W}, is refused although it can never be part of a loop. Its first name is not
+  a member of the module.
 \item \textbf{A rare answer of not the same.} The check compares the children that it does
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.

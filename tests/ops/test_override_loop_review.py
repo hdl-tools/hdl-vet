@@ -52,14 +52,18 @@ Rules
         and does not call the route combinational.
 
 Limits, stated
-    - A value that reads through a **function call** is not refused. `f()` yields the name
-        `f`, and the walk does not enter the body of the function.
-    - A value that reads through a **hierarchical name** is not refused, whether the name
-        points into another module or into a generate block of this one. The walk follows
-        the name the value starts with, and a path leaves this module's own members.
-      Both leave a wrong `ok` reachable. Whether such a value should be refused outright
-      is a question for the owner, recorded on the issue. Refusing it is the safe
-      direction and would stop scripts that work today, so it is not decided here.
+    - A loop that closes through the output pin of a **child module** is not refused, when
+      the value names the net the pin drives rather than the pin itself. That net is a
+      variable of the module, so it is followed, and the walk then stops at the instance.
+      `test_a_loop_through_a_child_net_is_still_a_limit` in
+      `tests/ops/test_override_value_scope.py` pins it.
+
+    What this file first recorded as two further limits, a value reading through a
+    **function call** and one reading through a **hierarchical name**, are limits no
+    longer. The owner decided on 2026-11-21 to refuse a value hdl-vet cannot follow, and
+    `tests/ops/test_override_value_scope.py` holds that rule. The test below changed with
+    it: it asserted that `f()` was accepted, and it now asserts the refusal. A pinning
+    test is what made that visible, which is the point of issue #106.
 
 Not checked
     `bind`, `defparam`, `specify`, a user-defined primitive, `tranif` and `bufif`,
@@ -251,15 +255,18 @@ def test_a_name_of_another_instance_is_not_a_loop(tmp_path: Path):
 # --- R5: the stated limits, pinned so that closing one cannot leave the manual behind --
 
 
-def test_a_loop_through_a_function_call_is_a_limit(tmp_path: Path):
+def test_a_loop_through_a_function_call_is_now_refused(tmp_path: Path):
     """`f()` returns `t`, which `n` drives. The walk does not enter the function body.
 
-    This is a stated limit and a reachable wrong `ok`. The test records that it is still
-    a limit, so that a later fix has to update the manual with it.
+    This was a stated limit and a reachable wrong `ok`. It is refused since the owner
+    decided to refuse a value hdl-vet cannot follow. The refusal is not the loop one: the
+    walk never judged this value, so the message must not claim a loop.
     """
     mod = swap_in(build(tmp_path, M_FUNC))
-    mod.override_net("n", "f()", enable="bypass_en_i", waiver=WAIVER)
-    assert [(r.op, r.target, r.status) for r in mod.vet.log][-1] == ("override_net", "m.n", "applied")
+    with pytest.raises(VetError, match="cannot follow") as e:
+        mod.override_net("n", "f()", enable="bypass_en_i", waiver=WAIVER)
+    assert "loop" not in str(e.value), str(e.value)
+    assert mod.vet.log[-1].op != "override_net", [(r.op, r.status) for r in mod.vet.log]
 
 
 # --- R6: the head-only identifier function, directly ---------------------------------

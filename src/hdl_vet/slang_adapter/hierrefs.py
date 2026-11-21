@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import pyslang
@@ -57,6 +57,22 @@ class _HierRefOps(_DesignHost):
             if getattr(sym, "initializer", None) is not None:
                 out.append(Driver(False))
         return out
+
+    def unfollowable_heads(self, module: str, names: Iterable[str]) -> list[str]:
+        """The names of `names` that the loop walk cannot follow in `module`, sorted.
+
+        A name is followable only when, in EVERY elaborated body of `module`, it resolves to a net,
+        a variable or a parameter: the walk reads those by name. Anything else (a child instance,
+        a generate block, a subroutine, a package, or a name that does not resolve) leads to
+        logic that the walk does not enter, so a loop through it would go unseen.
+        """
+        kinds = {pyslang.ast.SymbolKind.Net, pyslang.ast.SymbolKind.Variable, pyslang.ast.SymbolKind.Parameter}
+        bodies = list(self._canonical_bodies(module).values())
+
+        def followable(name: str) -> bool:
+            return all(getattr(b.find(name), "kind", None) in kinds for b in bodies)
+
+        return sorted(n for n in set(names) if not followable(n))
 
     def combinational_closure(self, module: str, net: str) -> frozenset[str]:
         """Every module-level name that `net` drives through combinational logic in `module`.
