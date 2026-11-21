@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from typing import Any
 
 import pyslang
@@ -57,6 +57,95 @@ class _HierRefOps(_DesignHost):
             if getattr(sym, "initializer", None) is not None:
                 out.append(Driver(False))
         return out
+
+    def unfollowable_heads(self, module: str, names: Iterable[str]) -> list[str]:
+        """The names of `names` that the loop walk cannot follow in `module`, sorted.
+
+        A name is followable only when, in EVERY elaborated body of `module`, it resolves to a net,
+        a variable or a parameter: the walk reads those by name. Anything else (a child instance,
+        a generate block, a subroutine, a package, or a name that does not resolve) leads to
+        logic that the walk does not enter, so a loop through it would go unseen.
+        """
+        kinds = {pyslang.ast.SymbolKind.Net, pyslang.ast.SymbolKind.Variable, pyslang.ast.SymbolKind.Parameter}
+        bodies = list(self._canonical_bodies(module).values())
+
+        def followable(name: str) -> bool:
+            return all(getattr(b.find(name), "kind", None) in kinds for b in bodies)
+
+        return sorted(n for n in set(names) if not followable(n))
+
+    def combinational_closure(self, module: str, net: str) -> frozenset[str]:
+        """Every module-level name that `net` drives through combinational logic in `module`.
+
+        Fails closed: what the walk cannot classify, it follows. Every driver of a net is followed
+        (an `assign`, a combinational block, a gate primitive), and of each driver the WHOLE
+        symbol is read, so a condition, a case selector, a loop bound and an index on the left
+        side count as reads, and so does a name that the driver itself writes. A net declared
+        with an initialiser (`wire t = n;`) also reads the initialiser. Only two things end the
+        walk: a driver that is a child instance (a stated limit), and a driver that is an
+        edge-clocked procedural block (a register). An input port is skipped. The walk stays in
+        the one module body. The result is the union over every elaborated body of `module`.
+        """
+        sk, ek, pk = pyslang.ast.SymbolKind, pyslang.ast.ExpressionKind, pyslang.ast.ProceduralBlockKind
+        an = self._analyze()
+
+        def reads(node: Any) -> set[str]:
+            out: set[str] = set()
+
+            def go(n: Any) -> None:
+                sym = getattr(n, "symbol", None)
+                if getattr(n, "kind", None) == ek.NamedValue and sym is not None and getattr(sym, "name", ""):
+                    out.add(str(sym.name))
+
+            node.visit(go)
+            return out
+
+        def clocked(blk: Any) -> bool:
+            if blk.procedureKind in (pk.AlwaysComb, pk.AlwaysLatch):
+                return False
+            events: list[Any] = []
+            blk.visit(lambda n: events.append(n) if str(getattr(n, "kind", "")).endswith("SignalEvent") else None)
+            return bool(events) and all(str(getattr(e, "edge", "")) != "EdgeKind.None_" for e in events)
+
+        result: set[str] = set()
+        for body in self._canonical_bodies(module).values():
+
+            def sources(name: str, body: Any = body) -> set[str]:
+                sym = body.find(name)
+                if sym is None:
+                    return set()
+                try:
+                    drivers = an.getDrivers(sym)
+                except TypeError:
+                    return set()
+                out: set[str] = set()
+                for d in drivers:
+                    cs = d.containingSymbol
+                    if d.isInputPort or cs.kind == sk.Instance:
+                        continue
+                    if cs.kind == sk.ProceduralBlock and clocked(cs):
+                        continue
+                    out |= reads(cs)
+                if getattr(sym, "initializer", None) is not None:
+                    out |= reads(sym.initializer)
+                return {x for x in out if body.find(x) is not None}
+
+            if body.find(net) is None:
+                raise AdapterError(f"module {module!r} has no member {net!r}")
+            fanout: dict[str, set[str]] = {}
+            for member in body:
+                if member.name:
+                    for src in sources(str(member.name)):
+                        fanout.setdefault(src, set()).add(str(member.name))
+            seen: set[str] = set()
+            stack = [net]
+            while stack:
+                for nxt in fanout.get(stack.pop(), ()):
+                    if nxt not in seen:
+                        seen.add(nxt)
+                        stack.append(nxt)
+            result |= seen
+        return frozenset(result)
 
     def driver_details(self, module: str, name: str) -> list[tuple[int, list[DriverDetail]]]:
         """For each elaborated body of `module`: the width of the signal `name` and each driver of it.

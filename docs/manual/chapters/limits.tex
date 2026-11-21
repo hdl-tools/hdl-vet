@@ -150,9 +150,30 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   array or a generate loop. Or the child has a new port other than the enable pins. hdl-vet then
   compares the module with the child inside. This holds for the interface only, never for a
   pin that is not 0.
-\item \textbf{A loop through other nets.} hdl-vet refuses a value that reads the net
-  itself. It does not refuse a value that reads a net which the overridden net drives. The
-  comparison ties the enable to 0, so it does not see this loop.
+\item \textbf{A loop through other nets.} \apiname{Module.override_net} refuses a value
+  that reads the net itself. It also refuses one that reads a name which the net drives
+  inside the same module. The walk follows every driver of a name, with three exceptions.
+  An input port, the output pin of a child module instance, and a clocked procedural block
+  each end it. A flop is not a combinational loop.
+
+  The walk reads every name of a driver, not only the right side of its assignment. So it
+  sees a read in the condition of an \code{if} and in the selector of a \code{case}. It
+  sees a read in the bound of a \code{for} and in an index on the left side. A name that
+  the driver writes counts as a read as well. That refuses more than the design demands,
+  on purpose. A refusal costs a script an argument, and a missed loop reaches the sign-off
+  as \code{ok}.
+
+  A value that hdl-vet cannot follow is refused. The walk judges a value by the name each
+  path in it starts with. That name must be a net, a variable or a parameter of the
+  module. A name that is an instance, a generate block, a function or nothing in the
+  module is refused. A struct member and a system call are not refused, because the name
+  they start with is a signal of the module.
+
+  One route stays open, and it leaves a loop that the sign-off reports as \code{proved}.
+  A net that the output pin of a child module drives looks like any other net. The value is
+  followed, and the walk then stops at the instance. A package constant, such as
+  \code{pk::W}, is refused although it can never be part of a loop. Its first name is not
+  a member of the module.
 \item \textbf{A rare answer of not the same.} The check compares the children that it does
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.

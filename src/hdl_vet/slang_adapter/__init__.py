@@ -8,7 +8,14 @@ drivers of a hierarchical name, and syntax equivalence.
 
 from __future__ import annotations
 
-from hdl_vet.slang_adapter.api import check_expression, instance_parameters, load, parameter_names, value_identifiers
+from hdl_vet.slang_adapter.api import (
+    check_expression,
+    instance_parameters,
+    load,
+    parameter_names,
+    value_head_identifiers,
+    value_identifiers,
+)
 from hdl_vet.slang_adapter.design import Design
 from hdl_vet.slang_adapter.diagnostics import driven_bases
 from hdl_vet.slang_adapter.loading import LoadCache
@@ -58,5 +65,6 @@ __all__ = [
     "parameter_names",
     "syntax_equivalent",
     "tokens",
+    "value_head_identifiers",
     "value_identifiers",
 ]
