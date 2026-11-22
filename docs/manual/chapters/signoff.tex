@@ -72,6 +72,11 @@ of each kind.
 \item[left dangling: MESSAGE in module MODULE (FILE:LINE)] Something reads a signal but
   nothing drives it. See the next section.
 
+\item[last driver removed: signal 'SIG' of module MODULE has no driver now] The run took
+  away the last driver of a signal that something still reads. The compiler does not report
+  this when the driver sat in a generate branch the elaboration does not take. So hdl-vet
+  counts the drivers itself, before and after the run.
+
 \item[unexpected change: KIND PATH NAME: BEFORE -> AFTER] The structure of the
   design changed in a way that no operation and no \code{expect} or \code{permit}
   explains. \code{KIND} is the kind of change (see \apiname{Vet.expect}). \code{PATH}
