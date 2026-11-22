@@ -152,9 +152,9 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   pin that is not 0.
 \item \textbf{A loop through other nets.} \apiname{Module.override_net} refuses a value
   that reads the net itself. It also refuses one that reads a name which the net drives
-  inside the same module. The walk follows every driver of a name, with three exceptions.
-  An input port, the output pin of a child module instance, and a clocked procedural block
-  each end it. A flop is not a combinational loop.
+  inside the same module. The walk follows every driver of a name, with two exceptions.
+  An input port and a clocked procedural block each end it. A flop is not a combinational
+  loop.
 
   The walk reads every name of a driver, not only the right side of its assignment. So it
   sees a read in the condition of an \code{if} and in the selector of a \code{case}. It
@@ -169,11 +169,14 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   module is refused. A struct member and a system call are not refused, because the name
   they start with is a signal of the module.
 
-  One route stays open, and it leaves a loop that the sign-off reports as \code{proved}.
-  A net that the output pin of a child module drives looks like any other net. The value is
-  followed, and the walk then stops at the instance. A package constant, such as
-  \code{pk::W}, is refused although it can never be part of a loop. Its first name is not
-  a member of the module.
+  A net that the output pin of a child module drives is followed too. The walk does not
+  enter the child. It counts every name that the other pins of that instance read as
+  driving the net. So a loop that closes through a child is refused.
+
+  That edge assumes every output of a child depends on every other pin of it, which is not
+  always true. A value that reads a net which a child drives, and which does not in fact
+  carry the loop, is refused as well. A package constant, such as \code{pk::W}, is refused
+  although it can never be part of a loop. Its first name is not a member of the module.
 \item \textbf{A rare answer of not the same.} The check compares the children that it does
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.

@@ -14,7 +14,7 @@ Measured on the design of this file before the part (pyslang 12.1.0):
     value 'u' -> accepted       assign u = t;                       two hops
     value 'c' -> accepted       always_comb c = t & a;
     value 'q' -> accepted       always_ff @(posedge clk) q <= t;    correct, a flop
-    value 'z' -> accepted       k u_k (.i(t), .o(z));               a child, not seen
+    value 'z' -> accepted       k u_k (.i(t), .o(z));               a child, since closed
 
 Owner decision (2026-11-20)
 
@@ -31,8 +31,10 @@ Rules
     L4  A clocked procedural block ends the path, because a flop is not a combinational
         loop. A block counts as clocked only when every event of it carries an edge. In
         doubt the block counts as combinational, which refuses rather than accepts.
-    L5  The walk stays inside the one module. A net that the output pin of a child
-        instance drives ends the path, and so does a name that the module does not own.
+    L5  The walk stays inside the one module: a name the module does not own ends the
+        path. A net that a child instance drives does NOT end it. The walk does not enter
+        the child; it adds an edge from the instance's non-output pins instead, which
+        `tests/ops/test_override_child_edge.py` specifies.
     L6  A value that reads no net on such a path is accepted. The operation applies.
     L7  The refusal starts with `override_net <module>: `, and names the net, the name in
         the value that closes the loop, and the word loop.
@@ -42,12 +44,15 @@ Rules
         parameterisation is enough to refuse the whole operation.
 
 Limits, stated
-    - A loop that closes through the output pin of a child instance is not refused (L5).
-      The walk does not enter the child, because the names inside it belong to another
-      namespace. Rule L5 pins this boundary, and `test_a_loop_through_a_child_is_a_limit`
-      is the test that says the limit is still a limit.
     - A loop that closes through a hierarchical reference from another module is not
-      refused, for the same reason.
+      refused by this walk. `tests/ops/test_override_value_scope.py` covers that: such a
+      value is refused for being unfollowable rather than for closing a loop.
+
+    What this file first recorded as a limit, a loop through the output pin of a child
+    instance, is a limit no longer. The owner decided on 2026-11-21 to add a conservative
+    edge from the instance's non-output pins, and
+    `tests/ops/test_override_child_edge.py` holds that rule. The test below changed with
+    it: it asserted the value was accepted, and it now asserts the refusal.
     - A branch of a generate that the elaboration does not take cannot close a loop here,
       because slang reports no driver for it. This is not a limit of the walk. A parameter
       change that takes that branch is a change of configuration, which the manual already
@@ -176,15 +181,14 @@ def test_a_clocked_block_ends_the_path(mod, value):
 # --- L5: the walk stays in the module ------------------------------------------------
 
 
-def test_a_loop_through_a_child_is_a_limit(mod):
+def test_a_loop_through_a_child_is_now_refused(mod):
     """`z` is driven by the pin of `u_k`, which reads `t`, which `n` drives.
 
-    That is a real loop and hdl-vet does not refuse it. The limit is stated in the
-    docstring and in the manual. This test says the limit is still a limit, so that
-    widening the walk cannot leave the manual behind.
+    That is a real loop. It was a stated limit until the conservative instance-pin edge
+    landed. A pinning test is what made the change visible, which is issue #106's point.
     """
-    over(mod, "z")
-    assert [(r.op, r.target, r.status) for r in mod.vet.log][-1] == ("override_net", "m.n", "applied")
+    with pytest.raises(VetError, match="loop"):
+        over(mod, "z")
 
 
 # --- L6: no loop, so the operation applies -------------------------------------------

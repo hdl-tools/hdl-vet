@@ -315,8 +315,8 @@ the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
     value, not from its text. It judges the value by the name each path starts with.
   \item a \code{value} whose path starts with a name that is not a net, a variable or a
     parameter of the module. An instance, a generate block and a function are refused,
-    because hdl-vet cannot follow them. A route through a child instance is not seen
-    (chapter~\ref{ch:limits}).
+    because hdl-vet cannot follow them. A net that a child instance drives is followed
+    through the other pins of that instance (chapter~\ref{ch:limits}).
   \item a \code{value} with a width other than the width of the net. The message says
     \emph{width}.
   \item a module that the design instantiates more than once, when you did not give the

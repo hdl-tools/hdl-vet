@@ -128,14 +128,16 @@ class _SnapshotOps(_DesignHost):
         port_resolved: dict[str, str] = {}
         conns: dict[str, str] = {}
         for port in body.portList:
-            if port.kind == sk.Port:
+            if port.kind in (sk.Port, sk.MultiPort):
                 ports[port.name] = (_DIRECTIONS[port.direction.name], port.type.bitWidth)
                 port_types[port.name] = str(port.type)
                 port_resolved[port.name] = _resolved(port.type)
             else:
                 ports[port.name] = ("interface", 0)
-            if not is_top:
-                conns[port.name] = self._connection_text(port, sym.getPortConnection(port))
+        if not is_top:
+            # portConnections flattens a multiport into its constituents; getPortConnection raises on one.
+            for conn in sym.portConnections:
+                conns[conn.port.name] = self._connection_text(conn.port, conn)
         return InstanceSnap(body.definition.name, params, ports, conns, port_types, port_resolved)
 
     def parameters_of(self, names: frozenset[str]) -> dict[str, dict[str, str]]:
