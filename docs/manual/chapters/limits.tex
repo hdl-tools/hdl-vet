@@ -45,10 +45,15 @@ Items that say so were not checked by a test.
   No operation changes a port, so declare a change of width or direction with
   \apiname{Vet.expect}. After a pair that cancels, a raw edit that declares the name again
   inside a generate block is not seen.
-\item \textbf{Delays and strengths of a primitive.} The sign-off compares gate
-  primitives, user-defined primitives and checkers by their type and their connections.
-  It does not compare their delays or drive strengths. A raw edit that changes only
-  such a value passes without an \code{expect}.
+\item \textbf{More of a primitive that the sign-off does not compare.} The sign-off
+  compares gate primitives, user-defined primitives and checkers by their type, their
+  connections, their delay and their drive strength. It does not compare an attribute of
+  one. A raw edit that changes only an attribute passes without an \code{expect}.
+
+  The delay and the strength come from the text as the design writes it, because the
+  elaborated design cannot give them. Reading the drive strength of a primitive raises in
+  pyslang 12.1.0 and in 12.2.0, which is reported upstream, and the elaborated delay
+  carries no value.
 \item \textbf{More that the dangling check does not see.} The dangling check does not see
   these things:
   \begin{itemize}
