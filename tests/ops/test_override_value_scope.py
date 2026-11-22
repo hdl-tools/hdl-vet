@@ -42,17 +42,12 @@ Limits, stated
       compile-time constant and can never be part of a loop. Telling it apart would mean
       resolving names outside the module, which is what the walk deliberately does not do.
       `test_a_package_constant_is_refused_as_a_limit` pins it.
-    - A loop that closes through a **child module** in its common form is still not
-      refused, and still reaches `proved`:
-
-          kid u_k (.i(t), .o(z));
-          assign y = z;
-
-      The value `z` has the head `z`, a variable, so rule S1 judges it analysable, and the
-      walk then stops because the driver of `z` is an instance. A conservative edge from
-      every input pin of an instance to every net its output pins drive would close this.
-      That widens refusals a long way and is a question for the owner, recorded on the
-      issue. `test_a_loop_through_a_child_net_is_still_a_limit` pins the gap.
+    The second limit this file first recorded, a loop closing through a **child module**
+    in its common form, is a limit no longer. The owner decided on 2026-11-21 to add a
+    conservative edge from an instance's non-output pins to the nets it drives, and
+    `tests/ops/test_override_child_edge.py` holds that rule. The value `z` is still
+    analysable under rule S1, as a variable of the module; what changed is that the walk
+    now reaches it, so the loop refusal fires. The test below changed with it.
 
 Not checked
     A class property or a static method reached with `::`. A value naming an interface
@@ -207,12 +202,12 @@ def test_nothing_is_queued_or_written_when_the_value_is_refused(mod, design):
 # --- the limit that stays open -------------------------------------------------------
 
 
-def test_a_loop_through_a_child_net_is_still_a_limit(mod):
+def test_a_loop_through_a_child_net_is_now_refused(mod):
     """`z` is driven by the pin of `u_k`, which reads `t`, which `n` drives.
 
-    That is a real loop and hdl-vet does not refuse it, because `z` is a variable of the
-    module and the walk stops at the instance driver. The limit is in the docstring and in
-    the manual. This test says it is still a limit.
+    A real loop, and a stated limit until the conservative instance-pin edge landed. It is
+    refused as a loop, not as a value hdl-vet cannot follow: `z` is a variable of the
+    module, so rule S1 still judges it analysable.
     """
-    over(mod, "z")
-    assert [(r.op, r.target, r.status) for r in mod.vet.log][-1] == ("override_net", "mx.n", "applied")
+    with pytest.raises(VetError, match="loop"):
+        over(mod, "z")

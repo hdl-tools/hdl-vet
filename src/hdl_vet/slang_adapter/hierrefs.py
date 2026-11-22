@@ -81,12 +81,16 @@ class _HierRefOps(_DesignHost):
         (an `assign`, a combinational block, a gate primitive), and of each driver the WHOLE
         symbol is read, so a condition, a case selector, a loop bound and an index on the left
         side count as reads, and so does a name that the driver itself writes. A net declared
-        with an initialiser (`wire t = n;`) also reads the initialiser. Only two things end the
-        walk: a driver that is a child instance (a stated limit), and a driver that is an
-        edge-clocked procedural block (a register). An input port is skipped. The walk stays in
+        with an initialiser (`wire t = n;`) also reads the initialiser. A driver that is a child
+        instance is not entered: the net counts as driven by every name that the instance's
+        non-output pins (input, inout, ref) read. This assumes that every output depends on every
+        non-output pin, so it over-refuses on purpose. An interface port of the instance is
+        skipped (a stated limit). Only a driver that is an edge-clocked procedural block (a
+        register) ends the walk, and an input port is skipped. The walk stays in
         the one module body. The result is the union over every elaborated body of `module`.
         """
         sk, ek, pk = pyslang.ast.SymbolKind, pyslang.ast.ExpressionKind, pyslang.ast.ProceduralBlockKind
+        ad = pyslang.ast.ArgumentDirection
         an = self._analyze()
 
         def reads(node: Any) -> set[str]:
@@ -121,7 +125,14 @@ class _HierRefOps(_DesignHost):
                 out: set[str] = set()
                 for d in drivers:
                     cs = d.containingSymbol
-                    if d.isInputPort or cs.kind == sk.Instance:
+                    if d.isInputPort:
+                        continue
+                    if cs.kind == sk.Instance:
+                        # Connections arrive flattened, so a multiport pin is covered. An interface
+                        # connection has no expression and adds nothing: a stated limit.
+                        for conn in cs.portConnections:
+                            if conn.port.direction != ad.Out and conn.expression is not None:
+                                out |= reads(conn.expression)
                         continue
                     if cs.kind == sk.ProceduralBlock and clocked(cs):
                         continue
