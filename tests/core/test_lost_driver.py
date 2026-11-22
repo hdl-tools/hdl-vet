@@ -40,9 +40,14 @@ never assigned a value"), and removing the last driver of a signal nothing reads
 in the unused set. The new check is therefore purely additive and cannot refuse an
 operation that works today.
 
-Cost, measured on a generated design of 2400 signals: `drivers_in` is about 23 microseconds
-per signal, so one whole-design pass is 0.056 s and the before-and-after pair is about
-0.11 s. `unused()` is 0.002 s. That is why the whole design is checked on every run.
+Cost. The first version asked `drivers_in(module, name)` once per signal, and each of those
+calls walks every instance of the design, so the scan grew as modules times signals times
+instances. On a design of 31 modules, 1200 signals and 1201 instances that was 2522
+instance walks and 0.72 s per comparison, and on CI with the hdl-bag corpus it pushed the
+test job past its thirty-minute timeout. The scan now walks the instances once and reads
+the drivers of each member: 0.032 s on the same design, and no instance walk at all.
+`tests/perf/test_driver_scan_cost.py` pins the invariant that the walk count must not grow
+with the signals per module, because no behaviour test could see this.
 
 Rules
     D1  A signal that had a driver before the run and has none after is reported, and the
@@ -57,6 +62,11 @@ Rules
         driver, so the reader is not left to guess which edit did it.
     D6  A run that removes no driver is unaffected: nothing is added to the report and the
         sign-off result is unchanged.
+    D7  Only a signal the edited design still declares is reported, in a module the edited
+        design still elaborates. A signal or a module that the run removed outright has not
+        lost a driver, it has gone, and the structural comparison covers that. Both
+        boundaries were implicit while the scan asked per name, because the query raised
+        for a name or module that was absent; the one-pass scan has to state them.
 
 Not checked
     A driver lost through a hierarchical assignment from another module. A signal that

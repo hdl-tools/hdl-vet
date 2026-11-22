@@ -207,26 +207,23 @@ def lost_drivers(before: Design, after: Design) -> list[tuple[str, str]]:
     unused = after.unused_names()
     connected = _connected_ports(after)
     out: list[tuple[str, str]] = []
-    for module in after.modules():
+    # one pass per design: asking `drivers_in` per signal re-walks every instance each time (#58)
+    lost = before.driven_signals() - after.driven_signals()
+    elaborated = after.elaborated_modules()  # a module the run left out of the design is not a lost driver
+    for module in sorted({m for m, _ in lost} & elaborated):
         try:
             info = after.module(module)
         except AdapterError:
             continue
-        # liveness as `dangling_set` judges it: an output nobody connects or reads is allowed to lose its driver
-        outputs = [p.name for p in info.ports if p.direction != "input"]
-        names = outputs + [d.name for d in info.decls]
-        for name in names:
+        outputs = {p.name for p in info.ports if p.direction != "input"}
+        declared = outputs | {d.name for d in info.decls}  # a name `after` no longer declares is not a lost driver
+        for name in sorted(n for m, n in lost if m == module and n in declared):
             if (module, name) in unused:
                 continue
+            # liveness as `dangling_set` judges it: an output nobody connects or reads is allowed to lose its driver
             if name in outputs and (module, name) not in connected and not after.reads_port(module, name):
                 continue
-            try:
-                had = bool(before.drivers_in(module, name))
-                has = bool(after.drivers_in(module, name)) if had else True
-            except AdapterError:
-                continue
-            if not has:
-                out.append((module, name))
+            out.append((module, name))
     return out
 
 
