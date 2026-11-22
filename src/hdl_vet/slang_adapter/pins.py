@@ -40,27 +40,35 @@ class _PinOps(_DesignHost):
             parent = sym.parentScope.containingInstance if sym.parentScope is not None else None
             if parent is None:
                 continue  # a top instance has no parent
-            ports = [p for p in sym.body.portList if p.name == pin]
-            conn = sym.getPortConnection(ports[0]) if ports else None
-            expr = None if conn is None else conn.expression
-            while expr is not None and (expr.kind == ek.Assignment or (expr.kind == ek.Conversion and expr.isImplicit)):
-                expr = expr.left if expr.kind == ek.Assignment else expr.operand
-            text, kind, port = "", "other", ""
-            if expr is not None:
-                if expr.syntax is None:  # an implicit `.name` or `.*`: the signal of that name
-                    symbol = getattr(expr, "symbol", None)
-                    text = str(getattr(symbol, "name", None) or pin)
-                else:
-                    text = _clean_text(expr.syntax)
-                port = self._parent_port(parent, expr)
-                if port:
-                    kind = "port"
-                elif self._is_zero(expr):
-                    kind = "zero"
-            path, base = str(sym.hierarchicalPath), str(parent.hierarchicalPath)
-            label = _INDEX.sub("", path[len(base) + 1 :])
-            module = str(parent.definition.name)
-            found.setdefault((module, label, text), PinConn(module, label, text, kind, port if kind == "port" else ""))
+            # A multiport is reported as its constituents, as the instance's own connection list does.
+            names = {pin}
+            for p in sym.body.portList:
+                if p.name == pin and p.kind == pyslang.ast.SymbolKind.MultiPort:
+                    names = {str(q.name) for q in p.ports}
+            exprs = [c.expression for c in sym.portConnections if str(c.port.name) in names]
+            for expr in exprs or [None]:
+                while expr is not None and (
+                    expr.kind == ek.Assignment or (expr.kind == ek.Conversion and expr.isImplicit)
+                ):
+                    expr = expr.left if expr.kind == ek.Assignment else expr.operand
+                text, kind, port = "", "other", ""
+                if expr is not None:
+                    if expr.syntax is None:  # an implicit `.name` or `.*`: the signal of that name
+                        symbol = getattr(expr, "symbol", None)
+                        text = str(getattr(symbol, "name", None) or pin)
+                    else:
+                        text = _clean_text(expr.syntax)
+                    port = self._parent_port(parent, expr)
+                    if port:
+                        kind = "port"
+                    elif self._is_zero(expr):
+                        kind = "zero"
+                path, base = str(sym.hierarchicalPath), str(parent.hierarchicalPath)
+                label = _INDEX.sub("", path[len(base) + 1 :])
+                module = str(parent.definition.name)
+                found.setdefault(
+                    (module, label, text), PinConn(module, label, text, kind, port if kind == "port" else "")
+                )
         return list(found.values())
 
     @staticmethod

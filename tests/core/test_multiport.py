@@ -40,6 +40,23 @@ Rules
         flattens a multiport into its constituent ports, so each carries its own name and
         expression.
     P4  A sign-off over such a design reaches a result rather than raising.
+    P5  `pin_connections` asked for a multiport by its own name returns one entry per
+        constituent, each with that constituent's connection. It used to raise, because
+        `getPortConnection` refuses a `MultiPortSymbol` (#114).
+    P6  `pin_connections` asked for a **constituent** by its own name returns that
+        constituent's connection. It used to report an empty text, which means "no
+        connection", because `portList` holds the multiport and not its constituents, so
+        the lookup found nothing. That was a silent wrong answer and is not in #114's text.
+    P7  A plain port is unaffected. Both routes give an output port an `Assignment` whose
+        own syntax is None, which the existing unwrapping already resolves, so the answer
+        for `om` does not move. A name that is no port of the module keeps its present
+        answer too: one entry with an empty text.
+
+Observed and deliberately not changed
+    `pin_connections` cannot distinguish "the module has no such pin" from "the pin is
+    there and nothing is connected to it". Both give one entry with the text "". That is
+    what its docstring promises, and the enable trace in `src/hdl_vet/enables.py` reads
+    the answer, so widening it is a separate decision and not part of #114.
 
 Not checked
     An interface port, which is the other kind the `else` branch covers and which is
@@ -121,3 +138,54 @@ def test_the_connections_of_the_instance_are_recorded(vet):
 def test_a_sign_off_over_such_a_design_completes(vet):
     result = vet.finish()
     assert result.ok, result.report()
+
+
+# --- P5, P6, P7: pin_connections and a multiport (#114) ------------------------------
+
+
+def test_asking_for_the_multiport_returns_its_constituents(vet):
+    """`.p({a, sel})` connects `pa` to `a` and `pb` to `sel`, so one pin gives two entries.
+
+    Measured before the fix: this raised TypeError, because `getPortConnection` refuses a
+    `MultiPortSymbol` and `pins.py` called it unconditionally.
+    """
+    conns = vet.session.loaded.pin_connections("mpk", "p")
+    assert len(conns) == 2, conns
+    assert {c.text for c in conns} == {"a", "sel"}, conns
+    assert {c.parent for c in conns} == {"top"}, conns
+    assert {c.instance for c in conns} == {"u_mp"}, conns
+
+
+@pytest.mark.parametrize(("pin", "text"), [("pa", "a"), ("pb", "sel")])
+def test_asking_for_a_constituent_gives_its_connection(vet, pin, text):
+    """Measured before the fix: one entry with `text=""`, meaning "no connection".
+
+    `portList` holds the multiport `p` and the plain port `om`, not `pa` and `pb`, so the
+    name lookup found nothing and the code reported an absent connection rather than
+    saying it could not tell. #114 did not know about this half.
+    """
+    conns = vet.session.loaded.pin_connections("mpk", pin)
+    assert len(conns) == 1, conns
+    assert conns[0].text == text, conns
+
+
+def test_a_plain_port_is_unaffected(vet):
+    """`om` is an output. Its connection arrives as an Assignment whose own syntax is
+    None, by either route, and the existing unwrapping resolves it to the signal."""
+    conns = vet.session.loaded.pin_connections("mpk", "om")
+    assert len(conns) == 1, conns
+    assert conns[0].text == "y", conns
+
+
+def test_a_name_that_is_no_port_at_all_keeps_its_present_answer(vet):
+    """One entry with an empty text, which is what the contract says and what it does.
+
+    I first wrote this assertion as `== []` and was wrong: the docstring of
+    `pin_connections` says "an instance with no connection for the pin has the text ''",
+    and that applies to a name the module does not have at all. So the function cannot
+    distinguish "no such pin" from "a pin that is there and unconnected". That conflation
+    is real but it is not #114, and the enable trace reads this answer, so it is left
+    alone here and recorded in the docstring above instead.
+    """
+    conns = vet.session.loaded.pin_connections("mpk", "nosuchpin")
+    assert len(conns) == 1 and conns[0].text == "", conns
