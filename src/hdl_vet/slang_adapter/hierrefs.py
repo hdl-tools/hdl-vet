@@ -58,6 +58,44 @@ class _HierRefOps(_DesignHost):
                 out.append(Driver(False))
         return out
 
+    def driven_signals(self) -> frozenset[tuple[str, str]]:
+        """Every `(module, name)` net or variable that has a driver in some elaborated body.
+
+        The same facts as `drivers_in`, for the whole design in one pass. It exists because
+        asking `drivers_in` per name re-walks every instance each time (`_canonical_bodies`),
+        so a scan over all signals cost modules times signals times instances. Here the
+        instances are walked once and each member is read once. A declaration initialiser
+        counts as a driver. A member that is not a net or variable is not listed.
+        """
+        sk = pyslang.ast.SymbolKind
+        an = self._analyze()  # the canonical bodies are known only after the analysis
+        bodies: dict[str, list[Any]] = {}
+        for sym in self._instances():
+            body = sym.canonicalBody or sym.body
+            seen = bodies.setdefault(body.definition.name, [])
+            if not any(b is body for b in seen):
+                seen.append(body)
+        out: set[tuple[str, str]] = set()
+        for module, module_bodies in bodies.items():
+            for body in module_bodies:
+                for member in body:
+                    name = getattr(member, "name", "")
+                    if not name or member.kind not in (sk.Net, sk.Variable):
+                        continue
+                    try:
+                        drivers = an.getDrivers(member)
+                    except TypeError:
+                        continue
+                    if getattr(member, "initializer", None) is not None or any(
+                        d.isInputPort or d.containingSymbol.kind != sk.InstanceBody for d in drivers
+                    ):
+                        out.add((module, str(name)))
+        return frozenset(out)
+
+    def elaborated_modules(self) -> frozenset[str]:
+        """The names of the modules with at least one instance under the top (one walk, for the whole design)."""
+        return frozenset(sym.body.definition.name for sym in self._instances())
+
     def unfollowable_heads(self, module: str, names: Iterable[str]) -> list[str]:
         """The names of `names` that the loop walk cannot follow in `module`, sorted.
 

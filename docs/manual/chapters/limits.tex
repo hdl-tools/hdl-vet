@@ -58,11 +58,17 @@ Items that say so were not checked by a test.
   These two cases were not checked by a test. The specification of the check lists them.
 \item \textbf{A driver in a generate branch that is not taken.} The compiler counts an
   assignment inside a generate branch as a driver, also when the elaboration does not take
-  that branch. The signal then has no driver in the design that is built, and nothing is
-  reported, so the sign-off accepts the run. A parameter change that switches off a branch
-  is one way to reach this, and \code{if (0)} alone is enough. A generate case behaves in
-  the same way, and both an undriven signal and an undriven output port are lost. This is a
-  limit of the compiler and not of hdl-vet, and it was measured with pyslang 12.1.0.
+  that branch. The signal then has no driver in the design that is built, and the compiler
+  reports nothing. The compiler does this on purpose, and it will not change.
+
+  hdl-vet therefore counts the drivers itself. The sign-off counts the drivers of every
+  signal of every module, before and after the run. It reports a signal that lost its last
+  driver and that something still reads. A parameter change that switches off a branch is
+  one way to reach the case, and \code{if (0)} alone is enough. A generate case behaves in
+  the same way.
+
+  One case stays open, one level further in. A signal declared inside a generate block is
+  not counted, so a driver lost on such a signal is not reported.
 \item \textbf{One configuration.} The sign-off sees the design with the defines of the
   file list. An operation refuses a list that holds a conditional compilation directive,
   because it cannot check another configuration.

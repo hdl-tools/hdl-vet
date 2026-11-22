@@ -67,6 +67,7 @@ class Result:
     failed_checks: list[str] = field(default_factory=list)
     added: dict[str, bytes] = field(default_factory=dict)  # output-relative POSIX path -> bytes
     dangling: list[Diag] = field(default_factory=list)  # dangling entries the baseline did not have
+    lost_drivers: list[tuple[str, str]] = field(default_factory=list)  # (module, signal) driven before, not after
     equivalence: list[Record] = field(default_factory=list)  # one record for each comparison of the proof
     enables: list[Enable] = field(default_factory=list)  # one record for each pin of an enable that was looked at
     notes: list[str] = field(default_factory=list)  # the notes of the operations, set by `Vet.finish` and `Vet.check`
@@ -93,6 +94,8 @@ class Result:
         for d in self.dangling:
             where = self._rel(d.path) + (f":{d.line}" if d.line is not None else "")
             lines.append(f"  left dangling: {d.message} in module {d.module} ({where})")
+        for module, signal in self.lost_drivers:
+            lines.append(f"  last driver removed: signal '{signal}' of module {module} has no driver now")
         for c in self.unexpected_changes:
             name = f" {c.name}" if c.name else ""
             lines.append(f"  unexpected change: {c.kind} {c.path}{name}: {c.before!r} -> {c.after!r}")
@@ -174,6 +177,14 @@ def _grown(before: Sequence[Diag], after: Sequence[Diag]) -> list[Diag]:
     return out
 
 
+def _connected_ports(design: Design) -> set[tuple[str, str]]:
+    """(module, port) pairs that some instance connects to a non-empty expression."""
+    connected: set[tuple[str, str]] = set()
+    for snap in design.snapshot().values():
+        connected.update((snap.module, port) for port, text in snap.connections.items() if text)
+    return connected
+
+
 def dangling_set(design: Design, added: Collection[Path] = ()) -> list[Diag]:
     """What counts as dangling in `design`: its driverless nets and variables, and its driverless
     output ports that some instance connects to a non-empty expression or that their own module reads
@@ -182,10 +193,38 @@ def dangling_set(design: Design, added: Collection[Path] = ()) -> list[Diag]:
     raw = [d for d in design.dangling() if d.path not in added]
     if not any(d.code == "UndrivenPort" for d in raw):
         return raw
-    connected: set[tuple[str, str]] = set()
-    for snap in design.snapshot().values():
-        connected.update((snap.module, port) for port, text in snap.connections.items() if text)
+    connected = _connected_ports(design)
     return [d for d in raw if d.code != "UndrivenPort" or d.port is None or d.read or (d.module, d.port) in connected]
+
+
+def lost_drivers(before: Design, after: Design) -> list[tuple[str, str]]:
+    """Signals that had a driver in `before` and have none in `after`, unless `after` calls them unused.
+
+    The whole design: the driver can be lost in a module the edit did not touch (a generate branch
+    that a parameter change deselects), which slang does not report (slang#1602). A module or member
+    that is absent or not a net or variable on either side is skipped.
+    """
+    unused = after.unused_names()
+    connected = _connected_ports(after)
+    out: list[tuple[str, str]] = []
+    # one pass per design: asking `drivers_in` per signal re-walks every instance each time (#58)
+    lost = before.driven_signals() - after.driven_signals()
+    elaborated = after.elaborated_modules()  # a module the run left out of the design is not a lost driver
+    for module in sorted({m for m, _ in lost} & elaborated):
+        try:
+            info = after.module(module)
+        except AdapterError:
+            continue
+        outputs = {p.name for p in info.ports if p.direction != "input"}
+        declared = outputs | {d.name for d in info.decls}  # a name `after` no longer declares is not a lost driver
+        for name in sorted(n for m, n in lost if m == module and n in declared):
+            if (module, name) in unused:
+                continue
+            # liveness as `dangling_set` judges it: an output nobody connects or reads is allowed to lose its driver
+            if name in outputs and (module, name) not in connected and not after.reads_port(module, name):
+                continue
+            out.append((module, name))
+    return out
 
 
 def _has_header(data: bytes) -> bool:
@@ -728,7 +767,8 @@ class Session:
         records = found.records
         added_paths = {path for path, _ in self._added.values()}
         dangling = _grown(dangling_set(self._baseline, added_paths), dangling_set(self._design, added_paths))
-        ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling
+        lost = lost_drivers(self._baseline, self._design)
+        ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling and not lost
         ok = ok and all(r.passed for r in records) and all(e.passed for e in found.enables)
         return Result(
             ok,
@@ -743,6 +783,7 @@ class Session:
             failed_checks=failed,
             added=self.added,
             dangling=dangling,
+            lost_drivers=lost,
             equivalence=records,
             enables=found.enables,
         )

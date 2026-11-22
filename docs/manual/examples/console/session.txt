@@ -15,6 +15,7 @@ saved bad.session.zip
 sign-off so far: FAILED
 hdl-vet sign-off: FAILED
   left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:13)
+  last driver removed: signal 'irq' of module soc_top has no driver now
 $ cp regenerated/rtl/soc_top.sv design/rtl/soc_top.sv
 $ vet apply --resume work.session.zip -s scripts/skipped.py -o out/resumed
 wrote out/resumed
@@ -26,6 +27,7 @@ vet: script first.py: already applied by the session saved in work.session.zip
 $ vet apply --resume bad.session.zip -s scripts/skipped.py --dry-run
 hdl-vet sign-off: FAILED
   left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:15)
+  last driver removed: signal 'irq' of module soc_top has no driver now
 [exit status 1]
 $ vet apply --resume work.session.zip -f design/design.f -s scripts/skipped.py --dry-run
 vet: -f must not be given with --resume: the saved session has them
