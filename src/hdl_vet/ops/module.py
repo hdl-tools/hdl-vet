@@ -23,7 +23,7 @@ from hdl_vet.ops.text import (
     _same,
     _segment,
 )
-from hdl_vet.slang_adapter import ModuleInfo, driven_bases, is_simple_identifier, tokens
+from hdl_vet.slang_adapter import ModuleInfo, check_expression, driven_bases, is_simple_identifier, tokens
 
 if TYPE_CHECKING:
     from hdl_vet.ops.vet import Vet
@@ -190,7 +190,13 @@ class Module:
     def remove_instance(self, name: str, module: str | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_instance"
         v._refuse_scope(op, mod)
+        if not isinstance(name, str):
+            raise VetError(f"{op} {mod}: the name must be a str, not {type(name).__name__}")
         name = _instance_name(name)
+        # An escaped name is any run of non-blank characters (`u/esc`), so only an empty or blank-holding
+        # name that the module does not list cannot be an instance name.
+        if (not name or any(c.isspace() for c in name)) and name not in [i.name for i in self._fresh().instances]:
+            raise VetError(f"{op} {mod}: {name!r} cannot be an instance name")
         target = f"{mod}.{name}"
         self._confirm_instances(op)
 
@@ -301,6 +307,13 @@ class Module:
     def remove_assign(self, target: str, was: object | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_assign"
         v._refuse_scope(op, mod)
+        if not isinstance(target, str):
+            raise VetError(f"{op} {mod}: the target must be a str, not {type(target).__name__}")
+        if target.startswith("\\"):
+            hint = _did_you_mean(target[1:].rstrip(), [a.left for a in self._fresh().assigns])
+            raise VetError(f"{op} {mod}: {target!r} is an escaped spelling; give the name without the backslash{hint}")
+        if (why := check_expression(target)) is not None:
+            raise VetError(f"{op} {mod}: {target!r} is not an assign target: {why}")
         self._confirm_instances(op)
 
         def run() -> None:
