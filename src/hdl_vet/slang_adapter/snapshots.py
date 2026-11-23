@@ -213,8 +213,22 @@ class _SnapshotOps(_DesignHost):
                 if not text and i < len(written):  # an element of an array: its bit has no text of its own
                     text = written[i]
                 conns[str(i)] = text
-            out[path] = InstanceSnap(kind, {}, {}, conns)
+            delay, strength = self._gate_timing(sym)
+            out[path] = InstanceSnap(kind, {}, {}, conns, delay=delay, strength=strength)
         return out
+
+    def _gate_timing(self, sym: Any) -> tuple[str, str]:
+        """The written delay and drive strength of a gate, from its syntax; ("", "") when there is none.
+
+        The elaborated route is unusable (see tests/core/test_gate_timing.py). A checker
+        instance or a node without syntax has no gate statement, so it gets ("", "").
+        """
+        syntax = sym.syntax
+        stmt = None if syntax is None else syntax.parent
+        if stmt is None:
+            return "", ""
+        delay, strength = getattr(stmt, "delay", None), getattr(stmt, "strength", None)
+        return (_clean_text(delay) if delay is not None else "", _clean_text(strength) if strength is not None else "")
 
     def _written_terminals(self, sym: Any) -> list[str]:
         """The texts of the ordered connections of the statement that holds `sym`."""

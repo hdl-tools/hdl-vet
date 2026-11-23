@@ -46,7 +46,7 @@ The sign-off does not see these changes:
 
 - a change of logic that you make with a raw edit of the text, which is `Vet.splice`
 - a change of logic above the edited module, because the proof is of the edited module only
-- a change of the delay or the strength of a gate primitive
+- a change of an attribute of a gate primitive
 - a signal that loses the driver of only some of its bits
 
 The operations refuse these things:

@@ -151,6 +151,11 @@ def diff_snapshots(before: Mapping[str, InstanceSnap], after: Mapping[str, Insta
         for n in set(a.connections) | set(b.connections):
             if a.connections.get(n) != b.connections.get(n):
                 out.append(Change("connection-changed", path, n, a.connections.get(n), b.connections.get(n)))
+        # a module instance has "" for both, so only a gate can differ here
+        if a.delay != b.delay:
+            out.append(Change("delay-changed", path, "", a.delay, b.delay))
+        if a.strength != b.strength:
+            out.append(Change("strength-changed", path, "", a.strength, b.strength))
     out.sort(key=lambda c: (c.path, c.kind, c.name))
     return out
 

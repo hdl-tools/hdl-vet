@@ -364,6 +364,10 @@ The kinds are:
   \code{input 1}.
 \item[port-type-changed] The direction and width stay, but the declared type differs.
 \item[connection-changed] The connection of a port has other text.
+\item[delay-changed] The delay of a gate primitive has other text, for example
+  \code{\#2} against \code{\#5}. Adding or removing a delay is such a change too.
+\item[strength-changed] The drive strength of a gate primitive has other text, for
+  example \code{(strong1, strong0)} against \code{(weak1, weak0)}.
 \end{description}
 
 The sign-off compares gate primitives, user-defined primitives and checker instances in
@@ -375,8 +379,9 @@ name, such as \code{top.g1}.
 An unnamed instance has the path \code{top.<not:0>}. Here \code{not} is the type. The
 number counts the unnamed instances of that type in the scope, from 0, in the order of the
 text. No operation edits such an instance. So a change comes from a raw edit, and you
-declare it with \apiname{Vet.expect}. The sign-off does not compare the delays and the
-strengths of a primitive.
+declare it with \apiname{Vet.expect}. The delay and the drive strength of a primitive are
+compared, as \code{delay-changed} and \code{strength-changed}, and an attribute of
+one is not.
 
 A change can come from an operation too. A \apiname{Instance.set_param} can change which
 generate branch the design takes. Then the primitives of the old branch go and those of the
