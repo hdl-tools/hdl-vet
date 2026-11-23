@@ -67,6 +67,34 @@ Checks and the command line
     A check that raises is reported as a failed check ("check raised ..."),
     not as a traceback. With --dry-run the "<N> applied, <M> skipped" line goes
     to stderr so stdout stays a pure diff.
+
+The removal check after a cancelled addition (#57)
+    Once `remove_wire` or `remove_assign` retires the post-condition of the
+    addition that it undid, its own post-condition is the only one left. It has
+    to be at least as strong as the one it retired.
+    C2  `remove_assign` fails when an assignment drives the target under
+        another spelling, so `assign t[3:0] = ...` counts as an assignment to
+        `t`. The comparison is the text of the target OR a base name of it
+        (`driven_bases`). The text test stays because a target can be given as
+        the design spells it, such as `w[3:0]` or an escaped name, and
+        `driven_bases` answers only for a plain identifier. Matching on base
+        names alone made the check vacuous for every such target.
+    Stated limit, not fixed: a declaration that comes back inside a generate
+    construct is not seen. `ModuleInfo.generate_decls` holds bare names with no
+    scope and includes branches the elaboration does not take, so a check on it
+    fails correct runs: a module-level `tmp` that was removed is reported as
+    still there when any generate block declares its own local `tmp`. A
+    name-only set cannot tell the two apart. The same holds for
+    `generate_assigned` and `remove_assign`.
+
+One check for a pair (#57, part 2)
+    An addition and its removal share one key, so the later operation replaces
+    the post-condition of the earlier one. See rules W6 to W11 in `test_ops.py`.
+    C3  Exactly one post-condition is left for the pair, and it is the one of
+        the last operation, with its own evaluator and its own arguments. It
+        fires when the design does not show what that operation did. Sharing
+        the key must not lose the check, and must not run the evaluator of the
+        other operation.
 """
 
 from __future__ import annotations
@@ -401,3 +429,158 @@ def test_disconnect_message_for_an_interface_port(tmp_path: Path):
     )
     with pytest.raises(VetError, match="an interface port"):
         vet.module("t").instance("u").disconnect("b")
+
+
+# --- the removal check after a cancelled addition (#57) --------------------------------
+
+PLAIN = b"module t (input logic [3:0] a, output logic [3:0] y);\n  assign y = a;\nendmodule\n"
+
+
+def _behind_the_back(vet: Vet, path: Path, old: bytes, new: bytes) -> None:
+    """Change the text the way the reviewer's probes did, so a post-condition has to catch it."""
+    _ = vet.design  # apply what is queued, so the text shows the result of the operations
+    data = vet.text(path)
+    at = data.find(old)
+    assert at >= 0, old
+    vet.splice(path, at, at + len(old), new, old=old)
+
+
+def test_a_target_that_is_not_a_plain_identifier_is_still_compared_as_text(tmp_path: Path):
+    """C2. The guard against making the check vacuous.
+
+    `remove_assign` takes the target as the design spells it, so it can be `w[3:0]`.
+    `driven_bases` answers only for a plain identifier, so a comparison on base names alone
+    could never match such a target and the check would pass whatever the design holds.
+    """
+    vet = vet_for(
+        tmp_path,
+        b"module t (input logic [3:0] a, output logic [3:0] y);\n"
+        b"  wire [7:0] w;\n"
+        b"  assign w = {a, a};\n"
+        b"  assign w[3:0] = a;\n"
+        b"  assign y = w[7:4];\n"
+        b"endmodule\n",
+    )
+    vet.module("t").remove_assign("w[3:0]")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  assign y = w[7:4];\n", b"  assign w[3:0] = a;\n  assign y = w[7:4];\n")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["remove_assign t w[3:0]: the assignment is still there in the final design"]
+
+
+def test_an_assignment_back_as_a_part_select_fails_the_removal(tmp_path: Path):
+    """C2. The assignment is added and removed again, and then comes back as a part select.
+
+    The check of the `add_assign` is retired. The check of the `remove_assign` used to
+    compare the target as text, so `dbg[3:0]` did not count as an assignment to `dbg` and
+    this design signed off with a net the script declared and a driver it never wrote.
+    """
+    vet = vet_for(tmp_path, PLAIN)
+    top = vet.module("t")
+    top.add_wire("dbg", width=4)
+    top.add_assign("dbg", "a")
+    top.remove_assign("dbg")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  assign y = a;\n", b"  assign dbg[3:0] = 4'b0;\n  assign y = a;\n")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["remove_assign t dbg: the assignment is still there in the final design"]
+
+
+# --- C3: one check for a pair, the one of the last operation ---------------------------------
+
+CHILD = (
+    b"module child (\n  input  logic a,\n  input  logic spare,\n  output logic q\n);\n  assign q = a;\nendmodule\n"
+    b"module t (input logic a, output logic q);\n  child u (.a(a), .spare(1'b0), .q(q));\nendmodule\n"
+)
+
+
+def test_the_check_of_the_last_addition_is_the_one_left_for_a_wire_and_an_assignment(tmp_path: Path) -> None:
+    """C3. Added, removed and added again, and then the assignment goes behind the back.
+
+    The checks of the two removals were replaced, so they cannot fire on the wire that is
+    there. The check of the second `add_assign` holds the second expression and fires.
+    """
+    vet = vet_for(tmp_path, PLAIN)
+    top = vet.module("t")
+    top.add_wire("dbg", width=4)
+    top.add_assign("dbg", "a")
+    top.remove_assign("dbg")
+    top.remove_wire("dbg")
+    top.add_wire("dbg", width=4)
+    top.add_assign("dbg", "~a")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  assign dbg = ~a;\n", b"")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["add_assign t dbg: the assignment 'assign dbg = ~a;' is missing"]
+
+
+def test_the_check_of_the_last_addition_is_the_one_left_for_a_parameter(tmp_path: Path) -> None:
+    """C3. Added, removed and added again, and then the default changes behind the back."""
+    vet = vet_for(tmp_path, PLAIN)
+    top = vet.module("t")
+    top.add_param("DFT", 0)
+    top.remove_param("DFT")
+    top.add_param("DFT", 0)
+    _behind_the_back(vet, tmp_path / "t.sv", b"DFT = 0", b"DFT = 1")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["add_param t DFT: expected default '0', found '1'"]
+
+
+def test_the_check_of_the_last_removal_is_the_one_left_for_a_port(tmp_path: Path) -> None:
+    """C3. A port of the input design is removed, added and removed, and then comes back.
+
+    The check of the `add_port` was replaced. The check of the last `remove_port` fires.
+    """
+    vet = vet_for(tmp_path, CHILD)
+    child = vet.module("child")
+    child.remove_port("spare")
+    child.add_port("spare", "input")
+    child.remove_port("spare")
+    _behind_the_back(vet, tmp_path / "t.sv", b"  output logic q\n);", b"  output logic q,\n  input  logic spare\n);")
+    r = vet.finish()
+    assert not r.ok
+    assert r.failed_checks == ["remove_port child spare: the port is still there in the final design"]
+
+
+# --- an addition after a removal inside a group (#57) ----------------------------------------
+#
+# C4  Inside a group, `add_wire` used to see the declaration a `remove_wire` had queued
+#     away, because it loads no fresh module info of its own. It recorded "skipped", and the
+#     sign-off passed on a design that did not hold the wire the script asked for. A wrong
+#     "ok", and it also made the next operation fail with "no net, variable or port".
+#     It now reads the registered check of the removal, which says the declaration is on its
+#     way out without a re-load. A re-load would place a second declaration above the first
+#     instead of below it, so consecutive calls would appear in reverse order.
+
+
+def test_an_addition_after_a_removal_inside_a_group_is_applied(vet: Vet) -> None:
+    """C4. The same three operations as rule W7, inside a group this time."""
+    mid = vet.module("mid")
+    with vet.group():
+        mid.add_wire("w", width=4)
+        mid.remove_wire("w")
+        mid.add_wire("w", width=4)
+    assert [(e.op, e.status) for e in vet.log] == [
+        ("add_wire", "applied"),
+        ("remove_wire", "applied"),
+        ("add_wire", "applied"),
+    ]
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert b"logic [3:0] w;" in r.files[mid.path]
+
+
+def test_an_assignment_can_follow_an_addition_after_a_removal_in_a_group(vet: Vet) -> None:
+    """C4. The knock-on: the stale skip used to leave the name undeclared for the next call."""
+    mid = vet.module("mid")
+    with vet.group():
+        mid.add_wire("w", width=4)
+        mid.remove_wire("w")
+        mid.add_wire("w", width=4)
+        mid.add_assign("w", "a")
+    r = vet.finish()
+    assert r.failed_checks == []
+    assert r.ok, r.report()
+    assert b"assign w = a;" in r.files[mid.path]

@@ -12,6 +12,7 @@ from typing import Any
 import pyslang
 
 from hdl_vet.filelist import Filelist
+from hdl_vet.paths import same_file, true_case
 from hdl_vet.slang_adapter.records import AdapterError
 from hdl_vet.slang_adapter.text import _BOM, _key, _read
 
@@ -49,7 +50,8 @@ class LoadCache:
     """
 
     def __init__(self, reuse: bool = True) -> None:
-        self.includes: dict[tuple[str, Path], Path | None] = {}
+        # (name, directory) -> (the file the filesystem holds, the place the `include asked for)
+        self.includes: dict[tuple[str, Path], tuple[Path, Path] | None] = {}
         self.paths: dict[Path, Path] = {}
         self.headers: dict[Path, bytes] = {}
         self.reuse = reuse
@@ -146,7 +148,13 @@ class _Shared:
         self.fl = fl
         self._names: dict[str, str] = {}
         self._root = Path(fl.root.anchor) / "__hdlvet__"
-        self.real: dict[str, Path] = {}  # synthetic buffer path -> real path
+        # Two questions, two answers. `real` maps a path slang reports back to the file
+        # it stands for, and its key is folded, because slang can report another case of
+        # it on Windows. `given` records the buffers slang already holds, and its member
+        # is the path exactly as spelled, because `assignText` is case-sensitive: two
+        # spellings of one header are two buffers, and each `include needs its own.
+        self.real: dict[str, Path] = {}  # synthetic buffer path, folded -> real path
+        self.given: set[str] = set()  # the synthetic paths slang holds, as spelled
         self.hbytes: dict[Path, bytes] = {}  # raw bytes of every header registered
         self.bad: dict[Path, str] = {}  # headers that are not valid UTF-8
         self.bodies: dict[Path, str] = {}
@@ -265,16 +273,28 @@ class _Loader:
     def mirror(self, real: Path) -> Path:
         return self.shared.mirror(real)
 
-    def _resolve(self, name: str, real_dir: Path) -> Path | None:
+    def _resolve(self, name: str, real_dir: Path) -> tuple[Path, Path] | None:
+        """The header `name` resolves to, as `(real, asked)`.
+
+        `real` is the file the filesystem holds, so one header is one file of the design.
+        `asked` is the place the `include names, kept as spelled: slang looks the header up
+        there in the mirror, and that lookup is case-sensitive on every platform. The two
+        differ when a spelling that is not the one on disk opened the file anyway.
+        """
         key = (name, real_dir)
         known = self.cache.includes
         if key in known:
             return known[key]
-        found: Path | None = None
+        found: tuple[Path, Path] | None = None
         for base in (real_dir, *self.fl.incdirs):
             cand = self.cache.resolved(base / name)
             if cand in self.overrides or cand.is_file():
-                found = cand
+                real = true_case(cand)
+                # `normpath` collapses '..' as text where `resolve()` followed symlinks, so
+                # the asked-for place is only a key when it really is this header. Decided
+                # here, because a re-load must answer from this cache without a syscall.
+                asked = Path(os.path.normpath(base / name))
+                found = (real, asked if same_file(asked, real) else real)
                 break
         known[key] = found
         return found
@@ -306,9 +326,10 @@ class _Loader:
             return
         sh = self.shared
         for name in _INCLUDE_RE.findall(text):
-            header = self._resolve(name, real_dir)
-            if header is None:
+            resolved = self._resolve(name, real_dir)
+            if resolved is None:
                 continue
+            header, asked = resolved
             body = self._body(header)
             child_raw: Path | None = None
             if Path(name).is_absolute():
@@ -320,24 +341,32 @@ class _Loader:
                 # directory must not appear next to its includer, or its own relative
                 # includes would resolve from the wrong directory.
                 keys = []
-                if self.cache.resolved(real_dir / name) == header:
+                if self.cache.resolved(real_dir / name) == self.cache.resolved(header):
                     keys.append(self.mirror(Path(os.path.normpath(real_dir / name))))
                     if raw_dir is not None and name.isascii():
                         raw = Path(os.path.normpath(raw_dir / name))
                         keys.append(raw)
                         child_raw = raw.parent
+            # Where slang looks: the spelling the `include asked for. On Windows
+            # `resolve()` canonicalises case, so the real path can differ from it, and a
+            # header asked for in another case would not be found at all. `_resolve` has
+            # already checked that the place is this header.
+            keys.append(self.mirror(asked))
             keys.append(self.mirror(header))
             fresh = False
             for key in keys:
                 k = _key(key)
                 known = sh.real.get(k)
-                if known is not None:
-                    if known != header and self.strict:
+                if known is not None and known != header:
+                    if self.strict:
                         raise _Unsafe()
-                    continue
+                    continue  # another header already stands for this name
                 sh.real[k] = header
-                self.sm.assignText(str(key), body)
-                fresh = True
+                text = str(key)
+                if text not in sh.given:
+                    sh.given.add(text)
+                    self.sm.assignText(text, body)
+                    fresh = True
             if fresh:
                 self._register_includes(body, header.parent, depth + 1, child_raw)
 
@@ -347,9 +376,10 @@ class _Loader:
         if depth > _MAX_INCLUDE_DEPTH:
             return seen
         for name in _INCLUDE_RE.findall(text):
-            header = self._resolve(name, real_dir)
-            if header is None or header in seen:
+            resolved = self._resolve(name, real_dir)
+            if resolved is None or resolved[0] in seen:
                 continue
+            header = resolved[0]
             seen.add(header)
             self.deps(self._body(header), header.parent, seen, depth + 1)
         return seen

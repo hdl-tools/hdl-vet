@@ -12,6 +12,7 @@ from hdl_vet.ops.override import override_net as _override_net
 from hdl_vet.ops.text import (
     _DIRECTIONS,
     _IDENT,
+    _did_you_mean,
     _eol,
     _header_line_in_comment,
     _instance_name,
@@ -22,7 +23,7 @@ from hdl_vet.ops.text import (
     _same,
     _segment,
 )
-from hdl_vet.slang_adapter import ModuleInfo, driven_bases, is_simple_identifier, tokens
+from hdl_vet.slang_adapter import ModuleInfo, check_expression, driven_bases, is_simple_identifier, tokens
 
 if TYPE_CHECKING:
     from hdl_vet.ops.vet import Vet
@@ -121,7 +122,13 @@ class Module:
             raise VetError(f"add_wire {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         type_text = f"{type}{_range(width)}"
         info = v._info(mod)
-        existing = next((d for d in info.decls if d.name == name), None)
+        # Inside a group a `remove_wire` of this name is queued but not loaded, so `info`
+        # still shows the declaration. Skipping on it signed off on a design without the
+        # wire, and left the name undeclared for the next operation. The registered check of
+        # the removal says so without a re-load, which would place the declaration above the
+        # one an earlier call of this run added instead of below it (#57).
+        gone = any(c.kind == "remove_wire" and c.key == ("wire", mod, name) for c in v._checks)
+        existing = None if gone else next((d for d in info.decls if d.name == name), None)
         if existing is not None:
             if _same(existing.type_text, type_text):
                 v._record("add_wire", mod, "skipped")
@@ -136,6 +143,7 @@ class Module:
                 v._record("add_wire", mod, "skipped")
                 return
             raise DriftError(f"add_wire {mod}: {name!r} was already added with a different type")
+        v._refuse_disabled("add_wire", mod, info, name)
         data = v.session.text(info.path)
         nl = data.find(b"\n", info.header_end)
         if nl < 0 or nl + 1 > info.body_end:
@@ -148,7 +156,7 @@ class Module:
         v._mark("decls", mod)
         v._added.setdefault(mod, {})[name] = ("decl", _norm(type_text))
 
-        v._set_check(_Check(("add_wire", mod, name), "add_wire", (mod, name, type_text)))
+        v._set_check(_Check(("wire", mod, name), "add_wire", (mod, name, type_text)))
         v._record("add_wire", mod, "applied")
 
     def add_assign(self, target: str, expr: object) -> None:
@@ -182,7 +190,13 @@ class Module:
     def remove_instance(self, name: str, module: str | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_instance"
         v._refuse_scope(op, mod)
+        if not isinstance(name, str):
+            raise VetError(f"{op} {mod}: the name must be a str, not {type(name).__name__}")
         name = _instance_name(name)
+        # An escaped name is any run of non-blank characters (`u/esc`), so only an empty or blank-holding
+        # name that the module does not list cannot be an instance name.
+        if (not name or any(c.isspace() for c in name)) and name not in [i.name for i in self._fresh().instances]:
+            raise VetError(f"{op} {mod}: {name!r} cannot be an instance name")
         target = f"{mod}.{name}"
         self._confirm_instances(op)
 
@@ -232,9 +246,22 @@ class Module:
 
         v._checked(op, target, run)
 
+    def _refuse_name(self, op: str, name: object, declared: list[str]) -> None:
+        mod = self._name
+        if not isinstance(name, str):
+            raise VetError(f"{op} {mod}: the name must be a str, not {type(name).__name__}")
+        if name.startswith("\\"):
+            hint = _did_you_mean(name, declared)
+            raise VetError(
+                f"{op} {mod}: {name!r} is an escaped spelling; give the identifier without the backslash{hint}"
+            )
+        if name not in declared and not is_simple_identifier(name):
+            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+
     def remove_wire(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_wire"
         v._refuse_scope(op, mod)
+        self._refuse_name(op, name, [d.name for d in self._fresh().decls])
         self._confirm_instances(op)
 
         def run() -> None:
@@ -261,7 +288,6 @@ class Module:
                 )
             data = v.session.text(info.path)
             a, b = line_rule(data, decl.stmt_start, decl.stmt_end)
-
             v._commit_all(
                 op,
                 [
@@ -271,7 +297,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
-                        check=_Check((op, mod, name), op, (mod, name)),
+                        check=_Check(("wire", mod, name), op, (mod, name)),
                     )
                 ],
             )
@@ -281,6 +307,13 @@ class Module:
     def remove_assign(self, target: str, was: object | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_assign"
         v._refuse_scope(op, mod)
+        if not isinstance(target, str):
+            raise VetError(f"{op} {mod}: the target must be a str, not {type(target).__name__}")
+        if target.startswith("\\"):
+            hint = _did_you_mean(target[1:].rstrip(), [a.left for a in self._fresh().assigns])
+            raise VetError(f"{op} {mod}: {target!r} is an escaped spelling; give the name without the backslash{hint}")
+        if (why := check_expression(target)) is not None:
+            raise VetError(f"{op} {mod}: {target!r} is not an assign target: {why}")
         self._confirm_instances(op)
 
         def run() -> None:
@@ -308,7 +341,6 @@ class Module:
             data = v.session.text(info.path)
             a, b = line_rule(data, assign.stmt_start, assign.stmt_end)
             v._drove.extend((mod, base) for base in driven_bases(assign.left))
-
             v._commit_all(
                 op,
                 [
@@ -318,7 +350,7 @@ class Module:
                         path=info.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
-                        check=_Check((op, mod, "assign", target), op, (mod, target)),
+                        check=_Check(("assign", mod, target), op, (mod, target)),
                     )
                 ],
             )
@@ -328,6 +360,7 @@ class Module:
     def remove_port(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_port"
         v._refuse_scope_with_hosts(op, mod)
+        self._refuse_name(op, name, [d.name for d in v._info(mod).ports])
         paths = self._confirm_instances(op)
 
         def run() -> None:
@@ -355,6 +388,13 @@ class Module:
                         f"{op} {mod}: port {nxt.name!r} takes its direction and type from {name!r}; "
                         f"remove or declare it first"
                     )
+            # An expectation of port-added means this run added the port, so the pair cancels
+            # and neither change can be seen. The cancel goes on the plan: `run` can be tried
+            # again after a re-load, so it must only read (#57). A real removal still expects
+            # port-removed when the design we started from had the port.
+            base = v.session.baseline_snapshot()
+            had = any(name in base[p].ports for p in paths if p in base)
+            added = set(v.session.expected_at("port-added", name))
             items = [(p.start, p.end) for p in info.ports]
             splices = edit_list(data, items, {at}, info.ports_close, _eol(data))
             if splices is None:
@@ -368,9 +408,10 @@ class Module:
                     path=info.path,
                     splices=splices,
                     mark=("ports", mod),
-                    expects=[("port-removed", p, name) for p in paths],
+                    expects=[("port-removed", p, name) for p in paths] if had else [],
+                    cancels=[("port-added", p, name) for p in paths if p in added],
                     permits=[("connection-changed", p, name) for p in paths],
-                    check=_Check((op, mod, name), op, (mod, name)),
+                    check=_Check(("port", mod, name), op, (mod, name)),
                 )
             ]
             for host, inst in hosts:
@@ -396,6 +437,7 @@ class Module:
     def remove_param(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_param"
         v._refuse_scope_with_hosts(op, mod)
+        self._refuse_name(op, name, [d.name for d in v._info(mod).params])
         paths = self._confirm_instances(op)
 
         def run() -> None:
@@ -432,6 +474,10 @@ class Module:
                     splices = [(info.name_end, info.params_close + 1, _list_gap(data, info.params_close))]
                 else:
                     splices = [remove_all(data, decls)]
+            # If this run added the parameter, the pair cancels (#57). The baseline decides here,
+            # not an expectation: `_expect_param` registers param-changed for a change that stays.
+            base = v.session.baseline_snapshot()
+            undone = all(name not in base[p].params for p in paths if p in base)
             hosts = v._instances_of(mod)
             plans = [
                 _Plan(
@@ -440,8 +486,9 @@ class Module:
                     path=info.path,
                     splices=splices,
                     mark=("params", mod),
-                    expects=[("param-changed", p, name) for p in paths],
-                    check=_Check((op, mod, name), op, (mod, name)),
+                    expects=[] if undone else [("param-changed", p, name) for p in paths],
+                    cancels=[("param-changed", p, name) for p in paths] if undone else [],
+                    check=_Check(("param", mod, name), op, (mod, name)),
                 )
             ]
             for host, inst in hosts:

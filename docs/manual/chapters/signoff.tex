@@ -34,8 +34,9 @@ The exit status is 1 when the sign-off fails. Chapter~\ref{ch:cli} lists all exi
 
 \section{Every line of the report}
 
-Each problem is one line. The lines come in this order. The transcript after the list
-shows one failure of each kind.
+Each problem is one line. A note and the lines of the equivalence check are also one
+line each. The lines come in this order. The transcript after the list shows one failure
+of each kind.
 
 \begin{description}
 \item[the edited design cannot be loaded: REASON] The compiler cannot read the
@@ -71,6 +72,11 @@ shows one failure of each kind.
 \item[left dangling: MESSAGE in module MODULE (FILE:LINE)] Something reads a signal but
   nothing drives it. See the next section.
 
+\item[last driver removed: signal 'SIG' of module MODULE has no driver now] The run took
+  away the last driver of a signal that something still reads. The compiler does not report
+  this when the driver sat in a generate branch the elaboration does not take. So hdl-vet
+  counts the drivers itself, before and after the run.
+
 \item[unexpected change: KIND PATH NAME: BEFORE -> AFTER] The structure of the
   design changed in a way that no operation and no \code{expect} or \code{permit}
   explains. \code{KIND} is the kind of change (see \apiname{Vet.expect}). \code{PATH}
@@ -86,6 +92,10 @@ shows one failure of each kind.
   cause is that the \code{expect} is wrong.
 
 \item[failed check: MESSAGE] A post-condition failed. See the section after next.
+
+\item[note: MESSAGE] An operation left something for you to read, for example an unused
+  signal or an accepted type difference. This line is no failure. It comes after the
+  failures and before the lines of the equivalence check.
 
 \item[equivalence proved: MODULE (OPERATIONS; equal when ENABLE is 0)] The check proved
   the module. This line is no failure. hdl-vet prints it on the error output also when
@@ -179,9 +189,9 @@ examples:
 \end{itemize}
 
 If you see one, look at the later operations of your script (or of a later script).
-One of them changed what this operation wrote. Two operations that cancel each
-other, such as \apiname{Module.add_wire} and \apiname{Module.remove_wire} on the same name,
-fail in this way.
+One of them changed what this operation wrote. A pair that cancels, such as
+\apiname{Module.add_wire} and \apiname{Module.remove_wire} on one name, does not fail in
+this way. The two share one check, and the later one replaces it.
 
 Skipped operations register no check.
 
@@ -513,6 +523,10 @@ The kinds are:
   \code{input 1}.
 \item[port-type-changed] The direction and width stay, but the declared type differs.
 \item[connection-changed] The connection of a port has other text.
+\item[delay-changed] The delay of a gate primitive has other text, for example
+  \code{\#2} against \code{\#5}. Adding or removing a delay is such a change too.
+\item[strength-changed] The drive strength of a gate primitive has other text, for
+  example \code{(strong1, strong0)} against \code{(weak1, weak0)}.
 \end{description}
 
 The sign-off compares gate primitives, user-defined primitives and checker instances in
@@ -524,8 +538,9 @@ name, such as \code{top.g1}.
 An unnamed instance has the path \code{top.<not:0>}. Here \code{not} is the type. The
 number counts the unnamed instances of that type in the scope, from 0, in the order of the
 text. No operation edits such an instance. So a change comes from a raw edit, and you
-declare it with \apiname{Vet.expect}. The sign-off does not compare the delays and the
-strengths of a primitive.
+declare it with \apiname{Vet.expect}. The delay and the drive strength of a primitive are
+compared, as \code{delay-changed} and \code{strength-changed}, and an attribute of
+one is not.
 
 A change can come from an operation too. A \apiname{Instance.set_param} can change which
 generate branch the design takes. Then the primitives of the old branch go and those of the
@@ -539,8 +554,8 @@ numbers in \code{<TYPE:N>} shift. The report then shows several changes for one 
 
 An expectation or a permission must cover every change, and every
 expectation must match a change. Operations register their own. For example,
-\apiname{Module.add_port} requires \code{port-added} at every path of the module, and
-permits \code{connection-changed} for the port. You add your own with \apiname{Vet.expect}
+\apiname{Module.add_port} requires \code{port-added} at every path of the module when the
+input design had no such port, and permits \code{connection-changed} for the port. You add your own with \apiname{Vet.expect}
 and \apiname{Vet.permit}.
 
 \section{Name the top module}

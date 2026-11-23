@@ -9,6 +9,26 @@ You install hdl-vet from PyPI, from a checkout of its repository, or from a
 wheel file. Use a virtual environment so that \code{pyslang} does not mix with
 other packages.
 
+\section{The systems it runs on}
+\label{sec:platforms}
+
+hdl-vet runs on Linux, on macOS and on Windows. CI tests it on all three: on Linux, on
+macOS on Apple silicon, and on Windows.
+
+macOS on Intel is not tested. It installs, because the built file that \code{pyslang}
+gives for macOS serves both kinds of processor, and nothing in hdl-vet reads the kind.
+Nobody runs the tests there, so this manual says what is true and no more.
+
+No compiler is needed on any system. Both packages that hdl-vet needs come as built
+files. \code{pyslang} has one for Linux, for macOS and for Windows. The Yosys of the
+extra \code{equiv} is one file that holds WebAssembly. It runs anywhere, and it is the
+same build on every system, so the equivalence check gives the same answer on all of
+them.
+
+On macOS, the Python that comes with the system is older than 3.11. Install a newer one,
+for example with Homebrew or with uv, and make the virtual environment from that one.
+\cmd{python3 --version} tells you which one you have.
+
 \section{From PyPI}
 
 \begin{enumerate}

@@ -241,8 +241,9 @@ and succeeds.
 
 \subsection*{Notes}
 
-When a checked operation, or a group, leaves something that nobody uses, this is
-not an error. In this case hdl-vet adds a line to the list \code{vet.notes}, and the command
+When a checked operation, or a group, leaves something worth a look, this is
+not an error. For example, it leaves something that nobody uses, or you waived a check
+on purpose. In this case hdl-vet adds a line to the list \code{vet.notes}, and the command
 prints it as \code{note: ...}. A note starts with the operation and its target,
 or with \code{group:} for a group. Notes never make a run fail. The transcript of
 \code{retire.py} in chapter~\ref{ch:operations} shows one.

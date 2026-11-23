@@ -89,42 +89,81 @@ Items that say so were not checked by a test.
   \code{irq_o} of \code{periph_wrap} has no driver, and the top module reads it. The
   sign-off accepts the run. Checked operations see this case (chapter~\ref{ch:operations},
   \file{remove\_timer.py}).
-\item \textbf{Operations that cancel each other.} If one operation undoes another
-  operation of the same script, the sign-off fails. An example is
-  \apiname{Module.add_wire} and then \apiname{Module.remove_wire} of the same name. The
-  check of the first operation does not find its result. The third transcript shows it.
-  Remove both operations from the script.
-\item \textbf{Delays and strengths of a primitive.} The sign-off compares gate
-  primitives, user-defined primitives and checkers by their type and their connections.
-  It does not compare their delays or drive strengths. A raw edit that changes only
-  such a value passes without an \code{expect}.
+\item \textbf{Operations that cancel each other.} A port, a parameter, a connection, a
+  declaration and an assignment each hold one check for a module and a name. The later
+  operation replaces the check of the earlier one, so a pair that cancels leaves nothing
+  behind in any order. These cases still fail the sign-off:
+  \begin{itemize}
+  \item a parameter of the input design that is removed and added again, because
+    \apiname{Instance.set_param} registers the same expectation
+  \item a port of the input design that is removed and added again with another width,
+    type or direction
+  \item \apiname{Instance.replace_module} and the replacement back
+  \item \apiname{Vet.punch_port} undone with \apiname{Module.remove_port} in each module
+    of the path
+  \end{itemize}
+  No operation changes a port, so declare a change of width or direction with
+  \apiname{Vet.expect}. After a pair that cancels, a raw edit that declares the name again
+  inside a generate block is not seen.
+\item \textbf{More of a primitive that the sign-off does not compare.} The sign-off
+  compares gate primitives, user-defined primitives and checkers by their type, their
+  connections, their delay and their drive strength. It does not compare an attribute of
+  one. A raw edit that changes only an attribute passes without an \code{expect}.
+
+  The delay and the strength come from the text as the design writes it, because the
+  elaborated design cannot give them. Reading the drive strength of a primitive raises in
+  pyslang 12.1.0 and in 12.2.0, which is reported upstream, and the elaborated delay
+  carries no value.
 \item \textbf{More that the dangling check does not see.} The dangling check does not see
   these things:
   \begin{itemize}
-  \item a parameter change that switches off a driver in a generate branch
   \item an inout port
   \item a new reader of a signal that had no driver already in the baseline
   \end{itemize}
-  These cases were not checked by a test. The specification of the check lists them.
+  These two cases were not checked by a test. The specification of the check lists them.
+\item \textbf{A driver in a generate branch that is not taken.} The compiler counts an
+  assignment inside a generate branch as a driver, also when the elaboration does not take
+  that branch. The signal then has no driver in the design that is built, and the compiler
+  reports nothing. The compiler does this on purpose, and it will not change.
+
+  hdl-vet therefore counts the drivers itself. The sign-off counts the drivers of every
+  signal of every module, before and after the run. It reports a signal that lost its last
+  driver and that something still reads. A parameter change that switches off a branch is
+  one way to reach the case, and \code{if (0)} alone is enough. A generate case behaves in
+  the same way.
+
+  One case stays open, one level further in. A signal declared inside a generate block is
+  not counted, so a driver lost on such a signal is not reported.
 \item \textbf{One configuration.} The sign-off sees the design with the defines of the
   file list. An operation refuses a list that holds a conditional compilation directive,
   because it cannot check another configuration.
+\item \textbf{An expression that names a signal of one configuration.} The value of
+  \apiname{Module.override_net} and the expression of \apiname{Module.add_assign} are
+  written into text that no directive guards. Such an expression can name a signal that
+  only the active branch of a conditional directive declares. The edited design then does
+  not compile in the other configuration, and the sign-off accepts the run. hdl-vet does
+  not check an expression against the directives.
 \end{itemize}
 
 \lstinputlisting[style=script]{examples/scripts/logic_change.py}
 \lstinputlisting[style=script]{examples/scripts/partial.py}
-\lstinputlisting[style=script]{examples/scripts/cancel.py}
 
 \lstinputlisting[style=console]{examples/console/limits.txt}
 
 \section{What the equivalence check does not do}
 
-Chapter~\ref{ch:signoff} explains the check. These are its limits. The check gives
-\code{error} or \code{refuted} in these cases, and never a wrong \code{proved}. Only the last
-two items can give a \code{proved} that you must read with care. A waiver is the way to go
-on when the check cannot judge.
+Chapter~\ref{ch:signoff} explains the check. These are its limits. Most of them give
+\code{error} or \code{refuted}, and never a wrong \code{proved}. Four items are different,
+because they give a \code{proved} that you must read with care. They are the design with the
+enable at 1, a loop through other nets, the changes that the proof does not see, and
+undefined values. A waiver is the way to go on when the check cannot judge.
 
 \begin{itemize}
+\item \textbf{The design with the enable at 1.} The proof ties the enable to 0 and compares
+  the two modules in that state. A \code{proved} therefore says that the edited module
+  equals the input module while the override is off. It says nothing about the module with
+  the enable at 1. That state is the one the override exists for, and no check of hdl-vet
+  looks at it. The value you write is your responsibility.
 \item \textbf{One module.} The proof is of the edited module only. The check does not
   prove what a connection of the enable does. The sign-off follows the enable up to the top
   module and looks at the connections (section~\ref{sec:enable}). That is not a proof.
@@ -182,9 +221,33 @@ on when the check cannot judge.
   array or a generate loop. Or the child has a new port other than the enable pins. hdl-vet then
   compares the module with the child inside. This holds for the interface only, never for a
   pin that is not 0.
-\item \textbf{A loop through other nets.} hdl-vet refuses a value that reads the net
-  itself. It does not refuse a value that reads a net which the overridden net drives. The
-  comparison ties the enable to 0, so it does not see this loop.
+\item \textbf{A loop through other nets.} \apiname{Module.override_net} refuses a value
+  that reads the net itself. It also refuses one that reads a name which the net drives
+  inside the same module. The walk follows every driver of a name, with two exceptions.
+  An input port and a clocked procedural block each end it. A flop is not a combinational
+  loop.
+
+  The walk reads every name of a driver, not only the right side of its assignment. So it
+  sees a read in the condition of an \code{if} and in the selector of a \code{case}. It
+  sees a read in the bound of a \code{for} and in an index on the left side. A name that
+  the driver writes counts as a read as well. That refuses more than the design demands,
+  on purpose. A refusal costs a script an argument, and a missed loop reaches the sign-off
+  as \code{ok}.
+
+  A value that hdl-vet cannot follow is refused. The walk judges a value by the name each
+  path in it starts with. That name must be a net, a variable or a parameter of the
+  module. A name that is an instance, a generate block, a function or nothing in the
+  module is refused. A struct member and a system call are not refused, because the name
+  they start with is a signal of the module.
+
+  A net that the output pin of a child module drives is followed too. The walk does not
+  enter the child. It counts every name that the other pins of that instance read as
+  driving the net. So a loop that closes through a child is refused.
+
+  That edge assumes every output of a child depends on every other pin of it, which is not
+  always true. A value that reads a net which a child drives, and which does not in fact
+  carry the loop, is refused as well. A package constant, such as \code{pk::W}, is refused
+  although it can never be part of a loop. Its first name is not a member of the module.
 \item \textbf{A rare answer of not the same.} The check compares the children that it does
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.
@@ -213,6 +276,15 @@ on when the check cannot judge.
   on} and names the outputs. Here \emph{gold} is the input module. The search for these
   values does not see one that cancels, such as \code{u ^ u}, or one that a division by zero
   makes.
+\item \textbf{What the sandbox is given.} The Yosys of the extra \code{equiv} runs as
+  WebAssembly, and it sees only what the run gives it. The run gives it the \emph{first}
+  part of each path it needs, because its runtime takes no deeper mountpoint. So a whole
+  top-level folder is readable in the sandbox, not only the folder of a source. A design
+  under \file{/Volumes} on macOS makes every mounted disk readable there. The Yosys
+  process has the rights that you have, so this grants it nothing that you cannot read.
+\item \textbf{Where the design can lie.} The check needs each path it reads to be inside
+  a top-level folder that it can read and enter. A path that is not gives \code{error},
+  and the detail names it. A design in the root folder itself is such a path.
 \end{itemize}
 
 \section{What the operations refuse}
@@ -229,23 +301,42 @@ or with a raw splice.
 \item modules with a non-ANSI port list (for port operations), and module headers with
   a macro
 \item ports and parameters inside conditional compilation directives
+\item any name that text disabled by a conditional directive holds. Such a name can stop
+  the module compiling in the other configuration. Every operation that adds or removes a
+  name refuses it, and so does \apiname{Module.override_net}, for the net and the name it
+  keeps. The set of such names is coarse:
+  \begin{itemize}
+  \item every identifier of the disabled text counts, also one that it only reads
+  \item the name of a macro defined in that text counts, and so do the names of its
+    arguments
+  \item a name that a macro spells is not seen at all, so nothing refuses it
+  \end{itemize}
 \item modules that are not instantiated under the top module
 \item modules that come from an added file. hdl-vet never edits an added file.
 \item interface ports. \apiname{Vet.punch_port} refuses them and
   \apiname{Instance.replace_module} refuses a module that has one. There is no operation
   that adds an interface port.
 \item a replacement (\apiname{Instance.replace_module}) by a module whose port has another
-  direction, width or type than the port that it replaces. There is no option to accept
-  such a difference.
-\item type parameters. \apiname{Instance.replace_module} does not carry an override of a
-  type parameter to the new module. This holds even if the new module has a type parameter
-  of that name. The message says that the new module has \emph{no overridable parameter}.
-  Edit such an instance by hand.
+  direction, width or type than the port that it replaces. The comparison is on the type
+  that the port resolves to. A typedef or a type parameter that resolves to the same type
+  is not a difference. The comparison uses the printed form of the type and marks every type that is not
+  four-state. \code{accept_types} accepts a type difference per port, but nothing accepts
+  a difference of direction or width.
+\item a waiver with \code{accept_types} on a port whose width is reported as zero, such as an
+  unpacked array or a \code{string}. For this port the type is the only check of hdl-vet,
+  and the waiver removes it. The compiler then refuses the swap by a new diagnostic, which
+  does not name the two ports. Inside a \code{group} the new diagnostics are compared once at
+  the end. A later edit in the same group that retypes the connected net can hide that diagnostic.
 \end{itemize}
 
 \section{Known problems}
 
 \begin{itemize}
+\item \textbf{A folder that cannot be read.} hdl-vet spells every part of a path as the
+  file system holds it. The output tree and the record in \file{hdl-vet.json} then name
+  the same files. A folder that hdl-vet cannot read leaves that part as the file list
+  spelled it. The record can then name a path in another case than the tree holds. The
+  tree itself is right.
 \item \textbf{Escaped names in hierarchical paths.} An instance handle works with an
   escaped identifier, such as \texttt{\textbackslash u/esc}. A hierarchical path
   that goes through such an instance does not work in the same way.
@@ -254,8 +345,9 @@ or with a raw splice.
   example \code{top.\m/esc .\l/esc }. Each escaped name ends with a blank.
 \item \textbf{Wrong types.} The operations check the names that you give, and the
   arguments of \apiname{Vet.splice} and \apiname{Vet.text}. They do not check the type of
-  every other argument. A name that is \code{None}, or a mapping that is a list, raises a
-  Python error and not a \code{VetError}.
+  every other argument. A name that is not text, such as \code{None}, is refused with a
+  \code{VetError}, because it is not a plain identifier. Another argument of a wrong type,
+  such as a mapping given as a list, raises a Python error and not a \code{VetError}.
 \item \textbf{Time.} An operation that reads a list that an earlier operation edited
   loads the whole design again. On a large design, a script with many such operations takes
   a long time. The load count rose after a \code{connect} that follows an
@@ -271,8 +363,10 @@ or with a raw splice.
   references that reach outside a scope does not see a name in code that the compiler does
   not elaborate. Its message names only one reference when a block adds several.
 \item \textbf{Added files.} A relative file name in \apiname{Vet.add_file} starts from the
-  current folder, not from the script. Use \code{Path(__file__).resolve().parent} as in the
-  example scripts.
+  folder of the script. It starts from the current folder when no file of that name is next
+  to the script. So the folder you run the script from can still decide which file it adds.
+  The rule is for \apiname{Vet.add_file} alone. Another path that a script builds starts
+  from the current folder.
 \item \textbf{Saved sessions of an older version.} A session that you saved before
   hdl-vet recorded the nested file lists protects only the top-level file list when you
   resume it. With such a session, \opt{--save} onto a nested file list outside the input

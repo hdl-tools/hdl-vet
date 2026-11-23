@@ -283,6 +283,23 @@ class _DiagnosticsOps(_DesignHost):
         """What slang reports as unused or set but never read (nets, variables, ports)."""
         return [d for d in self._unused_pass() if d.code in _UNUSED_CODES]
 
+    def unused_names(self) -> frozenset[tuple[str, str]]:
+        """(module, signal) of every entry of `unused`, from the symbol slang names, not from the message."""
+        return frozenset((d.module, d.symbol) for d in self.unused() if d.module and d.symbol)
+
+    def reads_port(self, module: str, port: str) -> bool:
+        """True when `module` reads its port `port` in some elaborated body (True when that cannot be told)."""
+        self._analyze()  # the canonical bodies are known only after the analysis
+        bodies: dict[str, Any] = {}
+
+        def one(sym: Any) -> None:
+            if sym.body.definition.name == module:
+                body = sym.canonicalBody or sym.body
+                bodies.setdefault(str(body.hierarchicalPath), body)
+
+        self._visit_instances(one)
+        return not bodies or any(self._port_reads(b, port)[1] for b in bodies.values())
+
     def defined_in(self, path: Path) -> list[str]:
         """Names of the modules, interfaces and programs whose definition lies in the file `path`."""
         dk = pyslang.ast.DefinitionKind

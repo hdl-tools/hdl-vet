@@ -26,7 +26,9 @@ concurrency:
 jobs:
   pdf:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    # Installing TeX Live from apt takes about fourteen minutes, and latexmk takes four
+    # seconds. At 15 the job was cancelled moments after the PDF was written (#84).
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -44,11 +46,17 @@ jobs:
       - name: Build the PDF
         working-directory: docs/manual
         run: latexmk -pdf -interaction=nonstopmode -halt-on-error hdl-vet.tex
-      - name: Check the log for broken references
+      - name: Check the log for broken references and duplicate destinations
         working-directory: docs/manual
         run: |
           if grep -E "undefined references|multiply[ -]defined|Reference .* undefined|Label .* multiply defined" hdl-vet.log; then
             echo "The log reports an undefined or multiply defined reference." >&2
+            exit 1
+          fi
+          # Two pages claiming one destination: a link to the second goes to the first.
+          # The build still exits 0, so nothing else would notice (#69).
+          if grep -F "destination with the same identifier" hdl-vet.log; then
+            echo "The log reports a duplicate destination." >&2
             exit 1
           fi
       - name: Upload the PDF

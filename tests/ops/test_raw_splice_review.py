@@ -23,7 +23,7 @@ T3  `vet.session.splice` in a script is a raw splice like `vet.splice`: it is
     that needs one uses `vet.splice`.)
 T4  A saved session of an older version is refused. Its raw splices have no
     mark, so a run that resumes it could not judge them. The format number of
-    the archive is 2; an archive with format 1 gives the message of another
+    the archive is 3; an archive with an older format gives the message of another
     format version.
 T5  A waiver has no line separator of any kind (also U+2028, U+2029, a form
     feed, a vertical tab).
@@ -344,7 +344,7 @@ def test_operations_are_not_raw(tmp_path, monkeypatch):
 
 def test_an_archive_of_an_older_version_is_refused(tmp_path, monkeypatch):
     no_yosys(monkeypatch)
-    assert archive.FORMAT == 2
+    assert archive.FORMAT == 3
     design = Design(tmp_path / "d", {"ab": AB, "top": AB_TOP})
     vet = design.vet()
     vet.module("a").add_wire("spare")
@@ -356,8 +356,8 @@ def test_an_archive_of_an_older_version_is_refused(tmp_path, monkeypatch):
             data = src.read(info.filename)
             if info.filename == "session.json":
                 index = json.loads(data)
-                assert index["format"] == 2
-                index["format"] = 1
+                assert index["format"] == 3
+                index["format"] = 2
                 data = json.dumps(index).encode()
             dst.writestr(info, data)
     with pytest.raises(Exception, match="format"):

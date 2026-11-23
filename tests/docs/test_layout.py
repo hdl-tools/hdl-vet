@@ -15,7 +15,8 @@ L1  A test file lives in one of these folders, by what it tests:
       tests/perf     the cost of re-loading and the reuse of syntax trees
     A corpus test (`*_corpus.py`) lives beside the area it tests. No test file
     is directly in `tests/`; `tests/smoke_wheel.py` stays there (CI runs it by
-    that name, and it is not a pytest file).
+    that name, and it is not a pytest file), and `tests/conftest.py` stays there
+    (pytest reads it by that name, and it holds no test).
 L2  Helpers live in `tests/support`: `vetkit`, `corpus`, `variants`,
     `transcript`, and the designs and helper functions that one test file used
     to import from another. A test file does not import from another test
@@ -79,10 +80,23 @@ def test_every_test_file_is_in_an_area():
         p.relative_to(TESTS).as_posix() for p in files if p.parent.name not in AREAS or p.parent.parent != TESTS
     )
     assert wrong == []
-    assert sorted(p.name for p in TESTS.iterdir() if p.is_file()) == ["smoke_wheel.py"]
+    assert sorted(p.name for p in TESTS.iterdir() if p.is_file()) == ["conftest.py", "smoke_wheel.py"]
     assert {p.name for p in TESTS.iterdir() if p.is_dir() and p.name != "__pycache__"} == AREAS | {"support"}
     for area in AREAS:
         assert list((TESTS / area).glob("test_*.py")), area
+
+
+def test_a_test_runs_where_no_project_file_is_found():
+    """L1. `vet apply` reads `hdl-vet.toml` from the current directory.
+
+    Without the fixture of `tests/conftest.py` a test that does not change directory
+    inherits the one pytest was started in, normally this repository's root, and a
+    project file there reaches every such test. Ten tests of `tests/cli` failed that way
+    before #64. This holds the fixture in place: it is the invariant, not the mechanism.
+    """
+    here = Path.cwd()
+    assert here != REPO, "a test is running in the repository root, where a project file can be found"
+    assert not (here / "hdl-vet.toml").exists(), f"{here} holds a project file"
 
 
 def test_a_corpus_test_is_beside_its_area():

@@ -15,6 +15,8 @@ from pathlib import Path
 
 __all__ = ["Filelist", "FilelistError", "read_filelist"]
 
+from hdl_vet.paths import Spelling, same_file
+
 _ENV_RE = re.compile(r"\$(?:\{(\w+)\}|\((\w+)\)|(\w+))")
 
 
@@ -38,13 +40,37 @@ class _State:
     files: list[Path] = field(default_factory=list)
     incdirs: list[Path] = field(default_factory=list)
     defines: dict[str, str | None] = field(default_factory=dict)
+    # One for the whole read, so each directory on the way down is listed once.
+    spelling: Spelling = field(default_factory=Spelling)
+
+
+def _add_once(where: list[Path], path: Path) -> None:
+    """Append `path` unless the same file or directory is already there.
+
+    A list that names one thing twice gives it once. The spellings need not match: on a
+    file system that ignores case two of them are one file, and keeping both put the same
+    source in the design twice, which slang then reported as a duplicate definition.
+
+    Only a spelling that could collide is put to the file system, so the usual list costs
+    no syscall beyond the ones `resolve()` already made.
+    """
+    if path in where:
+        return
+    folded = str(path).casefold()
+    if any(folded == str(other).casefold() and same_file(path, other) for other in where):
+        return
+    where.append(path)
 
 
 def read_filelist(path: Path, base: Path | None = None) -> Filelist:
     """Read `path`; relative entries resolve against `base` (default: its directory)."""
-    top = Path(path).resolve()
-    root = top.parent if base is None else Path(base).resolve()
-    state = _State(root=root)
+    # The root is spelled as the file system holds it for the same reason the sources are:
+    # everything downstream takes a path relative to it, and a root in another case than
+    # the sources cannot be taken away from them at all.
+    spelling = Spelling()
+    top = spelling(Path(path).resolve())
+    root = top.parent if base is None else spelling(Path(base).resolve())
+    state = _State(root=root, spelling=spelling)
     _read(top, root, state, (top,))
     return Filelist(state.files, state.incdirs, state.defines, state.root, state.lists)
 
@@ -83,7 +109,7 @@ def _read(fl: Path, base: Path, state: _State, stack: tuple[Path, ...]) -> None:
         if line.startswith("+incdir+"):
             for part in line[len("+incdir+") :].split("+"):
                 if part:
-                    state.incdirs.append((base / part).resolve())
+                    _add_once(state.incdirs, state.spelling((base / part).resolve()))
         elif line.startswith("+define+"):
             for part in line[len("+define+") :].split("+"):
                 if part:
@@ -91,7 +117,7 @@ def _read(fl: Path, base: Path, state: _State, stack: tuple[Path, ...]) -> None:
                     state.defines[name] = value if eq else None
         elif line.startswith(("-f ", "-F ", "-f\t", "-F\t")):
             nested_arg = line[2:].strip()
-            nested = (base / nested_arg).resolve()
+            nested = state.spelling((base / nested_arg).resolve())
             if nested in stack:
                 raise FilelistError(f"{where}: recursive file list include {nested_arg}")
             if not nested.is_file():
@@ -101,8 +127,7 @@ def _read(fl: Path, base: Path, state: _State, stack: tuple[Path, ...]) -> None:
         elif line[0] in "-+":
             raise FilelistError(f"{where}: unsupported option {line.split()[0]}")
         else:
-            src = (base / line).resolve()
+            src = state.spelling((base / line).resolve())
             if not src.is_file():
                 raise FilelistError(f"{where}: source file not found: {line}")
-            if src not in state.files:
-                state.files.append(src)
+            _add_once(state.files, src)

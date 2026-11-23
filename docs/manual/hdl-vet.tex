@@ -118,8 +118,17 @@
 
 \begin{document}
 
+% The front matter is numbered in roman and the chapters in arabic, so that no two
+% pages claim one destination. `\maketitle` of the report class sets the page counter
+% back to 1, which would give the title page and the page after it both `page.i`, so the
+% counter is moved on by hand. Without all of this the title page and the first chapter
+% page were both `page.1`, and pdfTeX warned that it ignored the duplicate (#69).
+\pagenumbering{roman}
 \maketitle
+\setcounter{page}{2}
 \tableofcontents
+\cleardoublepage
+\pagenumbering{arabic}
 
 \input{chapters/intro}
 \input{chapters/install}

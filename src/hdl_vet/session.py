@@ -32,6 +32,7 @@ from typing import Any
 from hdl_vet.archive import need_bool, need_dict, need_int, need_list, need_str
 from hdl_vet.enables import Enable
 from hdl_vet.filelist import Filelist, read_filelist
+from hdl_vet.paths import same_file
 from hdl_vet.prove import Outside, Proof, Record
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
@@ -68,9 +69,11 @@ class Result:
     failed_checks: list[str] = field(default_factory=list)
     added: dict[str, bytes] = field(default_factory=dict)  # output-relative POSIX path -> bytes
     dangling: list[Diag] = field(default_factory=list)  # dangling entries the baseline did not have
+    lost_drivers: list[tuple[str, str]] = field(default_factory=list)  # (module, signal) driven before, not after
     equivalence: list[Record] = field(default_factory=list)  # one record for each comparison of the proof
     enables: list[Enable] = field(default_factory=list)  # one record for each pin of an enable that was looked at
     outside: list[Outside] = field(default_factory=list)  # the raw splices outside the modules, each with its waiver
+    notes: list[str] = field(default_factory=list)  # the notes of the operations, set by `Vet.finish` and `Vet.check`
 
     def _rel(self, path: Path | None) -> str:
         if path is None:
@@ -94,6 +97,8 @@ class Result:
         for d in self.dangling:
             where = self._rel(d.path) + (f":{d.line}" if d.line is not None else "")
             lines.append(f"  left dangling: {d.message} in module {d.module} ({where})")
+        for module, signal in self.lost_drivers:
+            lines.append(f"  last driver removed: signal '{signal}' of module {module} has no driver now")
         for c in self.unexpected_changes:
             name = f" {c.name}" if c.name else ""
             lines.append(f"  unexpected change: {c.kind} {c.path}{name}: {c.before!r} -> {c.after!r}")
@@ -101,6 +106,7 @@ class Result:
             lines.append(f"  expected change not seen: {e.kind} path={e.path} name={e.name}")
         for msg in self.failed_checks:
             lines.append(f"  failed check: {msg}")
+        lines.extend(f"  note: {note}" for note in self.notes)
         lines.extend(self.equivalence_lines())
         return "\n".join(lines) + "\n"
 
@@ -177,6 +183,14 @@ def _grown(before: Sequence[Diag], after: Sequence[Diag]) -> list[Diag]:
     return out
 
 
+def _connected_ports(design: Design) -> set[tuple[str, str]]:
+    """(module, port) pairs that some instance connects to a non-empty expression."""
+    connected: set[tuple[str, str]] = set()
+    for snap in design.snapshot().values():
+        connected.update((snap.module, port) for port, text in snap.connections.items() if text)
+    return connected
+
+
 def dangling_set(design: Design, added: Collection[Path] = ()) -> list[Diag]:
     """What counts as dangling in `design`: its driverless nets and variables, and its driverless
     output ports that some instance connects to a non-empty expression or that their own module reads
@@ -185,10 +199,38 @@ def dangling_set(design: Design, added: Collection[Path] = ()) -> list[Diag]:
     raw = [d for d in design.dangling() if d.path not in added]
     if not any(d.code == "UndrivenPort" for d in raw):
         return raw
-    connected: set[tuple[str, str]] = set()
-    for snap in design.snapshot().values():
-        connected.update((snap.module, port) for port, text in snap.connections.items() if text)
+    connected = _connected_ports(design)
     return [d for d in raw if d.code != "UndrivenPort" or d.port is None or d.read or (d.module, d.port) in connected]
+
+
+def lost_drivers(before: Design, after: Design) -> list[tuple[str, str]]:
+    """Signals that had a driver in `before` and have none in `after`, unless `after` calls them unused.
+
+    The whole design: the driver can be lost in a module the edit did not touch (a generate branch
+    that a parameter change deselects), which slang does not report (slang#1602). A module or member
+    that is absent or not a net or variable on either side is skipped.
+    """
+    unused = after.unused_names()
+    connected = _connected_ports(after)
+    out: list[tuple[str, str]] = []
+    # one pass per design: asking `drivers_in` per signal re-walks every instance each time (#58)
+    lost = before.driven_signals() - after.driven_signals()
+    elaborated = after.elaborated_modules()  # a module the run left out of the design is not a lost driver
+    for module in sorted({m for m, _ in lost} & elaborated):
+        try:
+            info = after.module(module)
+        except AdapterError:
+            continue
+        outputs = {p.name for p in info.ports if p.direction != "input"}
+        declared = outputs | {d.name for d in info.decls}  # a name `after` no longer declares is not a lost driver
+        for name in sorted(n for m, n in lost if m == module and n in declared):
+            if (module, name) in unused:
+                continue
+            # liveness as `dangling_set` judges it: an output nobody connects or reads is allowed to lose its driver
+            if name in outputs and (module, name) not in connected and not after.reads_port(module, name):
+                continue
+            out.append((module, name))
+    return out
 
 
 def _has_header(data: bytes) -> bool:
@@ -542,6 +584,25 @@ class Session:
             if not (e.required and (e.path in mine or any(e.path.startswith(p + ".") for p in mine)))
         ]
 
+    def expected_at(self, kind: str, name: str) -> list[str]:
+        """The paths where `kind` of `name` is required: what an operation of this run registered.
+
+        `Vet._added` cannot answer this. It holds only what is waiting for the next load,
+        and it is cleared by one, so an operation that re-loads before it looks sees
+        nothing there. An expectation lives for the whole run, which is the question.
+        """
+        return [e.path for e in self._expects if e.required and e.kind == kind and e.name == name]
+
+    def drop_expect(self, kind: str, paths: Collection[str], name: str) -> None:
+        """Forget one expectation: an operation of this run undid what registered it.
+
+        Narrower than `drop_expects`, which forgets everything at a path and below it
+        because the instance there is going. Here the instance stays and only this one
+        expectation is moot, so the rest must still be met.
+        """
+        mine = set(paths)
+        self._expects = [e for e in self._expects if not (e.kind == kind and e.path in mine and e.name == name)]
+
     def compare_since(self, cp: object, drove: Sequence[tuple[str, str]] = ()) -> Comparison | None:
         """What the loaded design has that the design at `cp` did not; None if it is that design.
 
@@ -780,7 +841,8 @@ class Session:
         records = found.records
         added_paths = {path for path, _ in self._added.values()}
         dangling = _grown(dangling_set(self._baseline, added_paths), dangling_set(self._design, added_paths))
-        ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling
+        lost = lost_drivers(self._baseline, self._design)
+        ok = not new and not unexpected and not unmatched and not new_files and not failed and not dangling and not lost
         ok = ok and all(r.passed for r in records) and all(e.passed for e in found.enables)
         return Result(
             ok,
@@ -795,6 +857,7 @@ class Session:
             failed_checks=failed,
             added=self.added,
             dangling=dangling,
+            lost_drivers=lost,
             equivalence=records,
             enables=found.enables,
             outside=found.outside,
@@ -965,6 +1028,7 @@ class Session:
         changed = [under(v) for v in need_list(index["changed"])]
         if len(set(paths)) != len(paths) or len(set(changed)) != len(changed):
             raise ValueError("a file is listed twice")
+        _refuse_one_file_under_two_names(paths)
         if not set(fl.files) <= set(paths) or not set(changed) <= set(paths):
             raise ValueError("the file lists disagree")
         added_in = [need_dict(a) for a in need_list(index["added"])]
@@ -1075,6 +1139,27 @@ class Session:
 
 
 _DEVICE = re.compile(r"(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?", re.IGNORECASE)
+
+
+def _refuse_one_file_under_two_names(paths: Sequence[Path]) -> None:
+    """Refuse an index that names one file twice, under spellings that differ only in case.
+
+    Where the archive was saved the two names were two files, and the index is honest. Here
+    they are one file, and the session would hold it twice: the output tree would write it
+    twice to one place, and the manifest would record a hash of bytes that are not on disk.
+
+    The file system is asked only about names that could collide, so a design whose names
+    are all distinct costs no syscall. Two names that really are two files are kept, which
+    is why this asks rather than folding the case and refusing.
+    """
+    groups: dict[str, list[Path]] = {}
+    for path in paths:
+        groups.setdefault(str(path).casefold(), []).append(path)
+    for same in groups.values():
+        first = same[0]
+        for other in same[1:]:
+            if same_file(first, other):
+                raise ValueError(f"{first.name} and {other.name} are one file here, and both are listed")
 
 
 def _unwritable(part: str) -> bool:

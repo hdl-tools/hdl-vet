@@ -14,11 +14,13 @@ hdl-vet sign-off: FAILED
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/dangling.py --dry-run
 hdl-vet sign-off: FAILED
   left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:13)
+  last driver removed: signal 'irq' of module soc_top has no driver now
 [exit status 1]
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/wide_port.py -s scripts/dangling.py --dry-run
 hdl-vet sign-off: FAILED
   new diagnostic: warning PortWidthExpand at rtl/soc_top.sv:25: implicit conversion of port connection expands from 1 to 2 bits
   left dangling: variable 'irq' is never assigned a value in module soc_top (rtl/soc_top.sv:13)
+  last driver removed: signal 'irq' of module soc_top has no driver now
 [exit status 1]
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/add_cell.py --dry-run
 hdl-vet sign-off: FAILED

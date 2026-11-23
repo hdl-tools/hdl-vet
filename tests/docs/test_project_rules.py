@@ -6,6 +6,10 @@
   and no `eval` or `exec`, with one exception: the command line executes the
   edit scripts the user names (`cli._load_script`).
 - No module of the package imports from the tests.
+- No source file holds an invisible character. A control byte in a string looks
+  like nothing in a terminal, in a diff and in a review. One sat in a regular
+  expression replacement for months and sent itself into Yosys diagnostics
+  (#37), and three readings of the line in a row described the wrong defect.
 """
 
 from __future__ import annotations
@@ -82,3 +86,58 @@ def test_nothing_runs_code_from_data(path: Path):
 def test_the_package_does_not_import_the_tests(path: Path):
     helpers = {p.stem for p in (REPO / "tests").rglob("*.py")}
     assert not imported(parse(path)) & helpers
+
+
+# --- invisible characters ------------------------------------------------------------
+
+
+# Tab and newline are the only control characters a source file has any business holding.
+ALLOWED_CONTROL = {"\t", "\n", "\r"}
+# Characters that are not control codes but still show as nothing, or as an ordinary
+# space, so a reader cannot tell them from what they expect.
+LOOKS_LIKE_NOTHING = {
+    "\u00a0",  # no-break space
+    "\u200b",  # zero width space
+    "\u200c",  # zero width non-joiner
+    "\u200d",  # zero width joiner
+    "\u2060",  # word joiner
+    "\ufeff",  # byte order mark, when it is not the first character
+    "\u202a",  # the bidirectional overrides, which can reorder a line as shown
+    "\u202b",
+    "\u202c",
+    "\u202d",
+    "\u202e",
+}
+
+
+def every_source_file() -> list[Path]:
+    """The Python of the package and of the tests, and the files that describe the build."""
+    return sorted(
+        [
+            *(REPO / "src").rglob("*.py"),
+            *(REPO / "tests").rglob("*.py"),
+            *(REPO / ".github").rglob("*.yml"),
+            REPO / "pyproject.toml",
+        ]
+    )
+
+
+def test_this_rule_looks_at_the_files_it_means_to():
+    files = every_source_file()
+    assert len(files) > 100
+    assert any(p.name == "equiv.py" for p in files)
+    assert any(p.name == "ci.yml" for p in files)
+
+
+def test_no_source_file_holds_an_invisible_character():
+    """The rule that would have caught #37 in review instead of months later."""
+    found = []
+    for path in every_source_file():
+        text = path.read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), start=1):
+            for column, char in enumerate(line, start=1):
+                bad = (char.isprintable() is False and char not in ALLOWED_CONTROL) or char in LOOKS_LIKE_NOTHING
+                if bad:
+                    where = f"{path.relative_to(REPO).as_posix()}:{number}:{column}"
+                    found.append(f"{where}: {char!r} in {line.strip()[:60]!r}")
+    assert found == []

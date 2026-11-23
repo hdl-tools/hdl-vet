@@ -69,7 +69,7 @@ from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import HEADER_MARK, Session
 from hdl_vet.slang_adapter import load
 from repo import REPO
-from vetkit import make_design, span, tree_bytes
+from vetkit import ignores_case, keeps_the_asked_spelling, make_design, span, tree_bytes
 
 GOOD = """\
 def apply(vet):
@@ -244,13 +244,7 @@ def test_output_inside_the_input_tree_is_refused(kit):
 
 def test_output_in_a_differently_cased_input_tree_is_refused(kit):
     """A case-insensitive filesystem must not let --force delete the input tree."""
-    probe = kit.root.parent / "hdl_vet_case_probe"
-    probe.mkdir()
-    try:
-        ignores_case = (kit.root.parent / "HDL_VET_CASE_PROBE").is_dir()
-    finally:
-        probe.rmdir()
-    if not ignores_case:
+    if not ignores_case(kit.root.parent):
         pytest.skip("this filesystem keeps case, so the spelling is a different directory")
     s = Session(kit.filelist, top="top")
     r = s.finish()
@@ -259,6 +253,30 @@ def test_output_in_a_differently_cased_input_tree_is_refused(kit):
     with pytest.raises(OutputError):
         write_tree(s, r, variant, force=True)
     assert tree_bytes(kit.root) == before
+
+
+def test_a_header_included_in_two_cases_keeps_its_real_name(tmp_path: Path):
+    """The output tree is a copy of the input tree, so it must not rename a header.
+
+    Two spellings of one `include used to make two files of the design, and the tree
+    was written under whichever spelling came last.
+    """
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("a wrong spelling cannot survive here, so one header cannot become two")
+    root = tmp_path / "in"
+    (root / "inc").mkdir(parents=True)
+    (root / "rtl").mkdir()
+    (root / "inc" / "defs.svh").write_text("`ifndef DEFS\n`define DEFS\n`define W 4\n`endif\n")
+    (root / "rtl" / "t.sv").write_text(
+        '`include "defs.svh"\n`include "DEFS.svh"\nmodule t(input logic [`W-1:0] a);\nendmodule\n'
+    )
+    (root / "t.f").write_text("+incdir+inc\nrtl/t.sv\n")
+    s = Session(root / "t.f", top="t")
+    assert [p.name for p in s.files] == ["t.sv", "defs.svh"]
+    out = write_tree(s, s.finish(), tmp_path / "out")
+    got = tree_bytes(out)
+    assert sorted(got) == ["hdl-vet.json", "inc/defs.svh", "rtl/t.sv", "t.f"]
+    assert got["inc/defs.svh"] == (root / "inc" / "defs.svh").read_bytes()
 
 
 def test_layout_with_includes_defines_and_nested_lists(tmp_path: Path):

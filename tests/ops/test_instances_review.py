@@ -58,6 +58,73 @@ Removals
         (replace_module, connect, disconnect, set_param), so that swapping an
         instance and later removing it signs off.
 
+Additions and disabled text (#94)
+    The guard of X2 also holds for add_wire, add_port, add_param,
+    add_assign and override_net. The design that came out did not compile in the other
+    configuration, and sign-off reported "ok".
+    N1  add_wire, add_port and add_param refuse a name that appears as an
+        identifier in text that a conditional directive disables inside the
+        module. The message starts with the operation and the module. It
+        names the name and the directive. Nothing is edited. The directive
+        can be `ifdef, `ifndef, `elsif or `else, nested or not.
+    N2  N1 also holds when the disabled text is a part of the port list or
+        of the parameter list. The list rule ("Conditional compilation" in
+        tests/ops/test_ops_review.py) is a different rule. It refuses every
+        edit of a list that holds a directive, whatever the name. It sees
+        only the operation that edits that list. Thus the list rule already
+        refuses two combinations: add_port of a name hidden in the port
+        list, and add_param of a name hidden in the parameter list. Only N1
+        refuses the other four: add_wire and add_param of a name hidden in
+        the port list, and add_wire and add_port of a name hidden in the
+        parameter list.
+    N3  N1 is not a blanket refusal. A name that the disabled text of the
+        module does not hold is added as before. The disabled text of
+        another module does not count.
+    N4  A name that the active text already declares behaves as before. An
+        add_wire of the same declaration is skipped, because a skip edits
+        nothing. Each other addition of that name is refused.
+    N5  add_assign refuses a target that only disabled text declares, with
+        its own message. The target is not a net, variable or port of this
+        configuration. That check comes before the guard.
+    N6  add_assign refuses a target that the active text declares and that
+        disabled text holds, with the message of N1. An assignment to it in
+        the disabled text gave two drivers in the other configuration. The
+        guard comes before two other checks of add_assign. Thus a target
+        that is an input port, or that has a driver already, gets the
+        message of N1 when the disabled text holds it. Each case is still
+        a refusal.
+    N7  The guard is wider than a clash, and that is deliberate. It refuses
+        a name that disabled text only mentions, for example as an operand,
+        although the name clashes with nothing. An error is acceptable. A
+        wrong "ok" is not. A raw splice is the way through.
+    N8  override_net refuses a keep name that the disabled text of the
+        module holds, with the message of N1. This holds for the default
+        name `<net>_pre` and for a name given with `keep=`. The operation
+        writes a declaration and an assignment of that name. Before, the
+        other configuration had the name twice and two drivers. A keep
+        name outside the disabled text is used as before.
+    N9  override_net also refuses a net that the disabled text holds. The
+        kept declaration goes beside the declaration of the net. When that
+        declaration is in one branch of a directive, the other
+        configuration has no declaration of the keep name. It then fails
+        under `default_nettype none, and without it the keep name becomes
+        an implicit net of one bit.
+        That reason does not cover every refusal this rule makes. A net
+        that disabled text only reads is refused as well, and the edit
+        would have been correct there. See N7: the breadth is deliberate,
+        and an `ifdef ASSERT_ON block that names a net is a common shape,
+        so this is the widest practical cost of the guard.
+    N10 An escaped identifier in disabled text is the name without the
+        backslash (#54). The escaped form of `hidden` there stops an
+        operation on `hidden`.
+        This holds for the three removals of X2 and for the additions.
+        Before, the map had the raw text of the token as its key.
+    The operations share the message of X2. A message about a clash
+    with a hidden declaration would be false for N7. Two weak points are on
+    record. "Edit it" has no clear referent for an addition. "Would no
+    longer compile" is certain only when the name is declared or assigned
+    in the disabled text.
+
 Groups
     G1  A group inside a group is taken back when an exception leaves it,
         also when the outer group catches the exception and carries on. The
@@ -74,11 +141,12 @@ branch is not seen by the dangling check.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
-from hdl_vet.ops import Vet, VetError
+from hdl_vet.ops import Module, Vet, VetError
 from hdl_vet.output import write_tree
 from hdl_vet.session import Session
 from vetkit import make_design
@@ -522,3 +590,326 @@ def test_edits_queued_before_a_refused_operation_survive(tmp_path: Path):
         "+  logic kept;",
         "+  leaf #(.WIDTH(4)) u_l0 (.clk(clk), .d(~a), .q(y0));",
     ]
+
+
+# --- N1 to N10: additions and disabled text (#94) -------------------------------------
+
+ADDITIONS: dict[str, Callable[[Module, str], None]] = {
+    "add_wire": lambda m, name: m.add_wire(name),
+    "add_port": lambda m, name: m.add_port(name, "input"),
+    "add_param": lambda m, name: m.add_param(name, 3),
+}
+
+HIDDEN_BODY = (
+    "module top (input logic a, output logic y);\n"
+    "  assign y = a;\n"
+    "`ifdef EXTRA\n"
+    "  logic [3:0] hidden;\n"
+    "  assign hidden = {4{a}};\n"
+    "`endif\n"
+    "endmodule\n"
+)
+
+# Each design declares `hidden` only in text that this configuration disables.
+HIDDEN_VARIANTS = {
+    "ifndef": (
+        "`define SYNTH\n"
+        "module top (input logic a, output logic y);\n"
+        "  assign y = a;\n"
+        "`ifndef SYNTH\n"
+        "  logic hidden;\n"
+        "`endif\n"
+        "endmodule\n"
+    ),
+    "else": (
+        "`define EXTRA\n"
+        "module top (input logic a, output logic y);\n"
+        "`ifdef EXTRA\n"
+        "  assign y = a;\n"
+        "`else\n"
+        "  assign y = ~a;\n"
+        "  logic hidden;\n"
+        "`endif\n"
+        "endmodule\n"
+    ),
+    "elsif": (
+        "`define EXTRA\n"
+        "module top (input logic a, output logic y);\n"
+        "`ifdef EXTRA\n"
+        "  assign y = a;\n"
+        "`elsif OTHER\n"
+        "  assign y = ~a;\n"
+        "  logic hidden;\n"
+        "`endif\n"
+        "endmodule\n"
+    ),
+    "inner-of-an-enabled-outer": (
+        "`define OUTER\n"
+        "module top (input logic a, output logic y);\n"
+        "  assign y = a;\n"
+        "`ifdef OUTER\n"
+        "  logic seen;\n"
+        "`ifdef INNER\n"
+        "  logic hidden;\n"
+        "`endif\n"
+        "`endif\n"
+        "endmodule\n"
+    ),
+    "inner-of-a-disabled-outer": (
+        "module top (input logic a, output logic y);\n"
+        "  assign y = a;\n"
+        "`ifdef OUTER\n"
+        "`ifdef INNER\n"
+        "  logic hidden;\n"
+        "`endif\n"
+        "`endif\n"
+        "endmodule\n"
+    ),
+}
+
+HIDDEN_PORT = (
+    "module top (\n"
+    "  input logic a,\n"
+    "  output logic y\n"
+    "`ifdef EXTRA\n"
+    "  , input logic hidden\n"
+    "`endif\n"
+    ");\n"
+    "  assign y = a;\n"
+    "endmodule\n"
+)
+
+HIDDEN_PARAM = (
+    "module top #(\n"
+    "  parameter int A = 1\n"
+    "`ifdef EXTRA\n"
+    "  , parameter int hidden = 2\n"
+    "`endif\n"
+    ") (input logic a, output logic y);\n"
+    "  assign y = a;\n"
+    "endmodule\n"
+)
+
+HIDDEN_ELSEWHERE = (
+    "module leaf (input logic a, output logic q);\n"
+    "  assign q = a;\n"
+    "`ifdef EXTRA\n"
+    "  logic hidden;\n"
+    "`endif\n"
+    "endmodule\n"
+    "module top (input logic a, output logic y);\n"
+    "  leaf u (.a(a), .q(y));\n"
+    "endmodule\n"
+)
+
+ACTIVE_AND_DISABLED = (
+    "module top (input logic a, output logic y);\n"
+    "  logic hidden;\n"
+    "  assign y = a;\n"
+    "`ifdef EXTRA\n"
+    "  assign hidden = a;\n"
+    "`endif\n"
+    "endmodule\n"
+)
+
+
+def refused(tmp_path: Path, text: str, op: str) -> str:
+    """The message with which `op` refuses the name `hidden` in the module `top` of `text`."""
+    vet, p = design(tmp_path, {"d.sv": text})
+    with pytest.raises(VetError) as e:
+        ADDITIONS[op](vet.module("top"), "hidden")
+    assert vet.log == [] and untouched(vet, p["d.sv"])
+    return str(e.value)
+
+
+@pytest.mark.parametrize("op", sorted(ADDITIONS))
+def test_an_addition_refuses_a_name_that_disabled_text_declares(tmp_path: Path, op: str) -> None:
+    message = refused(tmp_path, HIDDEN_BODY, op)
+    assert message.startswith(f"{op} top: ")
+    assert "'hidden'" in message and "`ifdef EXTRA" in message
+
+
+@pytest.mark.parametrize("op", sorted(ADDITIONS))
+@pytest.mark.parametrize("variant", sorted(HIDDEN_VARIANTS))
+def test_an_addition_refuses_the_name_whatever_directive_disables_it(tmp_path: Path, variant: str, op: str) -> None:
+    message = refused(tmp_path, HIDDEN_VARIANTS[variant], op)
+    assert message.startswith(f"{op} top: ") and "'hidden'" in message
+
+
+@pytest.mark.parametrize(
+    ("text", "op"),
+    [(HIDDEN_PORT, "add_wire"), (HIDDEN_PORT, "add_param"), (HIDDEN_PARAM, "add_wire"), (HIDDEN_PARAM, "add_port")],
+    ids=["port-add_wire", "port-add_param", "param-add_wire", "param-add_port"],
+)
+def test_an_addition_refuses_a_name_in_a_disabled_part_of_a_header_list(tmp_path: Path, text: str, op: str) -> None:
+    message = refused(tmp_path, text, op)
+    assert message.startswith(f"{op} top: ")
+    assert "'hidden'" in message and "`ifdef EXTRA" in message
+
+
+@pytest.mark.parametrize("op", sorted(ADDITIONS))
+@pytest.mark.parametrize(
+    ("text", "name"), [(HIDDEN_BODY, "fresh"), (HIDDEN_ELSEWHERE, "hidden")], ids=["fresh", "leaf"]
+)
+def test_an_addition_of_a_name_outside_the_disabled_text_is_still_made(
+    tmp_path: Path, text: str, name: str, op: str
+) -> None:
+    vet, _ = design(tmp_path, {"d.sv": text})
+    ADDITIONS[op](vet.module("top"), name)
+    assert [(r.op, r.target, r.status) for r in vet.log] == [(op, "top", "applied")]
+    r = vet.finish()
+    assert r.ok, r.report()
+    assert any(line.startswith("+") and name in line for line in edits(r.diff))
+
+
+def test_a_name_that_the_active_text_declares_behaves_as_before(tmp_path: Path) -> None:
+    vet, p = design(tmp_path, {"d.sv": ACTIVE_AND_DISABLED})
+    top = vet.module("top")
+    top.add_wire("hidden")
+    assert [(r.op, r.status) for r in vet.log] == [("add_wire", "skipped")]
+    with pytest.raises(VetError, match="^add_wire top: .*'hidden'"):
+        top.add_wire("hidden", 4)
+    with pytest.raises(VetError, match="^add_port top: .*'hidden'"):
+        top.add_port("hidden", "input")
+    with pytest.raises(VetError, match="^add_param top: .*'hidden'"):
+        top.add_param("hidden", 3)
+    assert len(vet.log) == 1 and untouched(vet, p["d.sv"])
+
+
+def test_add_assign_already_refuses_a_name_that_only_disabled_text_declares(tmp_path: Path) -> None:
+    vet, p = design(tmp_path, {"d.sv": HIDDEN_BODY})
+    with pytest.raises(VetError) as e:
+        vet.module("top").add_assign("hidden", "a")
+    assert str(e.value) == "add_assign top: no net, variable or port 'hidden'"
+    assert vet.log == [] and untouched(vet, p["d.sv"])
+
+
+def test_add_assign_refuses_a_target_that_disabled_text_assigns(tmp_path: Path) -> None:
+    vet, p = design(tmp_path, {"d.sv": ACTIVE_AND_DISABLED})
+    with pytest.raises(VetError, match="^add_assign top: .*'hidden'"):
+        vet.module("top").add_assign("hidden", "a")
+    assert vet.log == [] and untouched(vet, p["d.sv"])
+
+
+MENTIONED_ONLY = (
+    "module top (input logic a, output logic y);\n"
+    "  assign y = a;\n"
+    "`ifdef EXTRA\n"
+    "  logic hidden;\n"
+    "  assign hidden = a & mentioned_only;\n"
+    "`endif\n"
+    "endmodule\n"
+)
+
+
+def test_an_addition_refuses_a_name_that_disabled_text_only_mentions(tmp_path: Path) -> None:
+    """N7: deliberate over-refusal. The name clashes with nothing. A raw splice is the way through."""
+    vet, p = design(tmp_path, {"d.sv": MENTIONED_ONLY})
+    with pytest.raises(VetError) as e:
+        vet.module("top").add_wire("mentioned_only")
+    message = str(e.value)
+    assert message.startswith("add_wire top: ")
+    assert "'mentioned_only'" in message and "`ifdef EXTRA" in message
+    assert vet.log == [] and untouched(vet, p["d.sv"])
+
+
+# A name that only a macro spells in the disabled text is not seen (#101). No test here expects a refusal for it.
+
+OVERRIDE_HEAD = (
+    "`default_nettype none\n"
+    "module top (input wire logic [7:0] a, output wire logic [7:0] y);\n"
+    "  logic [7:0] n;\n"
+    "  assign n = a;\n"
+    "  assign y = n;\n"
+)
+
+KEEP_HIDDEN = OVERRIDE_HEAD + "`ifdef EXTRA\n  logic [7:0] {keep};\n  assign {keep} = a;\n`endif\nendmodule\n"
+
+NET_IN_A_BRANCH = (
+    "`default_nettype none\n"
+    "module top (input wire logic [7:0] a, output wire logic [7:0] y);\n"
+    "`ifdef EXTRA\n"
+    "  wire [7:0] n;\n"
+    "`else\n"
+    "  logic [7:0] n;\n"
+    "`endif\n"
+    "  assign n = a;\n"
+    "  assign y = n;\n"
+    "endmodule\n"
+)
+
+
+def override_refused(tmp_path: Path, text: str, keep: str | None) -> str:
+    """The message with which `override_net` refuses the net `n` of `text`. The enable is added first."""
+    vet, p = design(tmp_path, {"d.sv": text})
+    top = vet.module("top")
+    top.add_port("en", "input")
+    with pytest.raises(VetError) as e:
+        top.override_net("n", "8'hAA", enable="en", keep=keep, waiver="no prover in this test")
+    assert [(r.op, r.status) for r in vet.log] == [("add_port", "applied")]
+    assert b"8'hAA" not in vet.text(p["d.sv"])  # the text holds the new port and no mux
+    return str(e.value)
+
+
+@pytest.mark.parametrize(("keep", "name"), [(None, "n_pre"), ("hidden", "hidden")], ids=["default", "given"])
+def test_override_net_refuses_a_keep_name_that_disabled_text_holds(tmp_path: Path, keep: str | None, name: str) -> None:
+    message = override_refused(tmp_path, KEEP_HIDDEN.format(keep=name), keep)
+    assert message.startswith("override_net top: ")
+    assert f"'{name}'" in message and "`ifdef EXTRA" in message
+
+
+def test_override_net_refuses_a_net_that_disabled_text_holds(tmp_path: Path) -> None:
+    message = override_refused(tmp_path, NET_IN_A_BRANCH, None)
+    assert message.startswith("override_net top: ")
+    assert "'n'" in message and "`ifdef EXTRA" in message
+
+
+def test_override_net_still_takes_a_keep_name_outside_the_disabled_text(tmp_path: Path) -> None:
+    vet, _ = design(tmp_path, {"d.sv": KEEP_HIDDEN.format(keep="hidden")})
+    top = vet.module("top")
+    top.add_port("en", "input")
+    top.override_net("n", "8'hAA", enable="en", keep="n_kept", waiver="no prover in this test")
+    assert [(r.op, r.status) for r in vet.log] == [("add_port", "applied"), ("override_net", "applied")]
+    r = vet.finish()
+    assert r.ok, r.report()
+    assert "+  logic [7:0] n_kept;" in edits(r.diff)
+
+
+ESCAPED_DECLARED = (
+    "module top (input logic a, output logic y);\n"
+    "  assign y = a;\n"
+    "`ifdef EXTRA\n"
+    "  logic \\hidden ;\n"
+    "`endif\n"
+    "endmodule\n"
+)
+
+ESCAPED_USED = (
+    "module top #(parameter int P = 1) (input logic a, input logic spare, output logic y);\n"
+    "  logic helper;\n"
+    "`ifdef EXTRA\n"
+    "  assign y = a & \\spare & \\helper & 1'(\\P );\n"
+    "`else\n"
+    "  assign y = a;\n"
+    "`endif\n"
+    "endmodule\n"
+)
+
+ESCAPED: dict[str, tuple[str, Callable[[Module], None], str]] = {
+    "add_wire": (ESCAPED_DECLARED, lambda m: m.add_wire("hidden"), "hidden"),
+    "remove_wire": (ESCAPED_USED, lambda m: m.remove_wire("helper"), "helper"),
+    "remove_port": (ESCAPED_USED, lambda m: m.remove_port("spare"), "spare"),
+    "remove_param": (ESCAPED_USED, lambda m: m.remove_param("P"), "P"),
+}
+
+
+@pytest.mark.parametrize("op", sorted(ESCAPED))
+def test_an_escaped_identifier_in_disabled_text_is_the_plain_name(tmp_path: Path, op: str) -> None:
+    text, call, name = ESCAPED[op]
+    vet, p = design(tmp_path, {"d.sv": text})
+    with pytest.raises(VetError) as e:
+        call(vet.module("top"))
+    message = str(e.value)
+    assert message.startswith(f"{op} top: ")
+    assert f"'{name}'" in message and "`ifdef EXTRA" in message
+    assert vet.log == [] and untouched(vet, p["d.sv"])

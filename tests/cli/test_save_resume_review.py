@@ -24,7 +24,7 @@ Reading an archive
         SessionError naming the file (exit 2 on the command line, no
         traceback). That includes index JSON nested too deeply to parse.
     R2  Types in the index are checked, not coerced: `format` must be the
-        integer 1 (not true, not 1.0, not "1"); strings must be strings,
+        integer 2 (not true, not 2.0, not "2"); strings must be strings,
         counts and offsets integers (booleans are not integers), lists lists.
         Unknown fields are ignored.
     R3  Size: before anything is read into memory, the uncompressed sizes the
@@ -79,7 +79,7 @@ from hdl_vet.ops import Vet, VetError
 from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import Session, SessionError
 from instance_cells import CELLS
-from vetkit import make_design, span, tree_bytes
+from vetkit import keeps_the_asked_spelling, make_design, span, tree_bytes
 
 
 @pytest.fixture
@@ -210,8 +210,8 @@ def test_deeply_nested_index_json_is_a_clean_refusal(kit, tmp_path: Path, capsys
     assert "Traceback" not in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("value", [True, 1.0, "1", None, [1]])
-def test_the_format_must_be_the_integer_one(kit, tmp_path: Path, value):
+@pytest.mark.parametrize("value", [True, 2.0, "2", None, [2]])
+def test_the_format_must_be_the_integer_two(kit, tmp_path: Path, value):
     def change(index):
         index["format"] = value
         return index
@@ -421,3 +421,29 @@ def test_help_wording(capsys):
     text = " ".join(capsys.readouterr().out.split())
     assert "no output tree" in text
     assert "whether or not it passes sign-off" in text
+
+
+def test_two_spellings_of_one_file_in_a_resumed_index_are_refused(kit, tmp_path: Path):
+    """An archive saved where the two names are two files, resumed where they are one.
+
+    On a case-sensitive file system `rtl/leaf.sv` and `rtl/LEAF.sv` are two files and the
+    index is honest. Resumed on a file system that ignores case they are one file, and the
+    session would hold it twice: the output tree would write it twice, to one place, and
+    the manifest would record a hash of bytes that are not on disk.
+    """
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("the two spellings cannot survive as two entries here")
+    src = saved(kit, tmp_path)
+
+    def twice(index):
+        one = next(f for f in index["files"] if f.endswith("leaf.sv") and "alt" not in f)
+        index["files"] = [*index["files"], one.replace("leaf.sv", "LEAF.sv")]
+        return index
+
+    with zipfile.ZipFile(src) as z:
+        body = z.read("original/rtl/leaf.sv")
+    bad = recraft(src, tmp_path / "twice.zip", index=twice)
+    with zipfile.ZipFile(bad, "a", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("original/rtl/LEAF.sv", body)
+    with pytest.raises(SessionError, match="one file here"):
+        Vet.restore(bad)

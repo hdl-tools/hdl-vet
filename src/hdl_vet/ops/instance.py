@@ -315,6 +315,7 @@ class Instance:
         drop_ports: Iterable[str] = (),
         drop_params: Iterable[str] = (),
         unconnected: Iterable[str] = (),
+        accept_types: Iterable[str] = (),
         was: str | None = None,
     ) -> None:
         """Instantiate `module` instead of the current one; see `tests/ops/test_instances.py`."""
@@ -328,6 +329,7 @@ class Instance:
             list(drop_ports),
             list(drop_params),
             list(unconnected),
+            list(accept_types),
             was,
         )
         self.vet._checked("replace_module", self.target, lambda: self._replace(*args), tried=True)
@@ -342,6 +344,7 @@ class Instance:
         drop_ports: list[str],
         drop_params: list[str],
         unconnected: list[str],
+        accept_types: list[str],
         was: str | None,
     ) -> None:
         v, op, target = self.vet, "replace_module", self.target
@@ -402,6 +405,7 @@ class Instance:
         old_ovr = {o.name: o for o in inst.param_overrides if o.name is not None}
         new_ports = {p.name: p for p in new_info.ports}
         new_values = [n for n, k in new_info.param_kinds.items() if k == "value"]
+        new_types = [n for n, k in new_info.param_kinds.items() if k == "type"]
         problems: list[str] = []
 
         for what, names, pool in (
@@ -427,11 +431,16 @@ class Instance:
                     f"{_did_you_mean(new, new_ports)}"
                 )
         for old, new in params.items():
-            if new not in new_values:
-                problems.append(
-                    f"params maps {old!r} to {new!r}, which is not an overridable value parameter of module "
-                    f"{module!r}{_did_you_mean(new, new_values)}"
-                )
+            is_type = old_info.param_kinds.get(old) == "type"
+            targets = new_types if is_type else new_values
+            if new not in targets:
+                word = "type" if is_type else "value"
+                other = new_values if is_type else new_types
+                if new in other:
+                    why = f"a {'value' if is_type else 'type'} parameter, and override {old!r} is a {word} parameter"
+                else:
+                    why = f"not an overridable {word} parameter of module {module!r}{_did_you_mean(new, targets)}"
+                problems.append(f"params maps {old!r} to {new!r}, which is {why}")
         for n, expr in connect.items():
             if n not in new_ports:
                 problems.append(
@@ -446,6 +455,11 @@ class Instance:
                 )
             elif new_ports[n].direction == "input":
                 problems.append(f"unconnected names {n!r}, an input port, which cannot be left unconnected")
+        for n in accept_types:
+            if n not in new_ports:
+                problems.append(
+                    f"accept_types names {n!r}, which is not a port of module {module!r}{_did_you_mean(n, new_ports)}"
+                )
         for n in set_params:
             if n not in new_values:
                 pkind = new_info.param_kinds.get(n)
@@ -487,12 +501,23 @@ class Instance:
                 continue
             if n in params:
                 carried.setdefault(params[n], []).append(("renamed", n))
-            elif n in new_values:
+            elif n in (new_types if old_info.param_kinds.get(n) == "type" else new_values):
                 carried.setdefault(n, []).append(("kept", n))
+            elif old_info.param_kinds.get(n) == "type":
+                hint = (
+                    "rename it with params= onto one of its type parameters"
+                    if new_types
+                    else "it has no type parameter to rename onto"
+                )
+                problems.append(
+                    f"override {n!r} is not accounted for: module {module!r} has no type parameter {n!r} "
+                    f"({hint}, or remove it with drop_params=, which leaves the port types of {module!r} in force)"
+                )
             else:
+                hint = "rename it with params= or remove it" if new_values else "remove it"
                 problems.append(
                     f"override {n!r} is not accounted for: module {module!r} has no overridable parameter {n!r} "
-                    f"(rename it with params= or remove it with drop_params=)"
+                    f"({hint} with drop_params=)"
                 )
         for t, olds in carried.items():
             if len(olds) > 1:
@@ -616,13 +641,15 @@ class Instance:
             raise VetError(f"{op} {target}: the edited design cannot be loaded: {e}") from e
         v._sync()
         after = v.session.loaded
+        compared: dict[str, str] = {}  # waived port -> note, for the whole swap
+        wrong: list[str] = []
         for p in paths:
             old_snap, new_snap = before.instance_snap(p), after.instance_snap(p)
             if new_snap is None:
                 raise VetError(f"{op} {target}: there is no instance at {p} in the edited design")
             if old_snap is None:
                 continue
-            wrong: list[str] = []
+            found = len(wrong)
             for old in old_conns:
                 if old in drop_ports:
                     continue
@@ -630,7 +657,7 @@ class Instance:
                 x, y = old_snap.ports.get(old), new_snap.ports.get(new)
                 if x is None or y is None:
                     continue
-                tx, ty = old_snap.port_types.get(old), new_snap.port_types.get(new)
+                tx, ty = old_snap.port_resolved.get(old), new_snap.port_resolved.get(new)
                 if x[0] != y[0]:
                     wrong.append(f"port {old!r} of {cur!r} is an {x[0]} but port {new!r} of {module!r} is an {y[0]}")
                 elif x[1] != y[1] and x[1] > 0 and y[1] > 0:
@@ -638,10 +665,18 @@ class Instance:
                         f"port {old!r} of {cur!r} is {x[1]} bits wide but port {new!r} of {module!r} "
                         f"is {y[1]} bits wide"
                     )
+                elif tx is not None and ty is not None and new in accept_types:
+                    if _type_key(tx) == _type_key(ty):
+                        continue
+                    compared.setdefault(
+                        new,
+                        f"replace_module {target}: accept_types accepts the type of port {new!r}: "
+                        f"{tx} in {cur!r}, {ty} in {module!r}",
+                    )
                 elif tx is not None and ty is not None and _type_key(tx) != _type_key(ty):
                     wrong.append(f"port {old!r} of {cur!r} has type {tx} but port {new!r} of {module!r} has type {ty}")
-            if wrong:
-                raise VetError(f"{op} {target}: " + "; ".join(wrong))
+            if len(wrong) > found:
+                continue
             for n in new_values:
                 if n in set_params:
                     continue
@@ -655,6 +690,14 @@ class Instance:
                         f"the value differently from {cur!r}; keep the value with set_params={{{n!r}: ...}} "
                         f"or accept the new one with an explicit set_params"
                     )
+        wrong += [
+            f"accept_types names {n!r}, which covers nothing: the port is not carried, or its types agree"
+            for n in accept_types
+            if n not in compared
+        ]
+        if wrong:
+            raise VetError(f"{op} {target}: " + "; ".join(wrong))
+        v.notes.extend(compared[n] for n in accept_types if n in compared)
         for old in drop_ports:
             conn = old_conns[old]
             direction = next((q.direction for q in old_info.ports if q.name == old), None)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import weakref
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         session._vet = weakref.ref(self)
         self.session = session
         self.log: list[OpRecord] = []
+        self._script_dir: Path | None = None  # folder of the running script, set by the CLI per script
         self.notes: list[str] = []
         self._depth = 0  # open `group` blocks (a checked operation counts as one while it runs)
         self._scope: _Scope | None = None  # the open `scope` block, if any
@@ -41,6 +43,12 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         self._checks: list[_Check] = []  # in the order registered; a key is there once
         self._dirty: set[tuple[str, ...]] = set()
         self._all = False
+        # What this run added, per module: an `add_*` consults it to skip or to report drift.
+        # `_sync` clears it on every re-load, and nothing removes a single entry any more
+        # (#57 deleted `_Plan.unadded`). That is safe only because every removal re-loads
+        # before the next addition reads this, through `_begin` or `_refresh_all_dirty`. An
+        # addition that stopped re-loading would read a stale entry here
+        # and skip, leaving the sign-off to pass a design without the item.
         self._added: dict[str, dict[str, tuple[str, str]]] = {}
         self._seen = session.reloads
         self._paths: dict[str, list[str]] | None = None
@@ -67,7 +75,8 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
         if self._scope is not None:
             raise VetError("finish: not allowed inside a scope")
-        return self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+        result = self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+        return replace(result, notes=list(self.notes))
 
     def _idle(self, op: str) -> None:
         """Refuse `op` inside a `group` block and after `finish`."""
@@ -89,7 +98,8 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         dirty, everything = set(self._dirty), self._all
         added = {mod: dict(names) for mod, names in self._added.items()}
         try:
-            return self.session.check([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+            result = self.session.check([*self.session.scripts, *scripts], self._evaluators(), self._proof())
+            return replace(result, notes=list(self.notes))
         finally:
             self._dirty, self._all, self._added = dirty, everything, added
             self._seen = self.session.reloads

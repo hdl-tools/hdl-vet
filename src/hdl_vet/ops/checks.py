@@ -10,7 +10,7 @@ from hdl_vet.archive import need_dict, need_list, need_str
 from hdl_vet.ops.common import OpRecord, _Check
 from hdl_vet.ops.text import _same
 from hdl_vet.session import Session
-from hdl_vet.slang_adapter import AdapterError, Design, ModuleInfo, tokens
+from hdl_vet.slang_adapter import AdapterError, Design, ModuleInfo, driven_bases, tokens
 from hdl_vet.splice import SpliceError
 
 _MISSING = "{}: module not found in the final design"
@@ -128,7 +128,12 @@ def _ev_remove_assign(session: Session, a: tuple[Any, ...], design: Design) -> s
     now = _module_of(design, mod)
     if now is None:
         return _MISSING.format(f"remove_assign {mod} {target}")
-    if any(x.left == target for x in now.assigns):
+    # The text, as before, OR the base name: `assign t[3:0] = ...` still drives `t`, and this
+    # check is the only one left once `remove_assign` has retired the check of an `add_assign`
+    # that it undid (#57). The text test has to stay, because `remove_assign` takes a target
+    # as the design spells it, and `driven_bases` answers only for a plain identifier, so on
+    # its own it would make the check vacuous for a target such as `w[3:0]` or an escaped name.
+    if any(x.left == target or target in driven_bases(x.left) for x in now.assigns):
         return f"remove_assign {mod} {target}: the assignment is still there in the final design"
     return None
 

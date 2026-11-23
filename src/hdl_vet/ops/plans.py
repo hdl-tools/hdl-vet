@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
@@ -16,6 +17,7 @@ from hdl_vet.ops.text import (
     _refuse_directive,
     _same,
 )
+from hdl_vet.paths import same_file
 from hdl_vet.session import SessionError
 from hdl_vet.slang_adapter import AdapterError, InstanceInfo, ModuleInfo, driven_bases
 
@@ -29,17 +31,52 @@ class _PlanOps(_VetHost):
 
         def run() -> None:
             try:
-                added = self.session.add_file(path)
+                resolved = self._script_path(path)
+            except VetError as e:
+                raise VetError(f"add_file {name}: {e}") from e
+            try:
+                added = self.session.add_file(resolved)
             except SessionError as e:
                 raise VetError(f"add_file {name}: {e}") from e
             self._sync()
             if not added:
                 self._record("add_file", name, "skipped")
                 return
-            self._set_check(_Check(("add_file", name), "add_file", (name, str(Path(path).resolve()))))
+            self._set_check(_Check(("add_file", name), "add_file", (name, str(resolved.resolve()))))
             self._record("add_file", name, "applied")
 
         self._checked("add_file", name, run, tried=True)
+
+    def _script_path(self, path: Path | str) -> Path:
+        """A relative `path` starts from the folder of the running script when a file is there.
+
+        Two branches look wider than they need to be, and both are there for a reason (#63).
+
+        `Path.is_file()` hides the error for a name that is absent, but it raises for a folder
+        that cannot be searched and for a name the filesystem cannot hold. A question that
+        cannot be answered takes the plain route, so `Session.add_file` refuses it the way it
+        did before this rule existed. Nothing is chosen on a guess.
+
+        The test for the current folder asks whether it holds the name, not whether it holds a
+        readable file. A dangling link, a pipe and a folder are all things the owner of the
+        tree put there, so hdl-vet refuses instead of reaching for the file by the script.
+        """
+        p = Path(path)
+        if p.is_absolute() or self._script_dir is None:
+            return p
+        beside = self._script_dir / p
+        try:
+            if not beside.is_file():
+                return p
+            here = p.exists() or p.is_symlink()
+        except OSError:  # the filesystem cannot answer: the plain route reports it
+            return p
+        if here and not same_file(beside, p):
+            raise VetError(
+                f"{os.path.abspath(beside)} is next to the script and {os.path.abspath(p)} is in the current folder, "
+                "and they are not one file: give an absolute path to say which one to add"
+            )
+        return beside
 
     def _driven_by(self, host: str, inst: InstanceInfo, only: str | None = None) -> list[tuple[str, str]]:
         """(module, signal) pairs that the output connections of `inst` (in `host`) drive.
@@ -68,7 +105,8 @@ class _PlanOps(_VetHost):
             c
             for c in self._checks
             if not (
-                len(c.key) >= 3 and c.key[0] in ("replace_module", "conn", "param") and c.key[1:3] == (module, name)
+                c.key[1:3] == (module, name)
+                and (c.key[0] in ("replace_module", "conn") or (c.key[0] == "param" and len(c.key) == 4))
             )
         ]
 
@@ -131,6 +169,8 @@ class _PlanOps(_VetHost):
         if plan.added is not None:
             mod, name, value = plan.added
             self._added.setdefault(mod, {})[name] = value
+        for kind, path, name in plan.cancels:
+            self.session.drop_expect(kind, [path], name)
         for kind, path, name in plan.expects:
             self.session.expect(kind, path, name, exact=True)
         for kind, path, name in plan.permits:
@@ -162,6 +202,7 @@ class _PlanOps(_VetHost):
                 return _Plan("add_port", mod, skip=True)
             raise DriftError(f"add_port {mod}: port {name!r} was already added with a different declaration")
         _refuse_directive(f"add_port {mod}", "port", info.ports_directive)
+        self._refuse_disabled("add_port", mod, info, name)
         if info.ports_close is None:
             raise VetError(f"add_port {mod}: cannot find the end of the port list")
         eol = _eol(data)
@@ -172,6 +213,9 @@ class _PlanOps(_VetHost):
             last = info.ports[-1]
             splices = _append_to_list(data, last.start, last.end, info.ports_close, item, eol)
 
+        base = self.session.baseline_snapshot()
+        had = any(name in base[p].ports for p in paths if p in base)
+        removed = set(self.session.expected_at("port-removed", name))
         return _Plan(
             "add_port",
             mod,
@@ -179,9 +223,10 @@ class _PlanOps(_VetHost):
             splices=splices,
             mark=("ports", mod),
             added=(mod, name, ("port", _norm(decl))),
-            expects=[("port-added", p, name) for p in paths],
+            expects=[("port-added", p, name) for p in paths if not had],
+            cancels=[("port-removed", p, name) for p in paths if p in removed],
             permits=[("connection-changed", p, name) for p in paths],
-            check=_Check(("add_port", mod, name), "add_port", (mod, name, decl)),
+            check=_Check(("port", mod, name), "add_port", (mod, name, decl)),
         )
 
     def _plan_add_param(
@@ -213,6 +258,7 @@ class _PlanOps(_VetHost):
                 return _Plan("add_param", mod, skip=True)
             raise DriftError(f"add_param {mod}: parameter {name!r} was already added with a different default")
         _refuse_directive(f"add_param {mod}", "parameter", info.params_directive)
+        self._refuse_disabled("add_param", mod, info, name)
         data = self.session.text(info.path)
         item = decl.encode()
         if info.params_close is None:
@@ -232,7 +278,7 @@ class _PlanOps(_VetHost):
             mark=("params", mod),
             added=(mod, name, ("param", _norm(decl))),
             expects=[("param-changed", p, name) for p in paths],
-            check=_Check(("add_param", mod, name), "add_param", (mod, name, str(default), str(type))),
+            check=_Check(("param", mod, name), "add_param", (mod, name, str(default), str(type))),
         )
 
     def _plan_assign(self, mod: str, info: ModuleInfo, target: str, expr: object, planned_port: bool = False) -> _Plan:
@@ -244,6 +290,7 @@ class _PlanOps(_VetHost):
                 raise VetError(f"add_assign {mod}: no net, variable or port {target!r}{_did_you_mean(target, names)}")
             if any(a.left == target and _same(a.right, expr) for a in info.assigns):
                 return _Plan("add_assign", mod, skip=True)
+            self._refuse_disabled("add_assign", mod, info, target)
             if target in ports and ports[target].direction == "input":
                 raise VetError(f"add_assign {mod}: {target!r} is an input port and cannot be assigned")
             try:
@@ -265,5 +312,5 @@ class _PlanOps(_VetHost):
             path=info.path,
             splices=[(ls, ls, text)],
             mark=("decls", mod),
-            check=_Check(("add_assign", mod, target, _norm(expr)), "add_assign", (mod, target, str(expr))),
+            check=_Check(("assign", mod, target), "add_assign", (mod, target, str(expr))),
         )

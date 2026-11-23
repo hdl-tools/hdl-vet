@@ -1,6 +1,6 @@
 """The session archive: one zip of plain data, written and read here and nowhere else.
 
-`session.json` is the index (JSON, `"format": 1`); every other entry is file content. The zip
+`session.json` is the index (JSON, `"format": 3`); every other entry is file content. The zip
 holds no code and is never extracted: a reader looks entries up by the names the index implies.
 The bytes depend only on what is saved: entries sorted by name, one fixed timestamp, one
 creator system, deflated at one fixed level, the index with sorted keys and fixed separators.
@@ -43,7 +43,9 @@ __all__ = [
     "write_archive",
 ]
 
-FORMAT = 2  # 2: the index holds the marks of the raw splices (a format 1 archive cannot be judged)
+# 2: one check key for a pair of operations. 3: the index holds the marks of the raw splices; an
+# archive without them cannot be judged, so every older format is refused.
+FORMAT = 3
 MAX_BYTES = 2 * 1024**3  # the most uncompressed data an archive may declare
 INDEX = "session.json"
 _STAMP = (1980, 1, 1, 0, 0, 0)  # the earliest time a zip can hold

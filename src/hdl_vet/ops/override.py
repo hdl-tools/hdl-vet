@@ -33,6 +33,7 @@ from hdl_vet.slang_adapter import (
     driven_bases,
     is_simple_identifier,
     tokens,
+    value_head_identifiers,
     value_identifiers,
 )
 
@@ -83,6 +84,20 @@ def override_net(module: Module, net: str, value: object, enable: str, keep: str
     if keep is not None and (not isinstance(keep, str) or not is_simple_identifier(keep)):
         raise VetError(f"{_OP} {mod}: {keep!r} is not a simple identifier (or is a SystemVerilog keyword)")
     paths = module._confirm_instances(_OP)
+    if bad := v.session.loaded.unfollowable_heads(mod, value_head_identifiers(text)):
+        raise VetError(
+            f"{_OP} {mod}: the value {text!r} reads {bad[0]!r}, which hdl-vet cannot follow: "
+            "give a value over the nets and the parameters of the module"
+        )
+    try:
+        closure = v.session.loaded.combinational_closure(mod, net)
+    except AdapterError:
+        closure = frozenset()  # a missing net is refused by the run with its own message
+    if hit := min(closure & value_head_identifiers(text), default=None):
+        raise VetError(
+            f"{_OP} {mod}: the value {text!r} reads {hit!r}, which {net!r} drives inside "
+            "the module, so it would make a loop"
+        )
     v._checked(_OP, f"{mod}.{net}", lambda: _run(module, paths, net, text, enable, keep, waiver))
 
 
@@ -170,6 +185,8 @@ def _run(
     other = v._other_use(info, keep_name, _OP)
     if other is not None:
         raise fail(f"the name {keep_name!r} is already used by {other}")
+    v._refuse_disabled(_OP, mod, info, keep_name)
+    v._refuse_disabled(_OP, mod, info, net)
     if waiver is None and not equiv.available():
         raise fail(
             "the equivalence check needs Yosys, which is not installed (install the extra hdl-vet[equiv]); "
@@ -242,7 +259,17 @@ def _retarget(module: Module, net: str, keep: str, found: _Found) -> None:
     out: list[_Check] = []
     for c in v._checks:
         if found.kind == "assign" and c.kind == "add_assign" and c.args[:2] == (mod, net):
-            c = _Check((c.key[0], c.key[1], keep, *c.key[3:]), c.kind, (mod, keep, *c.args[2:]))
+            moved = (c.key[0], c.key[1], keep, *c.key[3:])
+            # This rewrite does not go through `_set_check`, so it has to refuse a key that
+            # another post-condition already holds. An assignment and its removal share one
+            # key, so a `keep` name an earlier operation of this run touched would give two
+            # checks under one key. `save` accepts that and `restore` refuses it as damaged.
+            if any(other.key == moved for other in v._checks if other is not c):
+                raise VetError(
+                    f"{_OP} {mod}: the keep name {keep!r} already has a post-condition from an "
+                    f"earlier operation of this run; choose a name this run has not touched"
+                )
+            c = _Check(moved, c.kind, (mod, keep, *c.args[2:]))
         elif (
             found.kind == "instance"
             and c.kind == "conn"

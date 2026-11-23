@@ -108,3 +108,34 @@ def tree_bytes(root: Path) -> dict[str, bytes]:
     """Every file under `root`, keyed by POSIX relative path."""
     root = Path(root)
     return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def ignores_case(where: Path) -> bool:
+    """True when the filesystem holding `where` ignores case in names.
+
+    Probed by writing, not by asking the platform: a case-sensitive volume on macOS and
+    a case-insensitive one on Linux both exist, so `sys.platform` is not the question.
+    """
+    probe = Path(where) / "hdl_vet_case_probe"
+    probe.mkdir()
+    try:
+        return (Path(where) / "HDL_VET_CASE_PROBE").is_dir()
+    finally:
+        probe.rmdir()
+
+
+def keeps_the_asked_spelling(where: Path) -> bool:
+    """True when a name that is not the one on disk survives `Path.resolve()`.
+
+    Two conditions, and both matter: the filesystem ignores case, so the wrong spelling
+    opens the file at all, and `resolve()` does not canonicalise it away. Windows meets
+    the first and not the second, so a path there is already the one on disk and a
+    header cannot become two files of the design.
+    """
+    probe = Path(where) / "hdl_vet_case_probe"
+    probe.mkdir()
+    try:
+        variant = Path(where) / "HDL_VET_CASE_PROBE"
+        return variant.is_dir() and variant.resolve().name == variant.name
+    finally:
+        probe.rmdir()

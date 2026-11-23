@@ -310,8 +310,13 @@ the change has no effect when you switch it off (chapter~\ref{ch:signoff}).
   \item a \code{value} that is not one expression. Examples are a comma at the top level, an
     unbalanced bracket, a second statement and a comment.
   \item a \code{value} with a line break. A value is one line.
-  \item a \code{value} that reads the net itself. The message says \emph{loop}. hdl-vet reads
-    the names from the syntax of the value, not from its text.
+  \item a \code{value} that reads the net itself, or a name the net drives inside the
+    module. The message says \emph{loop}. hdl-vet reads the names from the syntax of the
+    value, not from its text. It judges the value by the name each path starts with.
+  \item a \code{value} whose path starts with a name that is not a net, a variable or a
+    parameter of the module. An instance, a generate block and a function are refused,
+    because hdl-vet cannot follow them. A net that a child instance drives is followed
+    through the other pins of that instance (chapter~\ref{ch:limits}).
   \item a \code{value} with a width other than the width of the net. The message says
     \emph{width}.
   \item a module that the design instantiates more than once, when you did not give the
@@ -510,11 +515,13 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
   \item \file{hdl-vet.json} lists the file under \code{added}.
   \end{itemize}
   On the console, hdl-vet prints \code{added hdl_vet_added/NAME}. A relative file name
-  in the argument \code{path} starts from the current folder, not from the script. To make
-  the script independent of where you run it, use
-  \code{Path(__file__).resolve().parent}.
+  in the argument \code{path} starts from the folder of the script. It starts from the
+  current folder when no file of that name is next to the script. An absolute file name
+  stays as it is. Outside a script, a relative file name starts from the current folder.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a relative file name that is next to the script and also in the current folder, but
+    not one file: give an absolute file name
   \item a file that cannot be read
   \item a second added file with the same name
   \item an input tree that has the folder \file{hdl_vet_added} at its root
@@ -553,6 +560,9 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
     removes it. The operation keeps a connection that you name in neither, if the new
     module has a port with that name.
   \item \code{params} and \code{drop_params} do the same for parameter overrides.
+    This holds for an override of a type parameter too. The operation keeps it when the
+    new module has a type parameter of that name. \code{params} renames it onto a type
+    parameter. The text of the override does not change.
   \item Every port of the new module needs a connection. The connection is one of these:
     \begin{itemize}
     \item the target of a kept or renamed connection
@@ -572,12 +582,19 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
   \item an input in \code{unconnected}
   \item two things on one port or parameter
   \item a \code{set_params} name that is not an overridable value parameter
+  \item a \code{params} map from a type parameter to a value parameter, or the reverse
   \end{itemize}
   The operation also refuses a module with a non-ANSI port list, an interface port, and
   positional overrides. It tries the edit. It refuses the edit when a kept or renamed port
-  has another direction, width or type in the new module. The message names both ports.
+  has another direction, width or resolved type in the new module. A typedef or a type
+  parameter with the same resolved type is no difference. The message names both ports.
   It also refuses the edit when the edit gives another value to a parameter that both modules
   have and nothing overrides.
+\item[accept\_types] A list of ports of the new module. A renamed port keeps the name it
+  lands on. The list waives a difference of type for these ports only. A difference of
+  direction or bit width is never waived. Each waived port adds a note with both types to the
+  sign-off report. The operation refuses a name that is not a port of the new module, and a
+  waiver that covers nothing.
 \item[was] The name of the module that you expect the instance to use now. If the
   instance uses neither the module in \code{was} nor the new module, the operation
   stops with a drift error. The error names the module that the instance uses. Without
@@ -671,11 +688,18 @@ override), the rule is:
   (line rule).
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a name that begins with a backslash, or is not a \code{str}
+  \item a name the module does not declare, and that is not a plain identifier or is a
+    keyword
   \item a name that is a port or something other than a net or variable
   \item a declaration that declares several names, comes from a macro or an include, or
     is in a generate block
   \end{itemize}
-\item[Again] hdl-vet skips the operation when nothing of that name is declared.
+  The operation checks the name when you call it. It queues nothing for a name that it
+  refuses. A declaration whose name can only be written escaped is named here as the
+  design reports it, without the backslash and the final blank.
+\item[Again] hdl-vet skips the operation when the name is valid and nothing of that name
+  is declared.
 \item[Example] \file{group.py}.
 \end{entry}
 
@@ -699,15 +723,24 @@ override), the rule is:
   to it at every instance of the module.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a name that begins with a backslash, or is not a \code{str}
+  \item a name that is not a port of the module, and that is not a plain identifier or
+    is a keyword
   \item a port whose successor takes its direction or type from it (a declaration like
     \code{output logic [3:0] y0, y1})
   \item a non-ANSI port list
   \item a header with a macro
   \item any instance whose connection list cannot be edited
   \end{itemize}
-\item[Again] hdl-vet skips the operation when the module has no such port.
-\item[Sign-off] The sign-off requires \code{port-removed} at every path. It permits
-  \code{connection-changed} for the port.
+  The operation checks the name when you call it. It queues nothing for a name that it
+  refuses. A port whose name can only be written escaped is named here as the design
+  reports it, without the backslash and the final blank.
+\item[Again] hdl-vet skips the operation when the name is valid and the module has no
+  such port.
+\item[Sign-off] The sign-off requires \code{port-removed} at every path when the input
+  design had the port. It permits \code{connection-changed} for the port. When
+  \apiname{Module.add_port} of this run added the port, the removal forgets that
+  expectation instead, so the pair leaves nothing behind.
 \item[Example] \file{retire.py}.
 \end{entry}
 
@@ -716,11 +749,18 @@ override), the rule is:
   override at every instance.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
+  \item a name that begins with a backslash, or is not a \code{str}
+  \item a name that is not a parameter of the module, and that is not a plain identifier
+    or is a keyword
   \item a parameter that is declared in the body
   \item a declaration of several names
   \item a header with a macro
   \end{itemize}
-\item[Again] hdl-vet skips the operation when the module has no such parameter.
+  The operation checks the name when you call it. It queues nothing for a name that it
+  refuses. A parameter whose name can only be written escaped is named here as the design
+  reports it, without the backslash and the final blank.
+\item[Again] hdl-vet skips the operation when the name is valid and the module has no
+  such parameter.
 \item[Sign-off] The sign-off requires \code{param-changed} at every path.
 \item[Example] \file{retire.py}.
 \end{entry}
@@ -845,6 +885,8 @@ A raw edit of logic needs more: a proof or a waiver. A \term{raw splice} is a ca
   \item \code{port-changed}
   \item \code{port-type-changed}
   \item \code{connection-changed}
+  \item \code{delay-changed}
+  \item \code{strength-changed}
   \end{itemize}
   \code{path} is the hierarchical path of the instance. \code{name} is the port or
   parameter. It is empty for the kinds that name none. With \code{exact=True},

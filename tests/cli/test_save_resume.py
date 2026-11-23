@@ -77,7 +77,7 @@ Python API
     (`remove_instance` after `connect`) behaves as in an unsaved run.
 
 Archive layout (a reader may open it with any zip tool)
-    session.json                 the index: {"format": 2, "tool": "hdl-vet",
+    session.json                 the index: {"format": 3, "tool": "hdl-vet",
                                  "version": ..., "top": ..., "scripts": [...],
                                  ...}; everything that is not file content
     original/<path>              every source and included file as loaded,
@@ -86,6 +86,21 @@ Archive layout (a reader may open it with any zip tool)
     added/<name>                 the files added with `add_file`, under
                                  their plain file names
     Entries are deflated.
+
+Format 2 (#57)
+    The index stores the key of every post-condition. A later operation
+    replaces an earlier post-condition only when the two keys are equal.
+    F1  An archive written now has `"format": 3` (2 came with the one key for a
+        pair; 3 with the marks of the raw splices, tests/ops/test_raw_splice_review.py).
+    F2  An archive of format 1 is refused, as any other format is. Format 1
+        stored a key for each operation, such as `add_wire` and `remove_wire`.
+        A resumed `remove_wire` could then never replace the saved check of
+        an `add_wire`, and the sign-off would fail a correct run.
+    F3  From format 2 on the two operations of a pair store one key: `wire`,
+        `assign`, `port` or `param`, then the module, then the name. The
+        `kind` stays the name of the operation, so the right evaluator runs.
+    F4  A pair that a save splits behaves as in an unsaved run, in every
+        order (rules W6 to W11 in `tests/ops/test_ops.py`).
 
 Command line
     vet apply -f F [--top T] [--base B] -s a.py -s b.py --save S [-o OUT]
@@ -371,7 +386,7 @@ def test_another_format_version_is_refused(work, capsys):
             data = src.read(item.filename)
             if item.filename == "session.json":
                 index = json.loads(data)
-                assert index["format"] == 2 and index["tool"] == "hdl-vet"
+                assert index["format"] == 3 and index["tool"] == "hdl-vet"
                 index["format"] = 99
                 data = json.dumps(index).encode()
             dst.writestr(item, data)
@@ -508,7 +523,7 @@ def test_the_archive_can_be_read_with_a_zip_tool(kit, cells, tmp_path: Path):
         assert z.read("current/rtl/mid.sv") == vet.text(kit.mid)
         assert z.read("added/cell_leaf.sv") == CELLS["cell_leaf.sv"].encode()
         index = json.loads(z.read("session.json"))
-        assert index["format"] == 2 and index["tool"] == "hdl-vet" and index["top"] == "top"
+        assert index["format"] == 3 and index["tool"] == "hdl-vet" and index["top"] == "top"
         assert index["scripts"] == []
 
 
@@ -706,3 +721,145 @@ def test_an_archive_with_a_path_outside_the_layout_root_is_refused(work):
             dst.writestr(item, data)
     with pytest.raises(SessionError):
         Vet.restore(crafted)
+
+
+# --- format 2: one key for a pair (#57), rules F1 to F4 ------------------------------------------
+
+
+def with_format(src: Path, dst: Path, value: object) -> Path:
+    """A copy of the archive `src` whose index claims the format `value`."""
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(dst, "w") as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename == "session.json":
+                data = json.dumps({**json.loads(data), "format": value}).encode()
+            zout.writestr(item, data)
+    return dst
+
+
+def stored_checks(path: Path) -> dict[tuple[str, ...], str]:
+    """The kind of every post-condition in the archive `path`, by its key."""
+    with zipfile.ZipFile(path) as z:
+        checks = json.loads(z.read("session.json"))["checks"]
+    assert len({tuple(c["key"]) for c in checks}) == len(checks)
+    return {tuple(c["key"]): c["kind"] for c in checks}
+
+
+def test_a_new_archive_has_format_two(kit, tmp_path: Path) -> None:
+    """F1."""
+    Vet(Session(kit.filelist, top="top")).save(tmp_path / "s.zip")
+    with zipfile.ZipFile(tmp_path / "s.zip") as z:
+        assert json.loads(z.read("session.json"))["format"] == 3
+
+
+def test_an_archive_of_format_one_is_refused(kit, tmp_path: Path, capsys) -> None:
+    """F2. The message is the one for any other format, and it names both versions."""
+    vet = Vet(Session(kit.filelist, top="top"))
+    vet.module("top").add_wire("t", width=4)
+    vet.save(tmp_path / "s.zip")
+    old = with_format(tmp_path / "s.zip", tmp_path / "old.zip", 1)
+    message = "session archive format 1, but this hdl-vet reads format 3 (an integer)"
+    with pytest.raises(SessionError) as refused:
+        Vet.restore(old)
+    assert message in str(refused.value) and str(old) in str(refused.value)
+    capsys.readouterr()
+    assert run("apply", "--resume", old, "-o", tmp_path / "out") == 2
+    err = capsys.readouterr().err
+    assert message in err and "Traceback" not in err
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_pair_stores_one_key_and_the_kind_of_its_last_operation(kit, tmp_path: Path) -> None:
+    """F3. The four additions are saved, then the four removals. The keys do not change."""
+    keys = {
+        "wire": ("wire", "top", "t"),
+        "assign": ("assign", "top", "t"),
+        "port": ("port", "top", "dft_en"),
+        "param": ("param", "mid", "DFT"),
+    }
+    vet = Vet(Session(kit.filelist, top="top"))
+    top, mid = vet.module("top"), vet.module("mid")
+    top.add_wire("t", width=4)
+    top.add_assign("t", "a & spare_d")
+    top.add_port("dft_en", "input")
+    mid.add_param("DFT", 0)
+    vet.save(tmp_path / "added.zip")
+    assert stored_checks(tmp_path / "added.zip") == {key: f"add_{name}" for name, key in keys.items()}
+
+    top.remove_assign("t")
+    top.remove_wire("t")
+    top.remove_port("dft_en")
+    mid.remove_param("DFT")
+    vet.save(tmp_path / "removed.zip")
+    assert stored_checks(tmp_path / "removed.zip") == {key: f"remove_{name}" for name, key in keys.items()}
+    r = Vet.restore(tmp_path / "removed.zip").finish()
+    assert r.ok, r.report()
+    assert r.files == {}
+
+
+def test_a_pair_that_a_save_splits_still_cancels(kit, tmp_path: Path) -> None:
+    """F4. Each addition is saved, and its removal comes after the resume."""
+    vet = Vet(Session(kit.filelist, top="top"))
+    vet.module("top").add_wire("t", width=4)
+    vet.module("top").add_assign("t", "a & spare_d")
+    vet.module("top").add_port("dft_en", "input")
+    vet.module("mid").add_param("DFT", 0)
+    vet.save(tmp_path / "s.zip")
+    back = Vet.restore(tmp_path / "s.zip")
+    back.module("top").remove_assign("t")
+    back.module("top").remove_wire("t")
+    back.module("top").remove_port("dft_en")
+    back.module("mid").remove_param("DFT")
+    r = back.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert r.files == {}
+
+
+def test_an_item_added_again_after_a_resume_signs_off(kit, tmp_path: Path) -> None:
+    """F4 and rule W7. Added and removed, saved, and added again after the resume.
+
+    The saved check is the one of the removal. The addition after the resume must replace
+    it, which it can only do when both are stored under one key.
+    """
+    vet = Vet(Session(kit.filelist, top="top"))
+    vet.module("top").add_wire("t", width=4)
+    vet.module("top").remove_wire("t")
+    vet.module("top").add_port("dft_en", "input")
+    vet.module("top").remove_port("dft_en")
+    vet.save(tmp_path / "s.zip")
+    back = Vet.restore(tmp_path / "s.zip")
+    back.module("top").add_wire("t", width=4)
+    back.module("top").add_port("dft_en", "input")
+    r = back.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert b"  logic [3:0] t;\n" in r.files[kit.top] and b"  input  logic dft_en\n" in r.files[kit.top]
+
+
+def test_a_port_of_the_input_design_removed_again_after_a_resume_signs_off(tmp_path: Path) -> None:
+    """F4 and rules W8, W9 and W12. What the `add_port` left is saved, and the run signs off as one removal."""
+    root = tmp_path / "in"
+    root.mkdir()
+    (root / "d.sv").write_bytes(
+        b"module child (\n  input  logic a,\n  input  logic spare,\n  output logic q\n);\n  assign q = a;\nendmodule\n"
+        b"module top (input logic a, output logic q);\n  child u (.a(a), .spare(1'b0), .q(q));\nendmodule\n"
+    )
+    (root / "d.f").write_bytes(b"d.sv\n")
+    vet = Vet(Session(root / "d.f", top="top"))
+    vet.module("child").remove_port("spare")
+    vet.module("child").add_port("spare", "input")
+    vet.save(tmp_path / "s.zip")
+    back = Vet.restore(tmp_path / "s.zip")
+    back.module("child").remove_port("spare")
+    r = back.finish()
+    assert r.failed_checks == []
+    assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
+    assert r.ok, r.report()
+    assert b"spare" not in r.files[root / "d.sv"]
+    assert sorted((c.kind, c.path, c.name) for c in r.changes) == [
+        ("connection-changed", "top.u", "spare"),
+        ("port-removed", "top.u", "spare"),
+    ]

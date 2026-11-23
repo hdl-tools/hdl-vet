@@ -20,6 +20,7 @@ from pathlib import Path
 import pytest
 
 from hdl_vet.filelist import FilelistError, read_filelist
+from vetkit import keeps_the_asked_spelling
 
 FIXTURES = Path(__file__).resolve().parent.parent / "support" / "fixtures"
 
@@ -143,3 +144,76 @@ def test_crlf_filelist(tmp_path: Path):
     (tmp_path / "a.sv").write_text("module a; endmodule\n")
     (tmp_path / "x.f").write_bytes(b"a.sv\r\n")
     assert read_filelist(tmp_path / "x.f").files == [(tmp_path / "a.sv").resolve()]
+
+
+def test_one_file_listed_twice_is_one_entry(tmp_path: Path):
+    """A file list that names one file twice gives one entry, however it spelled it.
+
+    An exact repeat is already dropped. A spelling that differs only in case was kept,
+    so the design held the file twice and slang reported a duplicate definition of its
+    module: a confusing way to be told that a list repeats itself.
+    """
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "leaf.sv").write_text("module leaf;\nendmodule\n")
+
+    (tmp_path / "exact.f").write_text("rtl/leaf.sv\nrtl/leaf.sv\n")
+    assert read_filelist(tmp_path / "exact.f").files == [(tmp_path / "rtl" / "leaf.sv").resolve()]
+
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("the two spellings are two files here, so both entries belong")
+    (tmp_path / "cased.f").write_text("rtl/leaf.sv\nrtl/LEAF.sv\n")
+    assert read_filelist(tmp_path / "cased.f").files == [(tmp_path / "rtl" / "leaf.sv").resolve()]
+
+
+def test_an_include_directory_listed_twice_is_one_entry(tmp_path: Path):
+    """The same, for `+incdir+`, which had no check of any kind."""
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "leaf.sv").write_text("module leaf;\nendmodule\n")
+    (tmp_path / "exact.f").write_text("+incdir+inc\n+incdir+inc\nrtl/leaf.sv\n")
+    assert read_filelist(tmp_path / "exact.f").incdirs == [(tmp_path / "inc").resolve()]
+
+
+def test_a_directory_named_in_another_case_is_spelled_as_it_is_held(tmp_path: Path):
+    """Issue #77: the manifest named a path that was not in the tree it described.
+
+    `changed` is keyed from the session's paths and `files` comes from the written tree,
+    so a source listed under a directory spelled in another case put the two out of step.
+    """
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("a wrong spelling cannot survive here, so there is nothing to correct")
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "leaf.sv").write_text("module leaf;\nendmodule\n")
+    (tmp_path / "rtl" / "t.sv").write_text("module t;\nendmodule\n")
+    (tmp_path / "t.f").write_text("rtl/leaf.sv\nRTL/t.sv\n")
+    fl = read_filelist(tmp_path / "t.f")
+    assert [p.relative_to(tmp_path).as_posix() for p in fl.files] == ["rtl/leaf.sv", "rtl/t.sv"]
+
+
+def test_an_include_directory_named_in_another_case_is_spelled_as_it_is_held(tmp_path: Path):
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("a wrong spelling cannot survive here, so there is nothing to correct")
+    (tmp_path / "inc").mkdir()
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "leaf.sv").write_text("module leaf;\nendmodule\n")
+    (tmp_path / "t.f").write_text("+incdir+INC\nrtl/leaf.sv\n")
+    fl = read_filelist(tmp_path / "t.f")
+    assert [p.relative_to(tmp_path).as_posix() for p in fl.incdirs] == ["inc"]
+
+
+def test_the_root_is_spelled_as_it_is_held_too(tmp_path: Path):
+    """Spelling the sources and not the root would be worse than spelling neither.
+
+    Everything downstream takes a path relative to the root. A root in one case and
+    sources in another cannot be taken away from them at all, so `relative_to` raises
+    and the output tree is refused.
+    """
+    if not keeps_the_asked_spelling(tmp_path):
+        pytest.skip("a wrong spelling cannot survive here, so there is nothing to correct")
+    (tmp_path / "rtl").mkdir()
+    (tmp_path / "rtl" / "leaf.sv").write_text("module leaf;\nendmodule\n")
+    (tmp_path / "rtl" / "top.f").write_text("leaf.sv\n")
+    fl = read_filelist(tmp_path / "RTL" / "top.f")
+    assert fl.root == tmp_path / "rtl"
+    assert fl.files == [tmp_path / "rtl" / "leaf.sv"]
+    assert fl.files[0].relative_to(fl.root).as_posix() == "leaf.sv"
