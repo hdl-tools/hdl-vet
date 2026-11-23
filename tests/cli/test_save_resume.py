@@ -393,7 +393,7 @@ def test_another_format_version_is_refused(work, capsys):
     capsys.readouterr()
     assert run("apply", "--resume", other, "-o", w.tmp / "out") == 2
     err = capsys.readouterr().err
-    assert "format" in err and "99" in err and "2" in err and "Traceback" not in err
+    assert "format" in err and "99" in err and "reads format 3" in err and "Traceback" not in err
     with pytest.raises(SessionError, match="99"):
         Vet.restore(other)
 
