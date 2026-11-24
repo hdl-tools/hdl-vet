@@ -83,7 +83,7 @@ cd hdl-vet
 
 To install hdl-vet from the clone, run `pip install .` in it.
 
-To use `Module.override_net` with the proof, install the extra. Run `pip install "hdl-vet[equiv]"`, or `pip install ".[equiv]"` in the clone.
+To use `Module.override_net` with the proof, install the extra. Without Yosys, a raw `Vet.splice` inside a module, `Module.add_assign` and `Instance.connect` with a logic expression, and every `Instance.set_param` and `Instance.replace_module` need `waiver=`. Run `pip install "hdl-vet[equiv]"`, or `pip install ".[equiv]"` in the clone.
 
 ## A first run
 

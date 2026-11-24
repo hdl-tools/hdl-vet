@@ -55,6 +55,12 @@ example). \code{vet.log} is the list of \code{OpRecord(op, target, status)}. The
   \item \code{equivalence} (one record for each comparison of the equivalence check)
   \item \code{outside} (one record, with \code{file} and \code{waiver}, for each raw splice
     outside the modules)
+  \item \code{lost_drivers} (the pairs of module and signal that had a driver before the run
+    and have none after it)
+  \item \code{enables} (one record for each pin of an enable that the sign-off looked at)
+  \item \code{notes} (the notes of the operations, set by \apiname{Vet.finish} and
+    \apiname{Vet.check})
+  \item \code{layout_root} (the folder that \code{report()} uses to print paths relative to it)
   \item \code{new_files}
   \item \code{load_error}
   \item \code{files} (new bytes of each changed file)
@@ -63,7 +69,7 @@ example). \code{vet.log} is the list of \code{OpRecord(op, target, status)}. The
   \item the method \code{report()}, which prints the lines of chapter~\ref{ch:signoff}
   \end{itemize}
   \code{Session.check} and \code{Session.finish}, which a script can call on \code{vet.session},
-  run no comparison. On a session with marks of raw splices they give an \code{error}
+  run no comparison. On a session with marks of raw splices or of logic calls they give an \code{error}
   record for each marked module. Use \apiname{Vet.check} and \apiname{Vet.finish}.
 \end{entry}
 

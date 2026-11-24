@@ -1,6 +1,6 @@
 """The session archive: one zip of plain data, written and read here and nowhere else.
 
-`session.json` is the index (JSON, `"format": 3`); every other entry is file content. The zip
+`session.json` is the index (JSON, `"format": 4`); every other entry is file content. The zip
 holds no code and is never extracted: a reader looks entries up by the names the index implies.
 The bytes depend only on what is saved: entries sorted by name, one fixed timestamp, one
 creator system, deflated at one fixed level, the index with sorted keys and fixed separators.

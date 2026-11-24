@@ -48,6 +48,8 @@ change. Each entry has the same points:
   operator, a conditional, a call, a cast, or a select with an index that is a signal. A name, a
   constant, a select with a constant index, a concatenation and a replication are wiring,
   and they need nothing. A call that is skipped needs nothing.
+\item A name is wiring only when the module resolves it to a net, a variable, a port or a
+  parameter. The name of a \code{let} is logic. So is a name that is not known.
 \item Each applied operation registers \emph{expectations} for the sign-off. These are
   the structural changes that the operation must cause. The entries name them as
   ``Sign-off requires'' and ``Sign-off permits''. Chapter~\ref{ch:signoff} explains

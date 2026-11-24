@@ -299,6 +299,14 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   3 bits and an \code{i} of 2 bits. The index can pass the end of \code{v}, which gives an
   undefined value. The check looks at the widths only. A select whose index stays in range
   by its logic still gives \code{error} when the width allows more.
+\item \textbf{A division by zero.} A division or a modulo whose divisor can be zero makes
+  an undefined value. The report of undefined values does not see it, so the guard does
+  not turn the answer into \code{error}.
+\item \textbf{A waiver on wiring.} A call that needs no proof, such as wiring, can still
+  carry \code{waiver=}. That waiver leaves no record, because the call leaves no mark.
+\item \textbf{A report that cannot be made.} The report of undefined values has a budget of
+  30 seconds. If it fails or passes the budget, the engine still says \code{proved}, and the
+  answer of the sign-off is \code{error}.
 \item \textbf{Struct members and enum indexes.} A struct member (\code{s.v}) is logic, as
   every name with a dot is. So is a select whose index is a package constant or an enum name.
   Such a call costs a proof or a waiver.

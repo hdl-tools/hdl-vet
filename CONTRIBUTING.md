@@ -31,7 +31,7 @@ The package `ops` has one module for each group:
 | `instance.py` | the class `Instance`: connections, parameter values, `replace_module` |
 | `hier.py` | `punch_port` and `propagate_param` |
 | `scope.py` | the declared scope |
-| `raw.py` | `splice`, `text`, `expect`, `permit` |
+| `raw.py` | `splice`, `text`, `expect`, `permit`, the gate and the mark of the logic calls |
 | `plans.py` | `add_file` and the plans of an edit |
 | `checks.py` | the post-conditions that the sign-off checks |
 | `common.py`, `text.py` | the errors, the records, helpers for text and numbers |
@@ -41,7 +41,7 @@ The package `slang_adapter` is the only place that imports `pyslang`:
 
 | Module of `slang_adapter/` | What it holds |
 | --- | --- |
-| `api.py` | `load`, `parameter_names`, `check_expression` and `is_wiring` |
+| `api.py` | `load`, `parameter_names`, `instance_parameters`, `check_expression`, `is_wiring` and the readers of the names of a value |
 | `design.py` | the class `Design` |
 | `loading.py` | the load cache and the loader |
 | `model.py` | modules and instances |

@@ -203,7 +203,8 @@ Skipped operations register no check.
 Most operations change the structure only. \apiname{Module.override_net} changes logic.
 The sign-off proves that this change has no effect when you switch it off.
 
-A raw splice inside a module can change logic too. The sign-off proves that such a module
+A raw splice inside a module can change logic too, and so can a logic call
+(section~\ref{sec:logicops}). The sign-off proves that such a module
 is equal to the module of the input design. The proof is the \term{equivalence check}. It
 uses Yosys. Chapter~\ref{ch:install} tells how to install it.
 
@@ -435,7 +436,9 @@ any expression of literals, parameters of the module and plain arithmetic, such 
 a conditional, a call (also \code{\$clog2}), a cast, and a select with an index that is a
 signal.
 
-A name with a \code{.} is logic too, and so is anything that the reader cannot
+A name is wiring only when the module resolves it to a net, a variable, a port or a
+parameter. The name of a \code{let} is logic, and so is a name that is not known. A name
+with a \code{.} is logic too, and so is anything that the reader cannot
 sort. Wiring is not compared.
 
 

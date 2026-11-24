@@ -37,6 +37,7 @@ def apply(vet):
     # Examples; remove the leading `# ` of one to use it:
     #   top.add_port("dft_en", "input")
     #   top.add_wire("spare_wire", 4)
+    # The next three calls need a proof (the extra hdl-vet[equiv]) or waiver="why".
     #   top.instance("u_rst_sync").connect("clk_i", "expression")
     #   top.instance("u_rst_sync").set_param("PARAM", 8)
     #   top.instance("u_rst_sync").replace_module("other_module")

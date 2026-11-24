@@ -2,10 +2,12 @@
 
 A logic operation (`Module.override_net`) leaves a record that names the module, the net, the enable and the
 waiver. A raw splice (`Vet.splice`) inside a module is one too, of the kind "splice": it has no net and no enable,
-and its label is `splice <module>`. `prove` makes one comparison for each module that such an operation edited and
-for each set of parameter values the module is elaborated with. The gold side is the module of the input design,
-the gate side is the edited design. The engine reads files, so both sides are written to a temporary folder that
-keeps the layout of the real tree (an `include` resolves as in the real tree), and the folder is removed after.
+and its label is `splice <module>`. A logic call is one of the kind "logic", with the label `add_assign`, `connect`,
+`set_param` or `replace_module` and the name of the module. `prove` makes one comparison for each module that such
+an operation edited and for each set of parameter values the module is elaborated with. The gold side is the module
+of the input design, the gate side is the edited design. The engine reads files, so both sides are written to a
+temporary folder that keeps the layout of the real tree (an `include` resolves as in the real tree), and the folder
+is removed after.
 
 The tie: every enable of an override in the module, and every enable that it carries up from a child, is tied
 to 0. The `same` list holds the children of the module whose own text, and the text of every module below them,
