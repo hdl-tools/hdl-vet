@@ -36,6 +36,7 @@ import pytest
 
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 
 HEADER = "typedef logic [7:0] byte_t;\ntypedef bit [7:0] two_state_t;\n"
 

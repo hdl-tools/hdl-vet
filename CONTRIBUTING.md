@@ -41,7 +41,7 @@ The package `slang_adapter` is the only place that imports `pyslang`:
 
 | Module of `slang_adapter/` | What it holds |
 | --- | --- |
-| `api.py` | `load`, `parameter_names` and `check_expression` |
+| `api.py` | `load`, `parameter_names`, `check_expression` and `is_wiring` |
 | `design.py` | the class `Design` |
 | `loading.py` | the load cache and the loader |
 | `model.py` | modules and instances |

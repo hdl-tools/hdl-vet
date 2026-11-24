@@ -19,6 +19,7 @@ import os
 import pytest
 
 import corpus
+from no_comparison import no_comparison  # noqa: F401
 from repo import REPO
 
 pytest.importorskip("ruamel.yaml", reason="hdl-bag (and its YAML library) not installed")

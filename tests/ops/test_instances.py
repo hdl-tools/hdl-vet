@@ -260,6 +260,7 @@ from hdl_vet.output import write_tree
 from hdl_vet.session import Session, SessionError
 from hdl_vet.slang_adapter import load
 from instance_cells import CELLS
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import make_design, tree_bytes
 
 # A second small design: one child with a spare port and a spare parameter.

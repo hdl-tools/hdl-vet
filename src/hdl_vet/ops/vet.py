@@ -246,7 +246,11 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
             for c in self._checks
             if c.kind == "override_net"
         ]
-        ops += [LogicOp(m.target, "", "", m.waiver, "splice") for m in self.session._marks if m.kind == "splice"]
+        ops += [
+            LogicOp(m.target, "", "", m.waiver, m.kind, m.label)
+            for m in self.session._marks
+            if m.kind in ("splice", "logic")
+        ]
         outside = [Outside(m.target, m.waiver or "") for m in self.session._marks if m.kind == "outside"]
         if not ops and not outside:
             return None

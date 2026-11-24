@@ -52,6 +52,7 @@ import pytest
 
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 
 ENUMS = {
     # The old cell takes its output type from a type parameter, which `top` sets to its own

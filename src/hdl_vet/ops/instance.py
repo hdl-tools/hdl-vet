@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from hdl_vet.listedit import edit_list, remove_all
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
+from hdl_vet.ops.raw import _check_waiver
 from hdl_vet.ops.text import (
     _DIRECTIONS,
     _append_to_list,
@@ -23,7 +24,7 @@ from hdl_vet.ops.text import (
     _segment,
     _type_key,
 )
-from hdl_vet.slang_adapter import AdapterError, ConnInfo, InstanceInfo, ModuleInfo, driven_bases, tokens
+from hdl_vet.slang_adapter import AdapterError, ConnInfo, InstanceInfo, ModuleInfo, driven_bases, is_wiring, tokens
 
 if TYPE_CHECKING:
     from hdl_vet.ops.vet import Vet
@@ -141,14 +142,25 @@ class Instance:
 
     # --- operations
 
-    def connect(self, port: str, expr: object, was: object | None = None) -> None:
+    def connect(self, port: str, expr: object, was: object | None = None, *, waiver: str | None = None) -> None:
+        """Connect `port` to `expr`. An expression with logic in it needs a proof or a waiver (see `is_wiring`)."""
         v = self.vet
         v._refuse_scope("connect", self._mod)
+        _check_waiver(f"connect {self.target}", waiver)
         inst, im = self._lookup(("conns",), ("ports",))
         self._refuse_connection_list("connect", inst)
         paths = self._paths("connect")
         self._port_check("connect", inst, im, port)
-        v._commit(self._plan_connect(inst, im, paths, port, expr, was))
+        host = v._info(self._mod)
+        names = {*host.param_kinds, *host.other_names}
+        v._logic_commit(
+            self._plan_connect(inst, im, paths, port, expr, was),
+            f"connect {self.target}",
+            self._mod,
+            f"connect {self.target}.{port}",
+            waiver,
+            not is_wiring(str(expr), names, {*host.resolved(), *v._added.get(host.name, {})}),
+        )
 
     def _plan_connect(
         self, inst: InstanceInfo, im: ModuleInfo, paths: list[str], port: str, expr: object, was: object | None
@@ -226,9 +238,11 @@ class Instance:
         v._set_check(_Check(("conn", self._mod, self._name, port), "conn", (self._mod, self._name, port, None)))
         v._record("disconnect", self.target, "applied")
 
-    def set_param(self, name: str, value: object, was: object | None = None) -> None:
+    def set_param(self, name: str, value: object, was: object | None = None, *, waiver: str | None = None) -> None:
+        """Give the parameter `name` of the child another value. It needs a proof or a waiver."""
         v = self.vet
         v._refuse_scope("set_param", self._mod)
+        _check_waiver(f"set_param {self.target}", waiver)
         inst, im = self._lookup(("overrides",), ("params",))
         self._guard_overrides("set_param", inst)
         paths = self._paths("set_param")
@@ -245,7 +259,13 @@ class Instance:
                 f"set_param {self.target}: parameter {name!r} of module {inst.module!r} is {what}, "
                 f"not an overridable value"
             )
-        v._commit(self._plan_set_param(inst, paths, name, value, was))
+        v._logic_commit(
+            self._plan_set_param(inst, paths, name, value, was),
+            f"set_param {self.target}",
+            self._mod,
+            f"set_param {self.target}.{name}",
+            waiver,
+        )
 
     def _guard_overrides(self, op: str, inst: InstanceInfo) -> None:
         v = self.vet
@@ -317,9 +337,11 @@ class Instance:
         unconnected: Iterable[str] = (),
         accept_types: Iterable[str] = (),
         was: str | None = None,
+        waiver: str | None = None,
     ) -> None:
-        """Instantiate `module` instead of the current one; see `tests/ops/test_instances.py`."""
+        """Instantiate `module` instead of the current one; it needs a proof or a waiver."""
         self.vet._refuse_scope("replace_module", self._mod)
+        _check_waiver(f"replace_module {self.target}", waiver)
         args = (
             module,
             dict(ports or {}),
@@ -331,6 +353,7 @@ class Instance:
             list(unconnected),
             list(accept_types),
             was,
+            waiver,
         )
         self.vet._checked("replace_module", self.target, lambda: self._replace(*args), tried=True)
 
@@ -346,6 +369,7 @@ class Instance:
         unconnected: list[str],
         accept_types: list[str],
         was: str | None,
+        waiver: str | None,
     ) -> None:
         v, op, target = self.vet, "replace_module", self.target
         inst = v._instance_info(self._mod, self._name)
@@ -611,6 +635,7 @@ class Instance:
                 splices.append((a, a + len(o.name), params[o.name].encode()))
 
         mod_name, inst_name = self._mod, self._name
+        v._logic_gate(f"{op} {target}", waiver)
 
         before = v.session.loaded
         v._commit_all(
@@ -629,6 +654,7 @@ class Instance:
             ],
         )
         v._mark("overrides", mod_name, inst_name)
+        v._logic_mark(mod_name, f"{op} {target}", waiver)
         for p in paths:
             v.session.permit("*", p, "*", below=True)
         v._swapped.setdefault((mod_name, inst_name), set()).add(cur)

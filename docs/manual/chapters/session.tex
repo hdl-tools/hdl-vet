@@ -38,9 +38,10 @@ enable and the waiver. It keeps each raw splice too: the module that it marked, 
 for a splice outside the modules, and the waiver. A run that resumes the session judges
 them again.
 
-An archive that an older version wrote has no mark of a raw splice, so a run could not judge
-its raw splices. hdl-vet refuses such an archive, with the message for another format
-version. Run the scripts again.
+The archive keeps the marks of the logic calls too, with their labels and waivers. An
+archive that an older version wrote (format 3 or less) can hold a logic call with no mark.
+A run could not judge it. hdl-vet refuses such an archive, with the message for another
+format version. Run the scripts again.
 
 \begin{itemize}
 \item Without \opt{-o}, hdl-vet saves, prints \code{saved FILE} and the summary, and then

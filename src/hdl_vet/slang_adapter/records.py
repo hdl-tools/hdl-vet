@@ -163,6 +163,10 @@ class ModuleInfo:
     generate_decls: frozenset[str] = frozenset()  # nets and variables declared inside generate constructs
     generate_assigned: frozenset[str] = frozenset()  # base names assigned inside generate constructs
 
+    def resolved(self) -> frozenset[str]:
+        """The names that this module resolves to a net, a variable, a port or a parameter."""
+        return frozenset([*(p.name for p in self.ports), *(d.name for d in self.decls), *self.param_kinds])
+
     def port(self, name: str) -> PortInfo:
         for p in self.ports:
             if p.name == name:

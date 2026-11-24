@@ -58,6 +58,7 @@ from hdl_vet.filelist import read_filelist
 from hdl_vet.ops import Vet
 from hdl_vet.session import Session
 from hdl_vet.slang_adapter import AdapterError, LoadCache, load
+from no_comparison import no_comparison  # noqa: F401
 from repo import REPO
 from tree_reuse_tools import describe, differences, write
 from vetkit import make_design, span

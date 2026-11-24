@@ -177,6 +177,7 @@ import pytest
 from hdl_vet.ops import DriftError, Vet, VetError
 from hdl_vet.session import Session
 from hdl_vet.signoff import Change
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import make_design, span
 
 

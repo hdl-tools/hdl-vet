@@ -23,6 +23,7 @@ from hdl_vet.ops import Vet
 from hdl_vet.output import write_tree
 from hdl_vet.session import Session
 from instances_corpus_edits import TECH_CELL, swap
+from no_comparison import no_comparison  # noqa: F401
 from ops_corpus_edits import dft
 from vetkit import tree_bytes
 

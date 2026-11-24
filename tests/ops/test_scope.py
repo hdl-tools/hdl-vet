@@ -106,6 +106,7 @@ import pytest
 from hdl_vet.cli import main
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 from scope_design import CELL, Design, statuses
 
 

@@ -867,9 +867,15 @@ class Session:
         """The records of the equivalence check. An exception of the check is a failed check, not an escape."""
         if proof is None:
             # No comparison was given: a marked module cannot be called equal. (`Vet.finish` always gives one.)
-            marked = list(dict.fromkeys(m.target for m in self._marks if m.kind == "splice"))
+            marked: dict[str, list[str]] = {}
+            for m in self._marks:
+                if m.kind in ("splice", "logic"):
+                    marked.setdefault(m.target, []).append(m.label or f"splice {m.target}")
             detail = "not compared: the session was finished without the comparison of a Vet"
-            records = [Record(name, {}, [f"splice {name}"], "error", detail, None, "error") for name in marked]
+            records = [
+                Record(name, {}, list(dict.fromkeys(labels)), "error", detail, None, "error")
+                for name, labels in marked.items()
+            ]
             outside = [Outside(m.target, m.waiver or "") for m in self._marks if m.kind == "outside"]
             return Proof(records, outside=outside)
         try:
@@ -968,7 +974,7 @@ class Session:
                 ]
                 for p, stages in sorted(self._maps.items(), key=lambda kv: kv[0].as_posix())
             },
-            "raw": [[m.kind, m.target, m.waiver] for m in self._marks],
+            "raw": [[m.kind, m.target, m.waiver, m.label] for m in self._marks],
             "expects": [
                 {
                     "kind": e.kind,
@@ -1080,10 +1086,12 @@ class Session:
         self._maps = {}
         self._init_raw()
         for item in need_list(index["raw"]):
-            kind, target, waiver = need_list(item, 3)
-            if need_str(kind) not in ("splice", "outside"):
+            kind, target, waiver, label = need_list(item, 4)
+            if need_str(kind) not in ("splice", "outside", "logic"):
                 raise ValueError(f"unknown mark of a raw splice {kind!r}")
-            self._marks.append(RawMark(kind, need_str(target), None if waiver is None else need_str(waiver)))
+            self._marks.append(
+                RawMark(kind, need_str(target), None if waiver is None else need_str(waiver), need_str(label))
+            )
         for key, stages in need_dict(index["maps"]).items():
             p = under(key)
             if p not in self._text:

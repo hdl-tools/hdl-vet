@@ -149,6 +149,7 @@ import pytest
 from hdl_vet.ops import Module, Vet, VetError
 from hdl_vet.output import write_tree
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import make_design
 
 

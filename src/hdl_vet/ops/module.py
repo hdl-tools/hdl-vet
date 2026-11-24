@@ -9,6 +9,7 @@ from hdl_vet.listedit import edit_list, line_rule, remove_all
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
 from hdl_vet.ops.instance import Instance
 from hdl_vet.ops.override import override_net as _override_net
+from hdl_vet.ops.raw import _check_waiver
 from hdl_vet.ops.text import (
     _DIRECTIONS,
     _IDENT,
@@ -23,7 +24,7 @@ from hdl_vet.ops.text import (
     _same,
     _segment,
 )
-from hdl_vet.slang_adapter import ModuleInfo, check_expression, driven_bases, is_simple_identifier, tokens
+from hdl_vet.slang_adapter import ModuleInfo, check_expression, driven_bases, is_simple_identifier, is_wiring, tokens
 
 if TYPE_CHECKING:
     from hdl_vet.ops.vet import Vet
@@ -159,16 +160,26 @@ class Module:
         v._set_check(_Check(("wire", mod, name), "add_wire", (mod, name, type_text)))
         v._record("add_wire", mod, "applied")
 
-    def add_assign(self, target: str, expr: object) -> None:
+    def add_assign(self, target: str, expr: object, *, waiver: str | None = None) -> None:
+        """`assign target = expr;`. An expression with logic in it needs a proof or a waiver (see `is_wiring`)."""
         v, mod = self.vet, self._name
         v._refuse_scope("add_assign", mod)
+        _check_waiver(f"add_assign {mod}", waiver)
         self._confirm_instances("add_assign")
         if not _IDENT.fullmatch(target):
             raise VetError(f"add_assign {mod}: the target must be a plain identifier, not {target!r}")
         v.session.refresh()  # drivers depend on everything queued
         v._sync()
         info = v._info(mod)
-        v._commit(v._plan_assign(mod, info, target, expr))
+        names = {*info.param_kinds, *info.other_names}
+        v._logic_commit(
+            v._plan_assign(mod, info, target, expr),
+            f"add_assign {mod}",
+            mod,
+            f"add_assign {mod}.{target}",
+            waiver,
+            not is_wiring(str(expr), names, {*info.resolved(), *v._added.get(info.name, {})}),
+        )
 
     def override_net(
         self, net: str, value: object, *, enable: str, keep: str | None = None, waiver: str | None = None

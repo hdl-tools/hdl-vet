@@ -398,7 +398,7 @@ def test_a_mux_that_the_script_wrote_is_not_an_override(design, monkeypatch):
     core = with_enable(vet)
     vet.punch_port("mode_i", "input", to="top.u_core")
     core.add_wire("sel_w")
-    core.add_assign("sel_w", "mode_i ? rst_ni : en_i[0]")
+    core.add_assign("sel_w", "mode_i ? rst_ni : en_i[0]", waiver="set-up of the test")
     core.override_net("sel_w", "1'b0", enable="test_en_i", waiver="w")
     text = design.text(vet, "core")
     assert "assign sel_w_pre = mode_i ? rst_ni : en_i[0];" in text

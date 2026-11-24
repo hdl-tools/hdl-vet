@@ -1,8 +1,10 @@
 $ vet apply --no-project -f design/design.f -s scripts/swap_cell.py --dry-run
 hdl-vet sign-off: FAILED
   unexpected change: instance-added rst_sync: None -> 'rst_sync'
+  waived: replace_module soc_top.u_rst_sync: "the cell is checked against rst_sync in the library flow, ticket LIB-214" (the check says: refuted, port u_rst_sync.clk_i of the gold module is missing in the gate)
 [exit status 1]
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/swap_cell.py -o out/swap
+  waived: replace_module soc_top.u_rst_sync: "the cell is checked against rst_sync in the library flow, ticket LIB-214" (the check says: refuted, port u_rst_sync.clk_i of the gold module is missing in the gate)
 wrote out/swap
 2 applied, 0 skipped
 changed rtl/soc_top.sv

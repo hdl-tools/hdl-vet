@@ -70,6 +70,7 @@ import pytest
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
 from hdl_vet.slang_adapter import load
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import make_design, span
 
 

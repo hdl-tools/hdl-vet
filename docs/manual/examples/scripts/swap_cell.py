@@ -12,4 +12,5 @@ def apply(vet):
         params={"STAGES": "DEPTH"},
         unconnected=["SO"],
         was="rst_sync",
+        waiver="the cell is checked against rst_sync in the library flow, ticket LIB-214",
     )

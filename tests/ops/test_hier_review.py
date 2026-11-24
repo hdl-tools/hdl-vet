@@ -50,6 +50,7 @@ import pytest
 
 from hdl_vet.ops import Vet, VetError
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import make_design
 
 LEAF_W = b"module leaf #(parameter int W = 4) (input logic a);\nendmodule\n"

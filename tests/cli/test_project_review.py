@@ -85,6 +85,7 @@ import pytest
 import hdl_vet.project
 from hdl_vet.cli import main
 from hdl_vet.project import ProjectError, init_project, load_project
+from no_comparison import no_comparison  # noqa: F401
 from project_files import FILES, PORT, manifest_scripts, write_project
 from vetkit import make_design, tree_bytes
 

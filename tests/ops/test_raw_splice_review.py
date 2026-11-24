@@ -344,7 +344,7 @@ def test_operations_are_not_raw(tmp_path, monkeypatch):
 
 def test_an_archive_of_an_older_version_is_refused(tmp_path, monkeypatch):
     no_yosys(monkeypatch)
-    assert archive.FORMAT == 3
+    assert archive.FORMAT == 4
     design = Design(tmp_path / "d", {"ab": AB, "top": AB_TOP})
     vet = design.vet()
     vet.module("a").add_wire("spare")
@@ -356,7 +356,7 @@ def test_an_archive_of_an_older_version_is_refused(tmp_path, monkeypatch):
             data = src.read(info.filename)
             if info.filename == "session.json":
                 index = json.loads(data)
-                assert index["format"] == 3
+                assert index["format"] == 4
                 index["format"] = 2
                 data = json.dumps(index).encode()
             dst.writestr(info, data)

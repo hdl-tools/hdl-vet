@@ -105,6 +105,7 @@ import pytest
 
 from hdl_vet.ops import DriftError, Vet, VetError
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import make_design
 
 LEAF = b"module leaf(input logic a, output logic q);\n  assign q = a;\nendmodule\n"

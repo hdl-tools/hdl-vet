@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -130,6 +130,89 @@ def check_expression(text: str) -> str | None:
     if str(expr.left).strip() != text.strip() or str(expr.right).strip() != "_k":
         return reason
     return None
+
+
+_SK = pyslang.syntax.SyntaxKind
+_LITERALS = frozenset({_SK.IntegerLiteralExpression, _SK.IntegerVectorExpression, _SK.UnbasedUnsizedLiteralExpression})
+_ARITHMETIC = frozenset(
+    {
+        _SK.AddExpression,
+        _SK.SubtractExpression,
+        _SK.MultiplyExpression,
+        _SK.DivideExpression,
+        _SK.ModExpression,
+        _SK.UnaryMinusExpression,
+        _SK.UnaryPlusExpression,
+        _SK.LogicalShiftLeftExpression,
+        _SK.LogicalShiftRightExpression,
+    }
+)
+_RANGES = (_SK.SimpleRangeSelect, _SK.AscendingRangeSelect, _SK.DescendingRangeSelect)
+
+
+def _constant(node: Any, names: frozenset[str]) -> bool:
+    """True when `node` is made of literals, the `names`, parentheses and plain arithmetic."""
+    kind = node.kind
+    if kind in _LITERALS:
+        return True
+    if kind == _SK.IdentifierName:
+        return str(node.identifier.valueText) in names
+    if kind == _SK.ParenthesizedExpression:
+        return _constant(node.expression, names)
+    if kind in _ARITHMETIC:
+        parts = [node.operand] if hasattr(node, "operand") else [node.left, node.right]
+        return all(_constant(n, names) for n in parts)
+    return False
+
+
+def _wiring(node: Any, names: frozenset[str], known: frozenset[str] | None) -> bool:
+    kind = node.kind
+    if kind in _LITERALS:
+        return True
+    if kind == _SK.IdentifierName:
+        return known is None or str(node.identifier.valueText) in known
+    if kind == _SK.ParenthesizedExpression:
+        return _wiring(node.expression, names, known)
+    if kind == _SK.ConcatenationExpression:
+        return all(_wiring(e, names, known) for e in _items(node.expressions))
+    if kind == _SK.MultipleConcatenationExpression:
+        return _constant(node.expression, names) and _wiring(node.concatenation, names, known)
+    if kind == _SK.IdentifierSelectName:
+        if known is not None and str(node.identifier.valueText) not in known:
+            return False
+        for select in node.selectors:
+            part = select.selector
+            if part is None:
+                return False
+            if part.kind == _SK.BitSelect:
+                bounds = [part.expr]
+            elif part.kind in _RANGES:
+                bounds = [part.left, part.right]
+            else:
+                return False
+            if not all(_constant(b, names) for b in bounds):
+                return False
+        return True
+    return False  # anything the reader cannot sort is logic
+
+
+def is_wiring(text: str, constants: Collection[str] = (), known: Collection[str] | None = None) -> bool:
+    """True when the expression `text` is wiring only: names, literals, selects, concatenations, replications.
+
+    A select bound and a replication count may be built of literals and `constants` (the parameters of the
+    module). A select with any other index is a mux, so it is logic. False for all else, and for a text that
+    is not one expression. Read from the syntax tree. With `known` (the nets, variables, ports and parameters
+    that the module resolves), a name outside it is logic: it may be a `let`, which is a call.
+    """
+    tree = pyslang.syntax.SyntaxTree.fromText(f"module _p;\nassign _x = {text};\nendmodule\n")
+    if list(tree.diagnostics):
+        return False
+    root: Any = tree.root
+    members = list(root.members)
+    assigns = list(members[0].assignments) if len(members) == 1 and hasattr(members[0], "assignments") else []
+    if len(assigns) != 1 or str(assigns[0].right).strip() != text.strip():
+        return False
+    return _wiring(assigns[0].right, frozenset(constants), None if known is None else frozenset(known))
 
 
 def value_identifiers(text: str) -> frozenset[str]:
