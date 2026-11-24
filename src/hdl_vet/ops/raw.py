@@ -20,7 +20,7 @@ from dataclasses import replace as replaced
 from pathlib import Path
 
 from hdl_vet import equiv
-from hdl_vet.ops.common import VetError
+from hdl_vet.ops.common import VetError, _Plan
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.session import SessionError
 from hdl_vet.slang_adapter import (
@@ -32,6 +32,16 @@ from hdl_vet.slang_adapter import (
     unconfined_reason,
 )
 from hdl_vet.splice import RawMark, RawSplice, Splice, SpliceError, apply_splices
+
+
+def _check_waiver(label: str, waiver: object) -> None:
+    """Refuse a waiver that is not one line of text that says something."""
+    if waiver is None:
+        return
+    if not isinstance(waiver, str) or not waiver.strip():
+        raise VetError(f"{label}: the waiver must be a text that says why the check is not needed")
+    if waiver.splitlines() != [waiver]:
+        raise VetError(f"{label}: the waiver must be one line")
 
 
 class _RawOps(_VetHost):
@@ -55,10 +65,7 @@ class _RawOps(_VetHost):
             raise VetError(f"{label}: text must be bytes, not {type(text).__name__}")
         if old is not None and not isinstance(old, bytes):
             raise VetError(f"{label}: old must be bytes, not {type(old).__name__}")
-        if waiver is not None and (not isinstance(waiver, str) or not waiver.strip()):
-            raise VetError(f"{label}: the waiver must be a text that says why the check is not needed")
-        if waiver is not None and waiver.splitlines() != [waiver]:
-            raise VetError(f"{label}: the waiver must be one line")
+        _check_waiver(label, waiver)
         if self._scope is not None:
             self._refuse_splice(self._scope, Path(path), start, end, text)
         undo = self._judge_splice(Path(path), start, end, text, old, waiver)
@@ -69,6 +76,31 @@ class _RawOps(_VetHost):
             raise VetError(f"splice {Path(path).name}: {e}") from e
         self._sync()
         self._all = True
+
+    # --- logic operations (tests/ops/test_logic_ops.py, rules L1 to L5) -------------
+
+    def _logic_gate(self, prefix: str, waiver: str | None) -> None:
+        """Refuse a logic call that nothing can judge: without Yosys it needs a waiver. Writes nothing."""
+        if waiver is None and not equiv.available():
+            raise VetError(
+                f"{prefix}: the equivalence check needs Yosys, which is not installed (install the extra "
+                f"hdl-vet[equiv]); give the call a waiver to go on without the check"
+            )
+
+    def _logic_mark(self, module: str, label: str, waiver: str | None) -> None:
+        """Register the module that a logic call changed, so the sign-off compares it with the input design."""
+        self.session._marks.append(RawMark("logic", module, waiver, label))
+
+    def _logic_commit(
+        self, plan: _Plan, prefix: str, module: str, label: str, waiver: str | None, logic: bool = True
+    ) -> None:
+        """Commit `plan`; when it changes text and is `logic`, refuse it first without a way to judge it, then mark."""
+        counts = logic and not plan.skip
+        if counts:
+            self._logic_gate(prefix, waiver)
+        self._commit(plan)
+        if counts:
+            self._logic_mark(module, label, waiver)
 
     def _guard_session_splice(
         self, path: Path, start: int, end: int, text: bytes, old: bytes | None

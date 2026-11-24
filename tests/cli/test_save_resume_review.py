@@ -79,6 +79,7 @@ from hdl_vet.ops import Vet, VetError
 from hdl_vet.output import OutputError, write_tree
 from hdl_vet.session import Session, SessionError
 from instance_cells import CELLS
+from no_comparison import no_comparison  # noqa: F401
 from vetkit import keeps_the_asked_spelling, make_design, span, tree_bytes
 
 

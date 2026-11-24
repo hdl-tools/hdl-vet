@@ -97,6 +97,7 @@ import pytest
 
 from hdl_vet.ops import Vet
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 
 # the driver of `y` sits in the MODE == 0 branch only
 CHILD = (

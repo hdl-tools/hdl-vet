@@ -35,11 +35,15 @@ class RawSplice:
 
 @dataclass(frozen=True)
 class RawMark:
-    """What the sign-off must judge for a raw splice: `kind` "splice" (`target` is a module) or "outside" (a file)."""
+    """What the sign-off must judge: `kind` "splice" or "logic" (`target` is a module) or "outside" (a file).
+
+    `label` names a logic call in the record, for example `set_param core.u_sync.STAGES`.
+    """
 
     kind: str
     target: str
     waiver: str | None
+    label: str = ""
 
 
 @dataclass(frozen=True)

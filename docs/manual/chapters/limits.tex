@@ -15,11 +15,11 @@ Items that say so were not checked by a test.
   into \code{count_o + 2'd2} in \code{timer}, and the sign-off says that the module is
   not equivalent.
 
-  Use the operations where you can. Most of them never write such an edit. Three do write
-  logic without a comparison: \apiname{Module.add_assign}, \apiname{Instance.connect} with an
-  expression, and \apiname{Instance.set_param}. The sign-off sees their changes of the
-  structure only. The owner has an open issue for this (issue 75). These limits hold for a
-  raw splice:
+  Use the operations where you can. Most of them never write such an edit. Four write
+  logic, and they need a proof or a waiver too: \apiname{Module.add_assign} and
+  \apiname{Instance.connect} with an expression that is logic, \apiname{Instance.set_param}
+  and \apiname{Instance.replace_module} (section~\ref{sec:logicops}). These limits hold for
+  them and for a raw splice:
   \begin{itemize}
   \item A module with a raw splice is judged as a whole. A structural operation in the same
     module that changes the behaviour, such as another connection of a pin, makes the
@@ -253,6 +253,21 @@ undefined values. A waiver is the way to go on when the check cannot judge.
 \item \textbf{A rare answer of not the same.} The check compares the children that it does
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.
+\item \textbf{Wiring is not compared.} \apiname{Instance.connect} and
+  \apiname{Module.add_assign} with a name, a select with a constant index, a concatenation,
+  a replication or a constant need nothing. \code{connect("en_i", "en_i[1]")} and a tie to
+  \code{1'b0} change the function and pass with the structural checks only. A name is
+  wiring only when the module resolves it to a net, a variable, a port or a parameter.
+  Logic are a \code{let} name, a struct member (\code{s.v}), and a select
+  with a package constant or an enum name as index. Such a call costs a proof or a waiver.
+\item \textbf{A call that cannot be proved.} \apiname{Module.add_assign} gives a net that had
+  no driver a driver, and \apiname{Instance.set_param} asks for another child. Such a call
+  nearly always changes the function, so it nearly always needs a waiver that names the check
+  that covers it. The comparison then documents what changed. An undefined value of the input
+  design that can reach a port makes the answer \code{error}, not \code{proved}.
+\item \textbf{Not compared.} \apiname{Instance.disconnect}, the removals,
+  \apiname{Vet.punch_port} and \apiname{Vet.propagate_param} are not compared. A select
+  bound with a call such as \code{\$clog2(W)} counts as logic.
 \item \textbf{What a waiver covers.} A waiver covers the comparison of the module. When
   every logic operation and every raw splice of a module has a waiver, nothing else in the
   module is judged. A waiver covers no other check of the sign-off.
@@ -272,12 +287,21 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   \code{proved}: its signedness, the order of the fields of a struct port, and the order of
   the ports. The module computes the same. A parent that connects by position or by field
   sees the change. The comparison of the structure reports it.
-\item \textbf{Undefined values.} Where the input module has an undefined value that
-  reaches an output, the proof can still pass, because the edited module can choose a
-  value. The detail in \file{hdl-vet.json} then says \code{the gold has undefined values
-  on} and names the outputs. Here \emph{gold} is the input module. The search for these
-  values does not see one that cancels, such as \code{u ^ u}, or one that a division by zero
-  makes.
+\item \textbf{Undefined values.} The engine can say \code{proved} when the input module has an
+  undefined value, because the edited module can choose a value. The answer is \code{error}
+  when that value can reach an output port or an input pin of a black box child.
+  The way can pass any number of cells and flops. The check follows the netlist, so a child
+  in a generate block counts. A net that nothing outside sees does not count.
+\item \textbf{Limits of that check.} It does not see a value that cancels, such as
+  \code{u ^ u}. It follows the netlist and not the logic. A value that other logic masks
+  still gives \code{error}.
+\item \textbf{A select that leaves its range.} Take \code{v[i +: 1]} with a \code{v} of
+  3 bits and an \code{i} of 2 bits. The index can pass the end of \code{v}, which gives an
+  undefined value. The check looks at the widths only. A select whose index stays in range
+  by its logic still gives \code{error} when the width allows more.
+\item \textbf{Struct members and enum indexes.} A struct member (\code{s.v}) is logic, as
+  every name with a dot is. So is a select whose index is a package constant or an enum name.
+  Such a call costs a proof or a waiver.
 \item \textbf{What the sandbox is given.} The Yosys of the extra \code{equiv} runs as
   WebAssembly, and it sees only what the run gives it. The run gives it the \emph{first}
   part of each path it needs, because its runtime takes no deeper mountpoint. So a whole

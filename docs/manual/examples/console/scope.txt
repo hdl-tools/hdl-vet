@@ -1,4 +1,6 @@
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/scope_periph.py -s scripts/scope_reset.py -o out/scopes
+  equivalence proved: timer [WIDTH=8] (add_assign timer.armed)
+  equivalence proved: soc_top (set_param soc_top.u_rst_sync.HOLD)
 wrote out/scopes
 10 applied, 0 skipped
 changed rtl/periph_wrap.sv

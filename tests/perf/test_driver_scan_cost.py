@@ -39,6 +39,7 @@ import pytest
 from hdl_vet import slang_adapter
 from hdl_vet.ops import Vet
 from hdl_vet.session import Session
+from no_comparison import no_comparison  # noqa: F401
 
 
 def generated(root: Path, kinds: int, signals: int, copies: int) -> Path:

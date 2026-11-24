@@ -44,8 +44,9 @@ __all__ = [
 ]
 
 # 2: one check key for a pair of operations. 3: the index holds the marks of the raw splices; an
-# archive without them cannot be judged, so every older format is refused.
-FORMAT = 3
+# archive without them cannot be judged, so every older format is refused. 4: a mark has a label, and
+# the logic calls (add_assign, connect, set_param, replace_module) leave marks too.
+FORMAT = 4
 MAX_BYTES = 2 * 1024**3  # the most uncompressed data an archive may declare
 INDEX = "session.json"
 _STAMP = (1980, 1, 1, 0, 0, 0)  # the earliest time a zip can hold

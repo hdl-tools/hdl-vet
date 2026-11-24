@@ -52,14 +52,19 @@ Stated limits (each gives "error" or "refuted", never a wrong "proved", except t
 - A memory of 1000 words of 32 bits reaches the timeout. A parameter value cannot be a string.
 - Where the gold has an x that reaches an output, the proof may still be "proved" (the gate may
   choose). The detail then says "the gold has undefined values on " and names those outputs. They
-  are found by one more proof of the gold against itself, x as 0 against x as 1, run only when the
-  gold has an x constant or a used net that nothing drives.
+  are found by one more proof of the gold against itself, the undriven bits as 0 against the same
+  bits as free values that are independent of each other, run only when the
+  gold has an x constant or a used net that nothing drives, or a select that can leave its range.
+  `Result.undefined_seen` is True when a named net, or the output of such a select, leads through the
+  netlist of the gold to an output port or to an input pin of a box (see `_leads_outside`), or when that
+  cannot be told. The caller then turns the "proved" into an "error".
 - Defines: a name must be a plain identifier. A value is passed on as it is, with `"` escaped,
   except that a value with `$`, a backslash or a line break is an "error" that names the define
   (the reader's file would expand or change it). The same holds for a path or an include folder
   that holds a quote, a backslash, `$` or a line break. `defines` of a wrong type raises TypeError.
 - The report of undefined values has a time budget of its own (30 s, a second process). When it
-  runs out or fails, the answer stays "proved" and the detail says that the report could not be made.
+  runs out or fails, the answer of the engine is still "proved". The detail says that the report
+  could not be made, and the sign-off (`prove.py`) counts that answer as an "error".
   The report does not see an undefined value of the gold that cancels (`u ^ u`) or one that a
   division by zero makes.
 - Checks run one at a time (a lock). The lock holds for the threads of one process, not for two
@@ -93,7 +98,7 @@ _VALUE = re.compile(r"[A-Za-z0-9_'.+\-]+\Z")
 _MACRO_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MOUNT = "/hostfs_"  # POSIX: the child sees the top-level folder NAME of the host as /hostfs_NAME (see `_Seen`)
 _MOUNT_IN_TEXT = re.compile(r"/hostfs_([^/\s'\"]+)")
-_FILES = re.compile(r"(?<![\w/.-])((?:gold|gate)(?:_h)?\.(?:f|json|il)|prepared\.il|check\.json)(?!\w)")
+_FILES = re.compile(r"(?<![\w/.-])((?:gold|gate)(?:_h|_w)?\.(?:f|json|il)|prepared\.il|check\.json)(?!\w)")
 _REPORT_TIMEOUT = 30.0  # seconds for the report of undefined values, apart from the timeout of the proof
 _MAX_DETAIL = 300
 _LOCK = threading.Lock()
@@ -120,6 +125,9 @@ class Result:
     # (a name it cannot handle, a port that is not as `inert` says). The caller can then compare without
     # `inert`. It is never True for a pin that is not 0, a net with two drivers or another parameter value.
     inert_refused: bool = False
+    # True when a "proved" rests on an undefined value of the gold that can be seen from outside the module
+    # (see `_leads_outside`), or when that could not be told. The caller turns such a "proved" into an "error".
+    undefined_seen: bool = False
 
 
 def available() -> bool:
@@ -258,7 +266,8 @@ def _run_child(
             if complaint is not None:
                 return done("error", complaint)
         if answer[0] == "proved" and (work / "report.wanted").exists():
-            return done("proved", f"{answer[1]}; {_report(work, env)}")
+            text, visible = _report(work, env)
+            return replace(done("proved", f"{answer[1]}; {text}"), undefined_seen=visible)
         answered = done(answer[0], answer[1])
         if answer[0] == "error" and (work / "interface.flag").exists():
             return replace(answered, inert_refused=True)
@@ -275,19 +284,21 @@ def _spawn(work: Path, args: list[str], env: Mapping[str, str], timeout: float) 
     )
 
 
-def _report(work: Path, env: Mapping[str, str]) -> str:
+def _report(work: Path, env: Mapping[str, str]) -> tuple[str, bool]:
     """The report of undefined values of the gold, from a second process with its own time budget.
 
-    It never changes the status: when it cannot be made, the text says so.
+    Returns the text and whether an undefined value can be seen from outside the module (`_leads_outside`).
+    It never changes the status: when it cannot be made, the text says so and the second value is True.
     """
     unknown = "could not tell whether the gold has undefined values"
     try:
         _spawn(work, ["spec.json", "report"], env, _REPORT_TIMEOUT)
         data = json.loads((work / "report.json").read_text(encoding="utf-8"))
         names = [str(n) for n in data["names"]]
+        seen = bool(data["seen"])
     except (subprocess.TimeoutExpired, OSError, ValueError, KeyError, TypeError):
-        return unknown
-    return "the gold has undefined values on " + ", ".join(names) if names else ""
+        return unknown, True
+    return ("the gold has undefined values on " + ", ".join(names) if names else ""), seen
 
 
 def _unknown_parameters(gold: Source, gate: Source, module: str, params: Mapping[str, str]) -> str | None:
@@ -511,7 +522,9 @@ def _read_lines(
     """Read one side and make it plain logic: flops and gates, no memories.
 
     With `same`, those modules stay boxes and their pins become ports of the parent. The netlist
-    before the flattening goes to `hierarchy_json`, to compare the boxes of the two sides.
+    before the flattening goes to `hierarchy_json`, to compare the boxes of the two sides. The netlist
+    of the module with its boxes as cells (before `expose` makes ports of every wire) goes to `gold_w.json`
+    or `gate_w.json`, for the walk of `_leads_outside`.
     """
     flags = " ".join(f"-G {name}={value}" for name, value in params.items())
     keep = " --keep-hierarchy" if same else ""
@@ -523,12 +536,15 @@ def _read_lines(
             f"setattr -mod -set keep_hierarchy 1 {patterns}",
             f"write_json {hierarchy_json}",
             "flatten",
+            f"write_json {listing.split('.')[0]}_w.json",
             f"expose -evert {module}",
             f"hierarchy -top {module}",
         ]
     # An unpacked array is a memory for the reader. Mapped to flops it is compared like any logic.
     # A memory that this cannot map stays a `$mem` cell, which the clock check refuses.
     lines += ["memory -nomap", "memory_map", "opt_clean"]
+    if not same:
+        lines.append(f"write_json {listing.split('.')[0]}_w.json")
     return lines
 
 
@@ -583,9 +599,9 @@ def proof_script() -> str:
 
 
 def undefined_script(module: str) -> str:
-    """The gold against itself, its x and undriven nets taken as 0 on one side and as 1 on the other."""
+    """The gold against itself: its undriven nets as 0 on one side and as free, independent bits on the other."""
     lines = ["read_rtlil gold.il", f"rename {module} gold", "setundef -undriven -zero", "design -stash gold"]
-    lines += ["read_rtlil gold.il", f"rename {module} gate", "setundef -undriven -one", "design -stash gate"]
+    lines += ["read_rtlil gold.il", f"rename {module} gate", "setundef -undriven -anyseq", "design -stash gate"]
     lines += ["design -copy-from gold -as gold gold", "design -copy-from gate -as gate gate", "async2sync"]
     lines += ["equiv_make gold gate equiv", "hierarchy -top equiv", "equiv_simple -seq 5", "equiv_induct -seq 5"]
     lines += ["equiv_status"]
@@ -994,7 +1010,7 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
         return clock_answer
     code, log = _run_yosys(proof_script(), "proof")
     status, detail = _verdict(code, log, gold_ports)
-    if status == "proved" and _has_undefined(gold_side):
+    if status == "proved" and (_has_undefined(gold_side) or _wide_selects(gold_side)):
         Path("report.wanted").write_text("", encoding="utf-8")  # the parent runs the report, with its own budget
     return status, detail
 
@@ -1020,22 +1036,106 @@ def _has_undefined(side: Mapping[str, Any]) -> bool:
     return bool(used - driven)
 
 
-def _undefined_outputs(module: str, gold_ports: Mapping[str, tuple[str, int]]) -> list[str]:
-    """The outputs of the gold that depend on an undefined value, found by a proof of the gold against itself."""
-    outputs = [name for name, (direction, _) in gold_ports.items() if direction == "output"]
+def _undefined_names(module: str) -> list[str] | None:
+    """The nets of the gold that depend on an undefined value, found by a proof of the gold against itself.
+
+    None when the report could not be made.
+    """
     code, log = _run_yosys(undefined_script(module), "undefined")
-    if code != 0:
-        return outputs  # not examined: name every output, which is the safe side
-    return [n for n in dict.fromkeys(_UNPROVEN.findall(log)) if n in outputs]
+    return None if code != 0 else list(dict.fromkeys(_UNPROVEN.findall(log)))
+
+
+def _wide_selects(side: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The shift cells that can address past their data input, by the widths alone.
+
+    A select with a variable index (`v[i +: 1]`) is a `$shiftx` with data of w bits, an index of k bits and a
+    result of r bits. It is in range when an unsigned index gives (2**k - 1) + r <= w. A signed index is not.
+    Constant 0 bits on top of the index are no index bits (the reader puts one on an unsigned index to make it signed).
+    """
+    found = []
+    for cell in side["cells"].values():
+        if cell.get("type") not in ("$shiftx", "$shift"):
+            continue
+        params = cell.get("parameters", {})
+        try:
+            width, result = (int(str(params[name]), 2) for name in ("A_WIDTH", "Y_WIDTH"))
+            index = list(cell["connections"]["B"])
+        except (KeyError, ValueError):
+            found.append(cell)  # not understood: it counts
+            continue
+        # The reader gives an unsigned index as a signed one with a constant 0 on top: that bit is no index bit.
+        signed = str(params.get("B_SIGNED", "1")).strip("0") != ""
+        while index and index[-1] in ("0", 0):
+            index.pop()
+            signed = False
+        if signed or (1 << len(index)) - 1 + result > width:
+            found.append(cell)
+    return found
+
+
+def _leads_outside(side: Mapping[str, Any], names: Iterable[str]) -> bool:
+    """True when an undefined value of the gold can be seen from outside the module, or when that cannot be told.
+
+    The start bits are the bits of the nets that the report names and the outputs of the selects of
+    `_wide_selects`. The walk goes forward through every cell, flops and memories too (an input bit leads to all
+    the output bits), any number of steps. It reaches the outside at a bit of an output or inout port, or at an
+    input pin of a cell that is not a Yosys primitive (a child that stayed a black box, wherever it is
+    in the hierarchy). A named net that is not in the netlist counts as seen. The walk follows the netlist and not
+    the logic: a value that other logic masks still counts.
+    """
+    netnames = side.get("netnames", {})
+    todo: list[int] = []
+    for name in names:
+        info = netnames.get(name)
+        if info is None:
+            return True
+        todo += [b for b in info["bits"] if isinstance(b, int)]
+    reads: dict[int, list[int]] = {}  # input bit -> the output bits of its cell
+    box_pins: set[int] = set()
+    for cell in side["cells"].values():
+        directions = cell.get("port_directions", {})
+        ins: list[int] = []
+        outs: list[int] = []
+        for pin, bits in cell["connections"].items():
+            ints = [b for b in bits if isinstance(b, int)]
+            direction = directions.get(pin, "inout")
+            if direction != "output":
+                ins += ints
+            if direction != "input":
+                outs += ints
+        if not str(cell.get("type", "")).startswith("$"):
+            box_pins.update(ins)
+        for bit in ins:
+            reads.setdefault(bit, []).extend(outs)
+    for cell in _wide_selects(side):
+        todo += [b for pin, bits in cell["connections"].items() if pin == "Y" for b in bits if isinstance(b, int)]
+    visible = {
+        b for port in side["ports"].values() if port["direction"] != "input" for b in port["bits"] if isinstance(b, int)
+    }
+    seen: set[int] = set()
+    while todo:
+        bit = todo.pop()
+        if bit in seen:
+            continue
+        seen.add(bit)
+        if bit in visible or bit in box_pins:
+            return True
+        todo += reads.get(bit, [])
+    return False
 
 
 def _report_child(spec_path: str) -> int:
     spec = json.loads(Path(spec_path).read_text(encoding="utf-8"))
     gold_side = _load("gold.json", spec["module"])
-    if gold_side is None:
+    walk_side = _load("gold_w.json", spec["module"])
+    if gold_side is None or walk_side is None:
         return 1
-    names = _undefined_outputs(spec["module"], _ports_of(gold_side))
-    Path("report.json").write_text(json.dumps({"names": names}), encoding="utf-8")
+    outputs = [name for name, (direction, _) in _ports_of(gold_side).items() if direction == "output"]
+    found = _undefined_names(spec["module"])
+    # Not examined: name every output, which is the safe side. Else the outputs among the named nets.
+    names = outputs if found is None else [n for n in found if n in outputs]
+    seen = found is None or _leads_outside(walk_side, found)
+    Path("report.json").write_text(json.dumps({"names": names, "seen": seen}), encoding="utf-8")
     return 0
 
 

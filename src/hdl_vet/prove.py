@@ -48,10 +48,13 @@ class LogicOp:
     net: str
     enable: str
     waiver: str | None = None
-    kind: str = "override_net"  # "override_net" | "splice"
+    kind: str = "override_net"  # "override_net" | "splice" | "logic"
+    name: str = ""  # the label of a "logic" call, for example `set_param core.u_sync.STAGES`
 
     @property
     def label(self) -> str:
+        if self.kind == "logic":
+            return self.name
         if self.kind == "splice":
             return f"splice {self.module}"
         return f"override_net {self.module}.{self.net}"
@@ -232,16 +235,24 @@ def _judge(
     if wrong is not None:  # the proof is at the values of the value parameters only: never proved, never inert
         status = "waived" if everything_waived else "error"
         return Record(module, params, labels, status, wrong, waiver, "error", enables, waivers)
-    status, detail = "error", ""
+    status, detail, seen = "error", "", False
     try:
         gold, gate = trees.sources()
         same = _same_children(session, design, module, logic, memo)
-        answer = equiv.check(gold, gate, module, params=params, tie=dict.fromkeys(enables, 0), same=same, inert=inert)
+        used = inert
+        answer = equiv.check(gold, gate, module, params=params, tie=dict.fromkeys(enables, 0), same=same, inert=used)
         if answer.inert_refused:  # only the interface of a child was refused: compare with the children inside
+            used = {}
             answer = equiv.check(gold, gate, module, params=params, tie=dict.fromkeys(enables, 0), same=same)
-        status, detail = answer.status, trees.clean(answer.detail)
+        status, detail, seen = answer.status, trees.clean(answer.detail), answer.undefined_seen
     except Exception as exc:
         status, detail = "error", f"the check could not be run: {type(exc).__name__}: {exc}"
+        used = {}
+    # The gold can leave a value undefined, so the gate may "choose" it: equal by that freedom only. It is no
+    # proof when the value can be seen from outside the module (a port, or a pin of a child kept as a box). The
+    # engine decides that from the netlist of the gold (`equiv._leads_outside`), not from names.
+    if status == "proved" and seen:
+        status, detail = "error", f"not proved, because the input design is undefined at a port: {detail}"
     if status not in _STATUSES:  # only the engine's three answers count
         status, detail = "error", f"the engine gave an answer that is not known: {status!r}"
     return Record(

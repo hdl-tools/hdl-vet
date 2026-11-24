@@ -14,4 +14,5 @@ def apply(vet):
         unconnected=["SO"],
         drop_params=["STAGES"],
         set_params={"DEPTH": 3},
+        waiver="a three-stage cell is wanted here, checked in the library flow, ticket LIB-215",
     )

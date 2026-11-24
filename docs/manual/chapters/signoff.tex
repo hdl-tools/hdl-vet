@@ -17,7 +17,7 @@ When the last script ends, hdl-vet does these steps:
 \item If a file differs, it loads the edited design. It compares the edited design with
   the design that you started from, the \term{baseline}.
 \item It evaluates the checks that the operations registered.
-\item If an operation or a raw splice changed logic, it runs the equivalence check
+\item If an operation, a logic call or a raw splice changed logic, it runs the equivalence check
   (section~\ref{sec:equiv}).
 \end{enumerate}
 
@@ -102,7 +102,8 @@ of each kind.
   the sign-off passes. If the design elaborates the module with parameter values, the
   line shows them after the name, for example \code{rst_sync [STAGES=3]}. A module that
   has raw splices and no enable has no \code{equal when}: the line ends with
-  \code{(splice MODULE)}.
+  \code{(splice MODULE)}. A logic call is named by its label, such as
+  \code{set_param core.u_sync.STAGES}.
 
 \item[not equivalent: MODULE: DETAIL (OPERATIONS)] The check did not prove the module.
   The detail names the signals that are not equal. Look at the operations that the line
@@ -116,7 +117,8 @@ of each kind.
   every raw splice of the module has a waiver. The waiver decides, so this line is no
   failure. The text in parentheses is what the check said: \code{proved}, or
   \code{refuted} or \code{error} with the detail. Without Yosys, it says that the check did
-  not run. The operation of a raw splice is \code{splice MODULE}.
+  not run. The operation of a raw splice is \code{splice MODULE}, and the one of a logic
+  call is its label (section~\ref{sec:logicops}).
 
 \item[waived: splice FILE: "WAIVER" (outside the modules: not compared)] A raw splice
   changed text outside every module, and it has a waiver. No comparison ran for it. The
@@ -209,7 +211,8 @@ uses Yosys. Chapter~\ref{ch:install} tells how to install it.
 
 The check compares two versions of one module: the module of the input design, and the
 edited module. hdl-vet makes one comparison for each module that a logic operation
-edited, and for each module that a raw splice marked (section~\ref{sec:rawsplice}). It makes
+edited. It makes one for each module that a raw splice or a logic call marked
+(sections~\ref{sec:rawsplice} and~\ref{sec:logicops}). It makes
 one comparison for each set of parameter values with which the design elaborates the
 module. The rules of a comparison are these:
 
@@ -410,6 +413,58 @@ operation on such a module is.
 A group that ends with an exception takes back its raw splices, with their marks. A scope
 keeps its own rules for a splice (chapter~\ref{ch:scripts}). A splice that the scope allows
 is raw like any other.
+
+\subsection*{Logic calls}
+\label{sec:logicops}
+
+Four operations can write logic. A call that changes the text needs a proof or a waiver, by
+the rule for a raw splice:
+
+\begin{itemize}
+\item \apiname{Module.add_assign} and \apiname{Instance.connect}, when the expression is
+  logic
+\item \apiname{Instance.set_param}, whatever the value
+\item \apiname{Instance.replace_module}
+\end{itemize}
+
+hdl-vet reads the expression of \apiname{Module.add_assign} and \apiname{Instance.connect}
+from its syntax tree. It is \emph{wiring} when it is made only of names, literals, selects,
+concatenations, replications and parentheses. The index and the bounds of a select can be
+any expression of literals, parameters of the module and plain arithmetic, such as
+\code{d[W-1:0]}. So can the count of a replication. All else is logic. Logic is an operator,
+a conditional, a call (also \code{\$clog2}), a cast, and a select with an index that is a
+signal.
+
+A name with a \code{.} is logic too, and so is anything that the reader cannot
+sort. Wiring is not compared.
+
+
+
+A logic call marks the module whose text it changes: the module of
+\apiname{Module.add_assign}, and the module that holds the instance for the other three. The
+sign-off compares each marked module with the module of the input design, as for a raw
+splice. The label of the call in the record is one of these:
+
+\begin{itemize}
+\item \code{add_assign MODULE.TARGET}
+\item \code{connect MODULE.INSTANCE.PORT}
+\item \code{set_param MODULE.INSTANCE.NAME}
+\item \code{replace_module MODULE.INSTANCE}
+\end{itemize}
+
+The \code{connect} and \code{set_params} of \apiname{Instance.replace_module} are part of its
+one label. \apiname{Vet.punch_port} and \apiname{Vet.propagate_param} write names only, so
+they leave no mark. A call that is skipped, or refused, or taken back leaves no mark. A
+group that ends with an exception takes back the marks of its calls. A saved session keeps
+the marks and the waivers.
+
+Without Yosys, a logic call with no waiver is refused at the call. Its message starts with
+the operation and its target, and it names \code{hdl-vet[equiv]}. A waiver on a call that
+needs none, such as wiring, is accepted and leaves no record.
+
+Take an undefined value of the input design. It can reach an output port, or an input pin
+of a child that stays a black box. For every comparison, the answer is then \code{error}, even when the engine says \code{proved}. The edited module can
+only have chosen a value for the undefined one.
 
 \subsection*{The waiver}
 

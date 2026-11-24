@@ -40,6 +40,14 @@ change. Each entry has the same points:
   suggestions, in the form ``did you mean \ldots?''
 \item An operation inserts text with the line ending of the file that the text goes
   into. hdl-vet never reformats text that it does not edit.
+\item Four operations can write logic: \apiname{Module.add_assign},
+  \apiname{Instance.connect}, \apiname{Instance.set_param} and
+  \apiname{Instance.replace_module}. A call that changes the text needs a proof or a
+  \code{waiver=} (section~\ref{sec:logicops}). \apiname{Module.add_assign} and
+  \apiname{Instance.connect} need it only when the expression is logic. Logic is an
+  operator, a conditional, a call, a cast, or a select with an index that is a signal. A name, a
+  constant, a select with a constant index, a concatenation and a replication are wiring,
+  and they need nothing. A call that is skipped needs nothing.
 \item Each applied operation registers \emph{expectations} for the sign-off. These are
   the structural changes that the operation must cause. The entries name them as
   ``Sign-off requires'' and ``Sign-off permits''. Chapter~\ref{ch:signoff} explains
@@ -151,6 +159,8 @@ Operation & Edits the text of & \code{was} & Second run \\
   with a drift error. The error quotes what it found. The operation fills an open port
   (\code{.port()}) without \code{was}.
 \item[Again] hdl-vet skips the operation when the port already has the same expression.
+\item[Waiver] An expression that is logic needs a proof or \code{waiver=}
+  (section~\ref{sec:logicops}). The operation refuses a waiver that is not one line of text.
 \item[Example] \file{first.py}, and \file{drift.py} in chapter~\ref{ch:scripts}.
 \end{entry}
 
@@ -217,8 +227,11 @@ Operation & Edits the text of & \code{was} & Second run \\
 \item[was] The override text that you expect to find now. A different text is a
   drift error.
 \item[Again] hdl-vet skips the operation when the override already has the same text.
-\item[Example] \file{params.py}. The sign-off compares the text of the override,
-  not the resolved value. A change of the parameter can change port widths below
+\item[Waiver] Every call that changes the text needs a proof or \code{waiver=}
+  (section~\ref{sec:logicops}). Another value of a parameter nearly always changes the
+  function. A value that names a parameter that the input design does not have cannot be
+  proved. Such a call needs a waiver.
+\item[Example] \file{params.py}. A change of the parameter can change port widths below
   the instance. Declare these changes with \apiname{Vet.expect} (see
   section~\ref{sec:byhand}).
 \end{entry}
@@ -258,6 +271,11 @@ Operation & Edits the text of & \code{was} & Second run \\
   \end{itemize}
   The target must be a plain identifier.
 \item[Again] hdl-vet skips the operation when the module has exactly that assignment.
+\item[Waiver] An expression that is logic needs a proof or \code{waiver=}
+  (section~\ref{sec:logicops}). A net that had no driver is never proved when
+  something outside the module can see it. That is a port, a flop that a port reads, or a
+  pin of a child. The call changes the function. A net that nothing outside sees does not
+  count. Give the call a waiver that names the check that covers it.
 \item[Example] \file{ports.py}.
 \end{entry}
 
@@ -606,6 +624,11 @@ design. \apiname{Instance.replace_module} changes the module of the instance.
 \item[Sign-off] The sign-off requires \code{module-changed} at every path of the
   instance. It permits every change at these paths and below them. At the end, a check
   confirms that the instance uses the new module.
+\item[Waiver] The operation needs a proof or \code{waiver=} (section~\ref{sec:logicops}).
+  The sign-off compares the module that holds the instance, with the new module in place
+  of the old one. The \code{connect} and \code{set_params} of the call are part of it: the
+  call has one label. A cell with other pin names or a scan pin is not equal to the module
+  that it replaces. Such a call needs a waiver.
 \item[Example] \file{swap_cell.py}, \file{swap_cell_drop.py} and
   \file{swap_wrong.py}.
 \end{entry}

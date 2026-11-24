@@ -1,14 +1,14 @@
 % Generated. Checked by tests/docs/test_manual.py against hdl_vet.ops; rewrite it with HDL_VET_MANUAL_UPDATE=1.
 \apisig{Instance.allow_changes_below}{()}
-\apisig{Instance.connect}{(port, expr, was=None)}
+\apisig{Instance.connect}{(port, expr, was=None, *, waiver=None)}
 \apisig{Instance.disconnect}{(port, was=None)}
 \apisig{Instance.info}{property}
 \apisig{Instance.name}{property}
 \apisig{Instance.paths}{property}
-\apisig{Instance.replace_module}{(module, *, ports=None, params=None, connect=None, set_params=None, drop_ports=(), drop_params=(), unconnected=(), accept_types=(), was=None)}
-\apisig{Instance.set_param}{(name, value, was=None)}
+\apisig{Instance.replace_module}{(module, *, ports=None, params=None, connect=None, set_params=None, drop_ports=(), drop_params=(), unconnected=(), accept_types=(), was=None, waiver=None)}
+\apisig{Instance.set_param}{(name, value, was=None, *, waiver=None)}
 \apisig{Instance.target}{property}
-\apisig{Module.add_assign}{(target, expr)}
+\apisig{Module.add_assign}{(target, expr, *, waiver=None)}
 \apisig{Module.add_param}{(name, default, type="int")}
 \apisig{Module.add_port}{(name, direction, type="logic", width=None)}
 \apisig{Module.add_wire}{(name, width=None, type="logic")}
