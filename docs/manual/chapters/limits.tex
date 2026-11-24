@@ -9,18 +9,78 @@ Items that say so were not checked by a test.
 
 \begin{itemize}
 \item \textbf{Logic of a raw edit.} The sign-off compares the structure (instances,
-  ports, parameters, connections) and the diagnostics of the compiler. It proves a change
-  of logic only for \apiname{Module.override_net}. A raw edit that changes only logic passes
-  without an \code{expect}. The first transcript below changes \code{count_o + 1'b1} into
-  \code{count_o + 2'd2} in \code{timer}, and the sign-off says nothing.
+  ports, parameters, connections) and the diagnostics of the compiler. It does not
+  simulate. A raw splice inside a module is compared with the module of the input design
+  (section~\ref{sec:rawsplice}). The first transcript below changes \code{count_o + 1'b1}
+  into \code{count_o + 2'd2} in \code{timer}, and the sign-off says that the module is
+  not equivalent.
 
-  Use the operations where you can. They never write such an edit. If you
-  use \apiname{Vet.splice}, you are responsible for the logic. The same holds for
-  declarations, because \apiname{Module.add_wire} has no structural expectation.
+  Use the operations where you can. Most of them never write such an edit. Three do write
+  logic without a comparison: \apiname{Module.add_assign}, \apiname{Instance.connect} with an
+  expression, and \apiname{Instance.set_param}. The sign-off sees their changes of the
+  structure only. The owner has an open issue for this (issue 75). These limits hold for a
+  raw splice:
+  \begin{itemize}
+  \item A module with a raw splice is judged as a whole. A structural operation in the same
+    module that changes the behaviour, such as another connection of a pin, makes the
+    module \emph{not equivalent} too.
+  \item The check proves that the module is equal. It cannot prove that an intended change
+    of function is right. Such a splice needs a waiver that names the check that covers it,
+    for example a testbench.
+  \item A splice outside the modules is never compared. Its waiver is a statement of
+    yours. A change in a package, in a macro or in a header can change a module that no
+    splice touched. Nothing compares such a module.
+  \item A splice that changes only blanks and comments leaves no mark. hdl-vet decides this
+    from the syntax tree and from the tokens. A file that does not parse on its own, for
+    example because of an unknown macro, is never judged as blanks and comments.
+  \item The limits of the engine hold (section~\ref{sec:equiv}). For example, a module
+    with registers on more than one clock gives \code{error}.
+  \item A module that is read from outside, by a hierarchical name, is \code{error}
+    (section~\ref{sec:equiv}). A waiver is the way on. Finding the names costs one walk
+    over the design for the check, on each side.
+  \item A \code{bind} that is written outside a module and puts an instance into it makes
+    the record \code{error}. A \code{bind} at file level makes it \code{error} too. hdl-vet
+    reads what the compiler resolved, not how the target is written.
+  \item An edit that changes a parameter value that an instance uses makes the record of
+    the module \code{error}. The check has one value for both sides. A raw splice that
+    changes a default does this, and so does \apiname{Instance.set_param} on the instance of a
+    module that is compared.
+  \item A child with a waived raw splice under a parent that is marked itself: hdl-vet compares
+    the parent with the child inside. The waived change of the child shows in the record of
+    the parent. Give the splice of the parent a waiver too.
+  \item A module that holds an \code{interface class} makes every raw splice in it outside the
+    modules. So does another construct whose opening keyword pairs with the closing keyword
+    of a declaration at file level.
+  \item A \code{fork}, a covergroup, a property and a \code{specify} block are sorted
+    correctly. The comparison then gives \code{error}, because Yosys does not read them.
+  \item A module with a type parameter at another type than its default is \code{error}.
+    On a large generated design, three of five leaf modules that were tried had one. A
+    harmless raw splice there needs a waiver.
+  \item A comment can be a directive for another tool, such as \code{// synopsys
+    translate_off} or \code{// synopsys full_case}. hdl-vet reads it as a comment. A splice
+    that adds or removes one needs nothing, and no comparison sees it.
+  \item \code{`__LINE__} changes when a line is added above it. The header line that hdl-vet
+    writes into a changed file adds one.
+  \item The comparison reads the sources as a synthesis tool does. It does not see a change
+    in what only a simulation runs: the text of a \code{$display}, a delay, an
+    \code{initial} block.
+  \item The reader of Yosys defines \code{SYNTHESIS}. The load of hdl-vet does not. A run
+    with \code{`ifdef SYNTHESIS} showed both: hdl-vet saw the \code{`else} branch, and
+    Yosys the other one. A change in the \code{`else} branch was \code{proved}. A change in
+    the \code{`ifdef} branch was \code{refuted}.
 
-  One case differs. When \apiname{Module.override_net} edited a module, the proof covers
-  every edit of the run in that module, also a raw edit. Whether a raw edit in other
-  modules must have a proof or a waiver is not decided.
+    So the comparison does not see a change in a branch that is active only without
+    \code{SYNTHESIS}. This bears on the limit ``One configuration'' below. hdl-vet loads one
+    configuration, and Yosys reads another.
+  \item A file that cannot be read by itself, for example because it uses a macro of a
+    header, is never blanks and comments only. A comment added there marks the module.
+  \item A proof costs time. A harmless splice in the top module of a large generated design
+    takes about a minute.
+  \item The session used by itself in Python, without \code{Vet}, has no marks and no
+    comparison.
+  \end{itemize}
+
+  A declaration that \apiname{Module.add_wire} writes has no structural expectation.
 \item \textbf{Partly undriven signals.} A signal can lose the driver of only some of
   its bits. This can happen through an operation that is not a checked operation (here
   \apiname{Instance.disconnect}), or through a splice. The sign-off passes such a run.
@@ -43,12 +103,14 @@ Items that say so were not checked by a test.
     of the path
   \end{itemize}
   No operation changes a port, so declare a change of width or direction with
-  \apiname{Vet.expect}. After a pair that cancels, a raw edit that declares the name again
-  inside a generate block is not seen.
+  \apiname{Vet.expect}. After a pair that cancels, the structural check does not see a raw edit
+  that declares the name again inside a generate block. The comparison of the module still
+  judges that raw edit.
 \item \textbf{More of a primitive that the sign-off does not compare.} The sign-off
   compares gate primitives, user-defined primitives and checkers by their type, their
   connections, their delay and their drive strength. It does not compare an attribute of
-  one. A raw edit that changes only an attribute passes without an \code{expect}.
+  one. A raw edit that changes only an attribute needs no \code{expect}. It is a raw
+  splice, so it still needs a proof or a waiver.
 
   The delay and the strength come from the text as the design writes it, because the
   elaborated design cannot give them. Reading the drive strength of a primitive raises in
@@ -192,8 +254,8 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   not look into. Two identical children with symmetric logic that has no names can come in
   another order. The answer is then an \code{error}, never a wrong \code{proved}.
 \item \textbf{What a waiver covers.} A waiver covers the comparison of the module. When
-  every logic operation of a module has a waiver, a raw edit of logic in the same module is
-  not judged.
+  every logic operation and every raw splice of a module has a waiver, nothing else in the
+  module is judged. A waiver covers no other check of the sign-off.
 \item \textbf{Memory.} A large module needs memory. The comparison of the top module of a
   large generated design took about 2.3 GB in the Yosys process.
 \item \textbf{Delays.} A driver with a delay, such as \code{assign #1 n = x;}, gives
@@ -307,10 +369,8 @@ or with a raw splice.
   to the script. So the folder you run the script from can still decide which file it adds.
   The rule is for \apiname{Vet.add_file} alone. Another path that a script builds starts
   from the current folder.
-\item \textbf{Saved sessions of an older version.} A session that you saved before
-  hdl-vet recorded the nested file lists protects only the top-level file list when you
-  resume it. With such a session, \opt{--save} onto a nested file list outside the input
-  tree overwrites that list.
+\item \textbf{Saved sessions of an older version.} hdl-vet refuses a session that an
+  older version saved. Run the scripts again.
 \item \textbf{Replacing a folder.} \opt{--force} with \opt{-o} replaces any folder that is
   not part of the input tree. This includes a folder with your own files in it. The rules
   are in chapter~\ref{ch:cli}.

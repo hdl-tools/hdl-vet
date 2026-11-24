@@ -664,10 +664,10 @@ def test_add_assign_only_on_undriven_targets(vet):
 # --- post-conditions fire on a wrong result -----------------------------------------------
 
 
-def corrupt(vet: Vet, path: Path, old: bytes, new: bytes) -> None:
+def corrupt(vet: Vet, path: Path, old: bytes, new: bytes, waiver: str | None = None) -> None:
     _ = vet.design  # apply what is queued so the text shows the operation's result
     start, end = span(vet.text(path), old)
-    vet.splice(path, start, end, new, old=old)
+    vet.splice(path, start, end, new, old=old, waiver=waiver)
 
 
 def test_check_fires_when_a_connect_is_undone(vet, kit):
@@ -1270,6 +1270,7 @@ def test_remove_instance_keeps_the_check_of_a_module_parameter(vet: Vet, kit) ->
     top.remove_param("DFT")
     corrupt(vet, kit.top, b"leaf u_spare (", b"leaf DFT (")
     top.remove_instance("DFT")
-    corrupt(vet, kit.top, b"module top (", b"module top #(parameter int DFT = 0) (")
+    # The header holds the keyword `module`: this splice is outside the modules and needs a waiver.
+    corrupt(vet, kit.top, b"module top (", b"module top #(parameter int DFT = 0) (", waiver="set-up of the test")
     r = vet.finish()
     assert "remove_param top DFT: the parameter is still there in the final design" in r.failed_checks

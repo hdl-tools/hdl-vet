@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import weakref
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -18,13 +19,17 @@ from hdl_vet.ops.plans import _PlanOps
 from hdl_vet.ops.raw import _RawOps
 from hdl_vet.ops.scope import _Scope, _ScopeOps
 from hdl_vet.ops.text import _did_you_mean
-from hdl_vet.prove import LogicOp, Proof, prove
+from hdl_vet.prove import LogicOp, Outside, Proof, prove
 from hdl_vet.session import Result, Session, SessionError, describe
 from hdl_vet.slang_adapter import AdapterError, Design, InstanceInfo, ModuleInfo
 
 
 class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def __init__(self, session: Session) -> None:
+        held = session._vet() if session._vet is not None else None
+        if held is not None:
+            raise VetError("session: this session has a Vet already; a session has one Vet")
+        session._vet = weakref.ref(self)
         self.session = session
         self.log: list[OpRecord] = []
         self._script_dir: Path | None = None  # folder of the running script, set by the CLI per script
@@ -50,6 +55,16 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         self._snap_cache: dict[str, Any] | None = None
         self._gen_cache: dict[str, tuple[Path, bytes, list[tuple[str, str, bool]]]] = {}
         self._gen_headers: tuple[bytes, ...] | None = None
+        session._splice_guard = self._guard_session_splice
+
+    def __copy__(self) -> Vet:
+        raise VetError("a Vet cannot be copied: its session is one state, and a copy would share it")
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> Vet:
+        raise VetError("a Vet cannot be copied: its session is one state, and a copy would share it")
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise VetError("a Vet cannot be copied or pickled: its session is one state")
 
     @property
     def design(self) -> Design:
@@ -231,11 +246,13 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
             for c in self._checks
             if c.kind == "override_net"
         ]
-        if not ops:
+        ops += [LogicOp(m.target, "", "", m.waiver, "splice") for m in self.session._marks if m.kind == "splice"]
+        outside = [Outside(m.target, m.waiver or "") for m in self.session._marks if m.kind == "outside"]
+        if not ops and not outside:
             return None
 
         def proof(session: Session, design: Design) -> Proof:
-            return prove(session, design, ops)
+            return prove(session, design, ops, outside)
 
         return proof
 
@@ -253,7 +270,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def _queue(self, path: Path, splices: list[tuple[int, int, bytes]]) -> None:
         data = self.session.text(path)
         for start, end, text in splices:
-            self.session.splice(path, start, end, text, old=data[start:end])
+            self.session._queue_edit(path, start, end, text, old=data[start:end])
 
     def _commit_all(self, op: str, plans: list[_Plan]) -> None:
         """Commit validated plans; nothing is queued unless every file to edit is editable."""

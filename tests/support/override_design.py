@@ -124,11 +124,12 @@ class Design:
         vet.session.refresh()
         return {n for n in self.files if vet.text(self.path(n)) != self.path(n).read_bytes()}
 
-    def replace(self, vet: Vet, name: str, old: bytes, new: bytes) -> None:
+    def replace(self, vet: Vet, name: str, old: bytes, new: bytes, **options: object) -> None:
+        """A raw splice of `new` over `old`; `options` go to `vet.splice` (for example `waiver=`)."""
         vet.session.refresh()
         data = vet.text(self.path(name))
         at = data.index(old)
-        vet.splice(self.path(name), at, at + len(old), new, old=old)
+        vet.splice(self.path(name), at, at + len(old), new, old=old, **options)
 
 
 def statuses(vet: Vet) -> list[tuple[str, str, str]]:

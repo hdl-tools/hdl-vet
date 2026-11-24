@@ -21,9 +21,11 @@ import base64
 import copy
 import os
 import re
+import weakref
 from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from dataclasses import replace as replaced
 from pathlib import Path
 from typing import Any
 
@@ -31,10 +33,10 @@ from hdl_vet.archive import need_bool, need_dict, need_int, need_list, need_str
 from hdl_vet.enables import Enable
 from hdl_vet.filelist import Filelist, read_filelist
 from hdl_vet.paths import same_file
-from hdl_vet.prove import Proof, Record
+from hdl_vet.prove import Outside, Proof, Record
 from hdl_vet.signoff import Change, Expect, check_changes, diff_snapshots, new_diagnostics
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceSnap, LoadCache, ModuleInfo, load
-from hdl_vet.splice import OffsetMap, Splice, SpliceQueue, apply_splices, unified_diff
+from hdl_vet.splice import OffsetMap, RawMark, RawSplice, Splice, SpliceQueue, apply_splices, unified_diff
 
 __all__ = ["ADDED_DIR", "HEADER_MARK", "Comparison", "Result", "Session", "SessionError", "describe"]
 
@@ -70,6 +72,7 @@ class Result:
     lost_drivers: list[tuple[str, str]] = field(default_factory=list)  # (module, signal) driven before, not after
     equivalence: list[Record] = field(default_factory=list)  # one record for each comparison of the proof
     enables: list[Enable] = field(default_factory=list)  # one record for each pin of an enable that was looked at
+    outside: list[Outside] = field(default_factory=list)  # the raw splices outside the modules, each with its waiver
     notes: list[str] = field(default_factory=list)  # the notes of the operations, set by `Vet.finish` and `Vet.check`
 
     def _rel(self, path: Path | None) -> str:
@@ -110,6 +113,7 @@ class Result:
     def equivalence_lines(self) -> list[str]:
         """The report lines of the equivalence records and of the pins of the enables (each line once)."""
         lines = [line for record in self.equivalence for line in record.lines()]
+        lines += [outside.line() for outside in self.outside]
         lines += [line for enable in self.enables if (line := enable.line()) is not None]
         return list(dict.fromkeys(lines))
 
@@ -162,6 +166,8 @@ class _Checkpoint:
     added_base: dict[Path, Counter[tuple[str, str]]]
     load_fl: Filelist
     design: Design
+    waiting: dict[Path, list[RawSplice]]
+    marks: list[RawMark]
 
 
 def _grown(before: Sequence[Diag], after: Sequence[Diag]) -> list[Diag]:
@@ -269,6 +275,18 @@ def _header_splice(path: Path, data: bytes, scripts: Sequence[tuple[str, str]]) 
 
 
 class Session:
+    # Set by `Vet` (names with an underscore: not a public way round it). `_splice_guard` is called by `splice`
+    # (the raw door) before the edit is queued, and raises to refuse it. `_vet` is a weak reference to the one `Vet`.
+    _splice_guard: Callable[[Path, int, int, bytes, bytes | None], Callable[[], None]] | None = None
+    _vet: Any = None
+    # The raw splices are part of the state of the session, as the text and the queue are. `_waiting` holds the raw
+    # splices that wait in the queue, for each file; `_marks` what the sign-off must judge. `checkpoint` and
+    # `rollback`, `_apply_queue`, `to_state` and `from_state` carry them with the text.
+    _waiting: dict[Path, list[RawSplice]]
+    _marks: list[RawMark]
+    _given: dict[int, weakref.ref[_Checkpoint]]
+    _reloads: int
+
     def __init__(
         self,
         filelist: Path,
@@ -293,7 +311,8 @@ class Session:
         self._baseline = self._design
         for p, data in self._baseline.included_bytes.items():
             self._orig.setdefault(p, data)
-        self.reloads = 0
+        self._reloads = 0
+        self._init_raw()
         self.scripts: list[tuple[str, str]] = []  # (name, sha256) of the scripts applied so far, in order
         self._finished = False
         self._expects: list[Expect] = []
@@ -383,7 +402,23 @@ class Session:
 
     # --- edits ---------------------------------------------------------------
 
-    def splice(self, path: Path, start: int, end: int, text: bytes, old: bytes | None = None) -> None:
+    def _init_raw(self) -> None:
+        self._waiting = {}
+        self._marks = []
+        self._given = {}
+
+    @property
+    def reloads(self) -> int:
+        """How many times the design was loaded again; it cannot be set from outside."""
+        return self._reloads
+
+    def check_splice(self, path: Path, start: int, end: int, old: bytes | None = None) -> bytes:
+        """The text of `path` that a splice at [start, end) is made on; SessionError when `splice` would refuse it."""
+        for what, value in (("start", start), ("end", end)):
+            if type(value) is not int:
+                raise SessionError(f"{path}: {what} must be an int, not {type(value).__name__}")
+        if old is not None and not isinstance(old, bytes):
+            raise SessionError(f"{path}: old must be bytes, not {type(old).__name__}")
         key = Path(path).resolve()
         if key not in self._text:
             if self.is_added(key):
@@ -394,6 +429,30 @@ class Session:
         current = self._text[key]
         if old is not None and current[start:end] != old:
             raise SessionError(f"{path}: bytes [{start}, {end}) are {current[start:end]!r}, expected {old!r}")
+        return current
+
+    def splice(self, path: Path, start: int, end: int, text: bytes, old: bytes | None = None) -> None:
+        """The raw door: a script that calls it makes a raw splice. `Vet` sets `splice_guard` to sort and mark it.
+
+        The operations queue through `_queue_edit`, which is not raw.
+        """
+        self.check_splice(path, start, end, old)  # the types of the arguments, before anything is judged
+        if not isinstance(text, bytes):
+            raise SessionError(f"{path}: text must be bytes, not {type(text).__name__}")
+        undo = None if self._splice_guard is None else self._splice_guard(Path(path), start, end, text, old)
+        try:
+            self._queue_edit(path, start, end, text, old)
+        except BaseException:
+            if undo is not None:
+                undo()
+            raise
+
+    def _queue_edit(self, path: Path, start: int, end: int, text: bytes, old: bytes | None = None) -> None:
+        """Queue a splice with no judgement of it: the way of the operations of `Vet` (not for scripts)."""
+        key = Path(path).resolve()
+        current = self.check_splice(path, start, end, old)
+        if not isinstance(text, bytes):
+            raise SessionError(f"{path}: text must be bytes, not {type(text).__name__}")
         queue = self._queue.get(key)
         if queue is None:
             queue = self._queue[key] = SpliceQueue(len(current))
@@ -416,6 +475,7 @@ class Session:
             self._text[key] = apply_splices(self._text[key], splices)
             self._maps.setdefault(key, []).append(OffsetMap(splices))
         self._queue = {}
+        self._waiting = {}  # the raw splices are in the text now
 
     def permit(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False) -> None:
         """Allow a change without requiring it."""
@@ -452,7 +512,7 @@ class Session:
         self._design = load(
             self._load_fl, top=self._top, overrides=self._overrides(), check_overrides=False, cache=self._load_cache
         )
-        self.reloads += 1
+        self._reloads += 1
 
     def _refresh(self) -> None:
         if not any(len(q) for q in self._queue.values()):
@@ -460,13 +520,13 @@ class Session:
         # If the edited text cannot be loaded, put everything back: otherwise the
         # text would be ahead of the loaded design, and a script that caught the
         # error would plan its next edit on a model that no longer matches it.
-        text, queue = dict(self._text), self._queue
+        text, queue, waiting = dict(self._text), self._queue, self._waiting
         maps = {p: list(stages) for p, stages in self._maps.items()}
         self._apply_queue()
         try:
             self._reload()
         except AdapterError:
-            self._text, self._queue, self._maps = text, queue, maps
+            self._text, self._queue, self._maps, self._waiting = text, queue, maps, waiting
             raise
 
     def _dirty(self, path: Path) -> bool:
@@ -477,7 +537,7 @@ class Session:
 
     def checkpoint(self) -> object:
         """Everything a rollback restores: text, queue, stages, expectations, added files, the loaded design."""
-        return _Checkpoint(
+        cp = _Checkpoint(
             dict(self._text),
             copy.deepcopy(self._queue),
             {p: list(stages) for p, stages in self._maps.items()},
@@ -486,12 +546,24 @@ class Session:
             dict(self._added_base),
             self._load_fl,
             self._design,
+            {p: [replaced(w) for w in ws] for p, ws in self._waiting.items()},
+            list(self._marks),
         )
+        key = id(cp)
+        self._given[key] = weakref.ref(cp, lambda _, key=key: self._given.pop(key, None))  # type: ignore[misc]
+        return cp
+
+    def _own(self, cp: object) -> _Checkpoint:
+        """`cp` when this session gave it (the same object); SessionError for any other."""
+        found = self._given.get(id(cp))
+        # A reference that is dead while `cp` is alive is the garbage collector at work on a cycle, not a copy.
+        if not isinstance(cp, _Checkpoint) or found is None or (found() is not None and found() is not cp):
+            raise SessionError("not a checkpoint of this session")
+        return cp
 
     def rollback(self, cp: object) -> None:
         """Go back to `cp`. `reloads` keeps counting. A checkpoint may be rolled back to more than once."""
-        if not isinstance(cp, _Checkpoint):
-            raise SessionError("not a checkpoint of this session")
+        cp = self._own(cp)
         self._text = dict(cp.text)
         self._queue = copy.deepcopy(cp.queue)
         self._maps = {p: list(stages) for p, stages in cp.maps.items()}
@@ -500,6 +572,8 @@ class Session:
         self._added_base = dict(cp.added_base)
         self._load_fl = cp.load_fl
         self._design = cp.design
+        self._waiting = {p: [replaced(w) for w in ws] for p, ws in cp.waiting.items()}
+        self._marks = list(cp.marks)
 
     def drop_expects(self, paths: Collection[str]) -> None:
         """Forget the required expectations at `paths` and below them (their instance is being removed)."""
@@ -539,8 +613,7 @@ class Session:
         (module, signal) pairs that something removed used to drive: the bits driven afterwards must cover
         the bits driven before.
         """
-        if not isinstance(cp, _Checkpoint):
-            raise SessionError("not a checkpoint of this session")
+        cp = self._own(cp)
         before, after = cp.design, self._design
         if before is after:
             return None
@@ -639,7 +712,7 @@ class Session:
             design = load(
                 trial, top=self._top, overrides=self._overrides(), check_overrides=False, cache=self._load_cache
             )
-            self.reloads += 1
+            self._reloads += 1
             known = set(self._text) | {p for p, _ in self._added.values()}
             extra = [h for h in design.included if h not in known]
             if extra:
@@ -743,6 +816,7 @@ class Session:
                 added=self.added,
                 equivalence=records,
                 enables=found.enables,
+                outside=found.outside,
             )
 
         files = {p: self._text[p] for p in changed}
@@ -786,12 +860,18 @@ class Session:
             lost_drivers=lost,
             equivalence=records,
             enables=found.enables,
+            outside=found.outside,
         )
 
     def _run_proof(self, proof: Callable[[Session, Design], Proof] | None, design: Design, failed: list[str]) -> Proof:
         """The records of the equivalence check. An exception of the check is a failed check, not an escape."""
         if proof is None:
-            return Proof()
+            # No comparison was given: a marked module cannot be called equal. (`Vet.finish` always gives one.)
+            marked = list(dict.fromkeys(m.target for m in self._marks if m.kind == "splice"))
+            detail = "not compared: the session was finished without the comparison of a Vet"
+            records = [Record(name, {}, [f"splice {name}"], "error", detail, None, "error") for name in marked]
+            outside = [Outside(m.target, m.waiver or "") for m in self._marks if m.kind == "outside"]
+            return Proof(records, outside=outside)
         try:
             return proof(self, design)
         except Exception as e:
@@ -888,6 +968,7 @@ class Session:
                 ]
                 for p, stages in sorted(self._maps.items(), key=lambda kv: kv[0].as_posix())
             },
+            "raw": [[m.kind, m.target, m.waiver] for m in self._marks],
             "expects": [
                 {
                     "kind": e.kind,
@@ -997,6 +1078,12 @@ class Session:
         )
         self._queue = {}
         self._maps = {}
+        self._init_raw()
+        for item in need_list(index["raw"]):
+            kind, target, waiver = need_list(item, 3)
+            if need_str(kind) not in ("splice", "outside"):
+                raise ValueError(f"unknown mark of a raw splice {kind!r}")
+            self._marks.append(RawMark(kind, need_str(target), None if waiver is None else need_str(waiver)))
         for key, stages in need_dict(index["maps"]).items():
             p = under(key)
             if p not in self._text:
@@ -1042,12 +1129,12 @@ class Session:
         self._baseline = load(fl, top=top, overrides=dict(self._orig), check_overrides=False, cache=self._load_cache)
         if not changed and not self._added:
             self._design = self._baseline
-            self.reloads = 0
+            self._reloads = 0
         else:
             self._design = load(
                 self._load_fl, top=top, overrides=self._overrides(), check_overrides=False, cache=self._load_cache
             )
-            self.reloads = 1
+            self._reloads = 1
         return self
 
 

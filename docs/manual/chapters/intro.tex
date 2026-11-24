@@ -114,11 +114,12 @@ Each word has one meaning in this manual.
 \begin{itemize}
 \item It does not check what your logic does, with one exception. The sign-off compares
   the structure of the design (instances, ports, parameters, connections) and the
-  diagnostics of the compiler. It does not simulate. A change of logic that
-  you make with \apiname{Vet.splice} passes the sign-off unless you declare it.
-  Chapter~\ref{ch:limits} gives an example.
-\item The one exception is \apiname{Module.override_net}. The sign-off proves that this
-  operation has no effect when its enable is 0 (section~\ref{sec:equiv}).
+  diagnostics of the compiler. It does not simulate.
+\item The one exception is a change of logic inside a module. The sign-off proves that
+  \apiname{Module.override_net} has no effect when its enable is 0. It proves that a raw
+  splice with \apiname{Vet.splice} inside a module leaves the module equal. A raw splice
+  that is not proved needs a waiver, a line of text that says why (section~\ref{sec:equiv}).
+  A raw splice outside the modules is never compared. It needs a waiver.
 \item It does not edit instances in generate blocks, instance arrays, or
   instances that come from a macro.
 \item It sees one configuration of the design. That configuration is the defines

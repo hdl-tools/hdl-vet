@@ -25,6 +25,7 @@ The sign-off fails in these cases:
 - A change that an operation must cause is not in the design.
 - A later edit undid the result of an operation.
 - The equivalence check does not prove that an override has no effect when it is switched off.
+- The equivalence check does not prove that a module with a raw splice is equal to the original, and the splice has no waiver.
 - The enable of an override is not off in the design, and the override has no waiver. A pin is off when it connects a constant 0 or a new input port of the parent.
 
 ## Status
@@ -39,12 +40,14 @@ This is an early version. These parts work today:
 - scopes that limit an operation to one part of the design
 - one operation that changes logic, `Module.override_net`, which puts a multiplexer on a net, for example a bypass of a reset synchroniser
 - an equivalence check in the sign-off, which proves that such a change has no effect when its enable is 0
+- the same check for a raw edit inside a module: the module must stay equal
 
-Only `Module.override_net` changes logic. The sign-off proves the edited module with Yosys. The proof needs the extra `hdl-vet[equiv]`. Without it, the operation is refused unless it has a waiver. A waiver is a text that says why the proof is not needed.
+`Module.override_net` and a raw edit with `Vet.splice` can change logic. The sign-off proves the edited module with Yosys. The proof needs the extra `hdl-vet[equiv]`. Without it, the operation or the raw splice is refused unless it has a waiver. A waiver is a text that says why the proof is not needed.
+
+A raw splice that changes only blanks and comments needs nothing. A raw splice outside every module, for example in a package or a macro, is never compared. It needs a waiver.
 
 The sign-off does not see these changes:
 
-- a change of logic that you make with a raw edit of the text, which is `Vet.splice`
 - a change of logic above the edited module, because the proof is of the edited module only
 - a change of an attribute of a gate primitive
 - a signal that loses the driver of only some of its bits

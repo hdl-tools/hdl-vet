@@ -5,6 +5,7 @@ hdl-vet sign-off: FAILED
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/new_file.py --dry-run
 hdl-vet sign-off: FAILED
   new file read by the edited design, not in the baseline: <examples>/cells/tech_rst_sync.sv
+  waived: splice rtl/soc_top.sv: "the cell is read, nothing uses it" (outside the modules: not compared)
 [exit status 1]
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/wide_port.py --dry-run
 hdl-vet sign-off: FAILED

@@ -348,7 +348,7 @@ def test_a_miswired_override_fails_the_sign_off(vet, design):
     report = result.report()
     assert "hdl-vet sign-off: FAILED" in report
     assert "  not equivalent: core: " in report
-    assert "(override_net core.rst_sync_n)" in report
+    assert "(override_net core.rst_sync_n, splice core)" in report
 
 
 @needs_yosys
@@ -379,7 +379,13 @@ def test_the_report_names_what_was_proved(vet):
 def test_a_waiver_decides_and_the_check_is_still_reported(vet, design):
     core = with_enable(vet)
     core.override_net("rst_sync_n", "rst_ni", enable="test_en_i", waiver="covered by tb_reset")
-    design.replace(vet, "core", b"test_en_i ? rst_ni : rst_sync_n_pre", b"test_en_i ? rst_sync_n_pre : rst_ni")
+    design.replace(
+        vet,
+        "core",
+        b"test_en_i ? rst_ni : rst_sync_n_pre",
+        b"test_en_i ? rst_sync_n_pre : rst_ni",
+        waiver="covered by tb_reset",
+    )
     result = vet.finish()
     assert result.ok, result.report()
     (record,) = result.equivalence

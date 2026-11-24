@@ -117,6 +117,8 @@ Because of the first rule, you can run a script a second time on a design that
 the script already changed. Nothing happens twice. The summary line,
 \code{N applied, M skipped}, counts the operations of the run. A raw text edit
 with \apiname{Vet.splice} is not an operation, and the summary line does not count it.
+The sign-off judges it, though: a raw splice needs a proof or a waiver
+(section~\ref{sec:rawsplice}).
 
 \lstinputlisting[style=script]{examples/scripts/skipped.py}
 
@@ -295,6 +297,8 @@ In the example, \code{periph_wrap} and \code{timer} are inside the scope
   catches the error, the block continues.
 \item In a scope, you can read every module. \apiname{Vet.module}, \apiname{Module.info},
   \apiname{Module.paths} and \apiname{Module.instance} work for every module.
+\item A splice that a scope allows is a raw splice like any other. It needs a proof or a
+  waiver (section~\ref{sec:rawsplice}).
 \item In a scope, hdl-vet refuses \apiname{Vet.splice} unless the whole range lies in
   the text of one module that is inside. The text is from the keyword \code{module} to
   the end of \code{endmodule}. hdl-vet also refuses a splice when the new text has one of

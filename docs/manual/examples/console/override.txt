@@ -73,7 +73,7 @@ vet: script override_refused.py: override_net soc_top: the enable 'en_i' is not 
 [exit status 2]
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/override_wrong.py --dry-run
 hdl-vet sign-off: FAILED
-  not equivalent: soc_top: not proven equal: rst_sync_n, u_periph.rst_ni (override_net soc_top.rst_sync_n)
+  not equivalent: soc_top: not proven equal: rst_sync_n, u_periph.rst_ni (override_net soc_top.rst_sync_n, splice soc_top)
 [exit status 1]
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/override_levels.py --dry-run
 --- a/rtl/rst_sync.sv

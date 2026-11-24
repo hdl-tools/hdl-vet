@@ -25,6 +25,7 @@ class _DesignHost:
         _sm: Any
         _snap: dict[str, InstanceSnap] | None
         _spans: list[tuple[Path, int, int, str]] | None
+        _trees: dict[Path, Any]
         _udps: frozenset[str] | None
         _unused: list[Diag] | None
 

@@ -64,6 +64,7 @@ import pytest
 from findings_design import TOP, Design, changes, statuses
 from hdl_vet.cli import main
 from hdl_vet.ops import Vet, VetError
+from no_comparison import no_comparison  # noqa: F401
 
 
 @pytest.fixture
@@ -198,10 +199,10 @@ def test_a_plain_instance_is_not_found_by_an_escaped_spelling_of_another(vet):
 
 
 def test_an_overlapping_splice_is_a_vet_error(vet, design):
-    vet.splice(design.top, 0, 5, b"x")
+    vet.splice(design.top, 0, 5, b"x", waiver="set-up of the test")
     with pytest.raises(VetError, match=r"splice top\.sv: .*overlaps"):
-        vet.splice(design.top, 2, 7, b"y")
-    vet.splice(design.top, 0, 5, b"x")  # the same splice again is accepted, as before
+        vet.splice(design.top, 2, 7, b"y", waiver="set-up of the test")
+    vet.splice(design.top, 0, 5, b"x", waiver="set-up of the test")  # the same splice again is accepted, as before
 
 
 def test_a_splice_outside_the_file_is_a_vet_error(vet, design):
@@ -236,9 +237,9 @@ def test_a_script_can_catch_the_error_of_a_splice(design, tmp_path, capsys, monk
         "\n"
         "def apply(vet):\n"
         f"    top = Path({str(design.top)!r})\n"
-        "    vet.splice(top, 0, 5, b'x', old=b'modul')\n"
+        "    vet.splice(top, 0, 5, b'x', old=b'modul', waiver='set-up of the test')\n"
         "    try:\n"
-        "        vet.splice(top, 2, 7, b'y')\n"
+        "        vet.splice(top, 2, 7, b'y', waiver='set-up of the test')\n"
         "    except VetError as error:\n"
         "        print('caught:', error)\n"
         "    vet.splice(top, 0, 5, b'modul', old=b'modul')\n",
@@ -259,8 +260,8 @@ def test_the_command_line_names_the_script_for_a_splice_error(design, tmp_path, 
         "\n"
         "def apply(vet):\n"
         f"    top = Path({str(design.top)!r})\n"
-        "    vet.splice(top, 0, 5, b'x')\n"
-        "    vet.splice(top, 2, 7, b'y')\n",
+        "    vet.splice(top, 0, 5, b'x', waiver='set-up of the test')\n"
+        "    vet.splice(top, 2, 7, b'y', waiver='set-up of the test')\n",
         encoding="utf-8",
     )
     status = main(["apply", "--no-project", "-f", str(design.filelist), "--top", "top", "-s", "bad.py", "--dry-run"])

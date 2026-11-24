@@ -1,10 +1,11 @@
 """The equivalence check at sign-off: what a logic operation changed, proved with `hdl_vet.equiv`.
 
 A logic operation (`Module.override_net`) leaves a record that names the module, the net, the enable and the
-waiver. `prove` makes one comparison for each module that such an operation edited and for each set of
-parameter values the module is elaborated with. The gold side is the module of the input design, the gate
-side is the edited design. The engine reads files, so both sides are written to a temporary folder that keeps
-the layout of the real tree (an `include` resolves as in the real tree), and the folder is removed after.
+waiver. A raw splice (`Vet.splice`) inside a module is one too, of the kind "splice": it has no net and no enable,
+and its label is `splice <module>`. `prove` makes one comparison for each module that such an operation edited and
+for each set of parameter values the module is elaborated with. The gold side is the module of the input design,
+the gate side is the edited design. The engine reads files, so both sides are written to a temporary folder that
+keeps the layout of the real tree (an `include` resolves as in the real tree), and the folder is removed after.
 
 The tie: every enable of an override in the module, and every enable that it carries up from a child, is tied
 to 0. The `same` list holds the children of the module whose own text, and the text of every module below them,
@@ -34,7 +35,7 @@ from hdl_vet.slang_adapter import Design
 if TYPE_CHECKING:
     from hdl_vet.session import Session
 
-__all__ = ["LogicOp", "Proof", "Record", "prove"]
+__all__ = ["LogicOp", "Outside", "Proof", "Record", "prove"]
 
 _STATUSES = ("proved", "refuted", "error")
 
@@ -47,10 +48,31 @@ class LogicOp:
     net: str
     enable: str
     waiver: str | None = None
+    kind: str = "override_net"  # "override_net" | "splice"
 
     @property
     def label(self) -> str:
+        if self.kind == "splice":
+            return f"splice {self.module}"
         return f"override_net {self.module}.{self.net}"
+
+
+@dataclass(frozen=True)
+class Outside:
+    """A raw splice that changes text outside every module: it has a waiver and no comparison is run for it."""
+
+    file: str  # the path in the design, with slashes
+    waiver: str
+
+    @property
+    def label(self) -> str:
+        return f"splice {self.file}"
+
+    def line(self) -> str:
+        return f"  waived: {self.label}: {json.dumps(self.waiver)} (outside the modules: not compared)"
+
+    def manifest(self) -> dict[str, Any]:
+        return {"operation": self.label, "waiver": self.waiver, "check": None}
 
 
 @dataclass(frozen=True)
@@ -93,8 +115,11 @@ class Record:
         ops = ", ".join(self.operations)
         out: list[str] = []
         if self.status == "proved":
-            zero = f"{self.enables[0]} is 0" if len(self.enables) == 1 else f"{' and '.join(self.enables)} are 0"
-            out.append(f"  equivalence proved: {self.label} ({ops}; equal when {zero})")
+            if not self.enables:  # a raw splice with no enable: the module is equal as it is
+                out.append(f"  equivalence proved: {self.label} ({ops})")
+            else:
+                zero = f"{self.enables[0]} is 0" if len(self.enables) == 1 else f"{' and '.join(self.enables)} are 0"
+                out.append(f"  equivalence proved: {self.label} ({ops}; equal when {zero})")
         elif self.status == "refuted":
             out.append(f"  not equivalent: {self.label}: {self.detail} ({ops})")
         elif self.status == "error":
@@ -118,22 +143,26 @@ class Proof:
 
     records: list[Record] = field(default_factory=list)
     enables: list[Enable] = field(default_factory=list)
+    outside: list[Outside] = field(default_factory=list)
 
 
-def prove(session: Session, design: Design, ops: Sequence[LogicOp]) -> Proof:
+def prove(session: Session, design: Design, ops: Sequence[LogicOp], outside: Sequence[Outside] = ()) -> Proof:
     """One record for each module of `ops` and each set of parameter values of it, and the way of the enables.
 
     The modules are compared from the leaves upward. The records are in the order of the first operation of each
-    module. An exception of the engine is an answer ("error") of the record, not an escape.
+    module. An exception of the engine is an answer ("error") of the record, not an escape. `outside` are the raw
+    splices outside the modules: no comparison is run for them.
     """
+    spared = list(dict.fromkeys(outside))
     if not ops:
-        return Proof()
+        return Proof(outside=spared)
     by_module: dict[str, list[LogicOp]] = {}
     for op in ops:
         by_module.setdefault(op.module, []).append(op)
-    ways = follow(session, design, ops)
+    ways = follow(session, design, [op for op in ops if op.kind == "override_net"])
     logic = set(by_module) | _moved_modules(session, design)
     below = {module: _below(design, module) for module in by_module}
+    reads = _read_from_outside(session, design, list(by_module))
     order = sorted(by_module, key=lambda module: len(below[module] & set(by_module)))  # stable: ties keep script order
     done: dict[str, list[Record]] = {}
     inert: dict[str, list[str]] = {}
@@ -141,16 +170,17 @@ def prove(session: Session, design: Design, ops: Sequence[LogicOp]) -> Proof:
         trees = _Trees(session, Path(folder))
         memo: dict[str, bool] = {}
         for module in order:
-            own = list(dict.fromkeys(op.enable for op in by_module[module]))
+            own = list(dict.fromkeys(op.enable for op in by_module[module] if op.kind == "override_net"))
             ties = list(dict.fromkeys([*own, *ways.carried.get(module, [])]))
             use = {name: pins for name, pins in inert.items() if name in below[module]}
+            moved = _moved_params(session, design, module)
             done[module] = [
-                _judge(session, design, module, params, by_module[module], trees, logic, memo, ties, use)
+                _judge(session, design, module, params, by_module[module], trees, logic, memo, ties, use, reads, moved)
                 for params in _param_sets(design, module)
             ]
-            if all(record.status == "proved" for record in done[module]):
-                inert[module] = ties
-    return Proof([record for module in by_module for record in done[module]], ways.records)
+            if ties and all(record.status == "proved" for record in done[module]):
+                inert[module] = ties  # a module with no enable is not inert: its parent is compared with it inside
+    return Proof([record for module in by_module for record in done[module]], ways.records, spared)
 
 
 def _children(design: Design, module: str) -> set[str]:
@@ -185,17 +215,20 @@ def _judge(
     memo: dict[str, bool],
     enables: list[str],
     inert: dict[str, list[str]],
+    reads: dict[str, str],
+    moved: dict[str, str],
 ) -> Record:
-    labels = [op.label for op in ops]
-    waivers = [(op.label, op.waiver) for op in ops if op.waiver is not None]
-    waiver = "; ".join(text for _, text in waivers) or None
-    everything_waived = len(waivers) == len(ops)
+    labels = list(dict.fromkeys(op.label for op in ops))  # a module with several raw splices has one label
+    waivers = list(dict.fromkeys((op.label, op.waiver) for op in ops if op.waiver is not None))
+    waiver = "; ".join(dict.fromkeys(text for _, text in waivers)) or None
+    everything_waived = all(op.waiver is not None for op in ops)
     if everything_waived and not equiv.available():
         return Record(module, params, labels, "waived", "", waiver, None, enables, waivers)
     try:
         wrong = _other_types(design, module)
     except Exception:
         wrong = "the type parameters of the module could not be read"
+    wrong = wrong or reads.get(module) or moved.get(_key(params)) or moved.get("*")
     if wrong is not None:  # the proof is at the values of the value parameters only: never proved, never inert
         status = "waived" if everything_waived else "error"
         return Record(module, params, labels, status, wrong, waiver, "error", enables, waivers)
@@ -224,6 +257,56 @@ def _judge(
     )
 
 
+def _read_from_outside(session: Session, design: Design, modules: Sequence[str]) -> dict[str, str]:
+    """For each module that is compared: the first hierarchical name written outside it that leads into one of its
+    instances, as text, in the edited design or in the input design.
+
+    The comparison is of one module with its own inputs and outputs. A name from outside reads what is inside
+    (a net, a variable, a function), which the comparison does not see: such a module is never proved.
+    A name written inside the module is not this case, nor is a name from inside it into its own children.
+    """
+    found: dict[str, str] = {}
+    try:
+        for known in dict.fromkeys([design, session.baseline]):
+            owner: dict[str, list[str]] = {}
+            for path, snap in known.snapshot().items():
+                if snap.module in modules:
+                    owner.setdefault(path, []).append(snap.module)
+            if not owner:
+                continue
+            _bound_from_outside(known, owner, modules, found)
+            for ref in known.hierarchical_refs():
+                parts = ref.target.split(".")
+                for end in range(1, len(parts) + 1):
+                    path = ".".join(parts[:end])
+                    if path in owner and not (ref.host == path or ref.host.startswith(path + ".")):
+                        for module in owner[path]:
+                            found.setdefault(module, f"{ref.host} reads {ref.target}, inside an instance of {module}")
+    except Exception:
+        return dict.fromkeys(modules, "the hierarchical names of the design could not be listed")
+    return found
+
+
+def _bound_from_outside(
+    known: Design, owner: dict[str, list[str]], modules: Sequence[str], found: dict[str, str]
+) -> None:
+    """Add to `found` each module that holds an instance which a `bind` written outside its text put there.
+
+    The comparison reads one module alone (`read_slang --top M`), and a bind of another module is not in it.
+    `Design.binds` gives what the compiler resolved: the instances that a bind built, with the path of the
+    instance that holds each. A bind at file level counts too. Where the compiler cannot say, the caller makes
+    every compared module "error".
+    """
+    for bind in known.binds():
+        where = f"module {bind.host}" if bind.host else "a file"
+        note = f"a bind written in {where} puts an instance into {bind.target}: {bind.text[:60]}"
+        parts = bind.target.split(".")
+        for end in range(1, len(parts) + 1):
+            for module in owner.get(".".join(parts[:end]), []):
+                if bind.host != module:
+                    found.setdefault(module, note)
+
+
 def _other_types(design: Design, module: str) -> str | None:
     """The complaint when an instance sets a type parameter of `module` to another type than its default.
 
@@ -239,6 +322,39 @@ def _other_types(design: Design, module: str) -> str | None:
                 f"the type parameter {name} is set to the type {text}, not to its default: the check does not cover it"
             )
     return None
+
+
+def _key(params: dict[str, str]) -> str:
+    return ",".join(f"{name}={value}" for name, value in sorted(params.items()))
+
+
+def _moved_params(session: Session, design: Design, module: str) -> dict[str, str]:
+    """For each set of parameter values of `module` in the edited design: the first parameter whose value at an
+    instance differs from the one that the input design gives the same instance, as text; "*" when it cannot be told.
+
+    The engine compares the two sides at one value of each parameter. A value that the edit changed (a default that
+    a raw splice changed, or an override that `set_param` changed) is a change of the design that the comparison of the
+    module does not cover, so the record of that set is "error", never "proved".
+    """
+    found: dict[str, str] = {}
+    try:
+        names = [name for name, kind in design.module(module).param_kinds.items() if kind == "value"]
+        before = session.baseline_snapshot()
+        for path, snap in sorted(design.snapshot().items()):
+            old = before.get(path)
+            if snap.module != module or old is None or old.module != module:
+                continue
+            values = {name: snap.params[name] for name in names if name in snap.params}
+            for name in names:
+                if name in old.params and name in snap.params and old.params[name] != snap.params[name]:
+                    found.setdefault(
+                        _key(values),
+                        f"the parameter {name} of {module} is {old.params[name]} in the input design and "
+                        f"{snap.params[name]} in the edited design at {path}: one value is used for both sides",
+                    )
+    except Exception:
+        return {"*": "the parameter values of the two designs could not be compared"}
+    return found
 
 
 def _param_sets(design: Design, module: str) -> list[dict[str, str]]:

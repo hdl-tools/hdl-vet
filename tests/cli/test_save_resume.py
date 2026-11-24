@@ -77,7 +77,7 @@ Python API
     (`remove_instance` after `connect`) behaves as in an unsaved run.
 
 Archive layout (a reader may open it with any zip tool)
-    session.json                 the index: {"format": 2, "tool": "hdl-vet",
+    session.json                 the index: {"format": 3, "tool": "hdl-vet",
                                  "version": ..., "top": ..., "scripts": [...],
                                  ...}; everything that is not file content
     original/<path>              every source and included file as loaded,
@@ -90,12 +90,13 @@ Archive layout (a reader may open it with any zip tool)
 Format 2 (#57)
     The index stores the key of every post-condition. A later operation
     replaces an earlier post-condition only when the two keys are equal.
-    F1  An archive written now has `"format": 2`.
+    F1  An archive written now has `"format": 3` (2 came with the one key for a
+        pair; 3 with the marks of the raw splices, tests/ops/test_raw_splice_review.py).
     F2  An archive of format 1 is refused, as any other format is. Format 1
         stored a key for each operation, such as `add_wire` and `remove_wire`.
         A resumed `remove_wire` could then never replace the saved check of
         an `add_wire`, and the sign-off would fail a correct run.
-    F3  In format 2 the two operations of a pair store one key: `wire`,
+    F3  From format 2 on the two operations of a pair store one key: `wire`,
         `assign`, `port` or `param`, then the module, then the name. The
         `kind` stays the name of the operation, so the right evaluator runs.
     F4  A pair that a save splits behaves as in an unsaved run, in every
@@ -385,14 +386,14 @@ def test_another_format_version_is_refused(work, capsys):
             data = src.read(item.filename)
             if item.filename == "session.json":
                 index = json.loads(data)
-                assert index["format"] == 2 and index["tool"] == "hdl-vet"
+                assert index["format"] == 3 and index["tool"] == "hdl-vet"
                 index["format"] = 99
                 data = json.dumps(index).encode()
             dst.writestr(item, data)
     capsys.readouterr()
     assert run("apply", "--resume", other, "-o", w.tmp / "out") == 2
     err = capsys.readouterr().err
-    assert "format" in err and "99" in err and "2" in err and "Traceback" not in err
+    assert "format" in err and "99" in err and "reads format 3" in err and "Traceback" not in err
     with pytest.raises(SessionError, match="99"):
         Vet.restore(other)
 
@@ -522,7 +523,7 @@ def test_the_archive_can_be_read_with_a_zip_tool(kit, cells, tmp_path: Path):
         assert z.read("current/rtl/mid.sv") == vet.text(kit.mid)
         assert z.read("added/cell_leaf.sv") == CELLS["cell_leaf.sv"].encode()
         index = json.loads(z.read("session.json"))
-        assert index["format"] == 2 and index["tool"] == "hdl-vet" and index["top"] == "top"
+        assert index["format"] == 3 and index["tool"] == "hdl-vet" and index["top"] == "top"
         assert index["scripts"] == []
 
 
@@ -748,7 +749,7 @@ def test_a_new_archive_has_format_two(kit, tmp_path: Path) -> None:
     """F1."""
     Vet(Session(kit.filelist, top="top")).save(tmp_path / "s.zip")
     with zipfile.ZipFile(tmp_path / "s.zip") as z:
-        assert json.loads(z.read("session.json"))["format"] == 2
+        assert json.loads(z.read("session.json"))["format"] == 3
 
 
 def test_an_archive_of_format_one_is_refused(kit, tmp_path: Path, capsys) -> None:
@@ -757,7 +758,7 @@ def test_an_archive_of_format_one_is_refused(kit, tmp_path: Path, capsys) -> Non
     vet.module("top").add_wire("t", width=4)
     vet.save(tmp_path / "s.zip")
     old = with_format(tmp_path / "s.zip", tmp_path / "old.zip", 1)
-    message = "session archive format 1, but this hdl-vet reads format 2 (an integer)"
+    message = "session archive format 1, but this hdl-vet reads format 3 (an integer)"
     with pytest.raises(SessionError) as refused:
         Vet.restore(old)
     assert message in str(refused.value) and str(old) in str(refused.value)

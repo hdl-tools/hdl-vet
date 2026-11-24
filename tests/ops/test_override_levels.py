@@ -287,7 +287,9 @@ def test_another_connection_at_the_top_is_not_off(design, monkeypatch, connectio
     no_yosys(monkeypatch)
     vet = design.vet()
     vet.punch_port("test_en_i", "input", to="top.u_mid.u_leaf")
-    design.replace(vet, "top", b".test_en_i(test_en_i)", f".test_en_i({connection})".encode())
+    design.replace(
+        vet, "top", b".test_en_i(test_en_i)", f".test_en_i({connection})".encode(), waiver="set-up of the test"
+    )
     vet.module("leaf").override_net("q", "1'b0", enable="test_en_i", waiver="w")
     result = vet.finish()
     assert ("top", "u_mid", "test_en_i", connection, "waived") in enables(result)
@@ -298,10 +300,10 @@ def test_another_connection_at_the_top_is_not_off(design, monkeypatch, connectio
 def test_not_off_without_a_waiver_fails_the_sign_off(design):
     vet = design.vet()
     vet.punch_port("test_en_i", "input", to="top.u_mid.u_leaf")
-    design.replace(vet, "top", b".test_en_i(test_en_i)", b".test_en_i(mode_i)")
+    design.replace(vet, "top", b".test_en_i(test_en_i)", b".test_en_i(mode_i)", waiver="set-up of the test")
     vet.module("leaf").override_net("q", "1'b0", enable="test_en_i")
     result = vet.finish()
-    assert records(result) == {"leaf": "proved"}
+    assert records(result) == {"leaf": "proved", "top": "waived"}
     assert enables(result) == [
         ("mid", "u_leaf", "test_en_i", "test_en_i", "carried"),
         ("top", "u_mid", "test_en_i", "mode_i", "not off"),

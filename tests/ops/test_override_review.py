@@ -296,17 +296,23 @@ def test_a_waiver_given_on_a_later_call_counts(design):
     vet = design.vet()
     core = with_enable(vet)
     core.override_net("rst_sync_n", "rst_ni", enable="test_en_i")
-    design.replace(vet, "core", b"test_en_i ? rst_ni : rst_sync_n_pre", b"test_en_i ? rst_sync_n_pre : rst_ni")
+    design.replace(
+        vet, "core", b"test_en_i ? rst_ni : rst_sync_n_pre", b"test_en_i ? rst_sync_n_pre : rst_ni", waiver="set-up"
+    )
     assert not vet.check().ok
-    design.replace(vet, "core", b"test_en_i ? rst_sync_n_pre : rst_ni", b"test_en_i ? rst_ni : rst_sync_n_pre")
+    design.replace(
+        vet, "core", b"test_en_i ? rst_sync_n_pre : rst_ni", b"test_en_i ? rst_ni : rst_sync_n_pre", waiver="set-up"
+    )
     core.override_net("rst_sync_n", "rst_ni", enable="test_en_i", waiver="added on the second run")
     assert statuses(vet)[-1] == ("override_net", "core.rst_sync_n", "skipped")
     result = vet.check()
     assert result.ok
-    assert (result.equivalence[0].status, result.equivalence[0].waiver) == ("waived", "added on the second run")
+    assert result.equivalence[0].status == "waived"
+    assert ("override_net core.rst_sync_n", "added on the second run") in result.equivalence[0].waivers
     core.override_net("rst_sync_n", "rst_ni", enable="test_en_i")
     result = vet.finish()
-    assert (result.equivalence[0].status, result.equivalence[0].waiver) == ("proved", None)
+    assert result.equivalence[0].status == "proved"
+    assert [op for op, _ in result.equivalence[0].waivers] == ["splice core"]
 
 
 # --- P8 -------------------------------------------------------------------------------------------
@@ -407,12 +413,16 @@ def test_a_second_override_after_an_edit_of_the_first_is_drift(design, monkeypat
     core = with_enable(vet)
     vet.punch_port("other_en_i", "input", to="top.u_core")
     core.override_net("rst_o", "1'b0", enable="test_en_i", waiver="first")
-    design.replace(vet, "core", b"test_en_i ? 1'b0 : rst_o_pre", b"(test_en_i) ? 1'b0 : rst_o_pre")
+    design.replace(
+        vet, "core", b"test_en_i ? 1'b0 : rst_o_pre", b"(test_en_i) ? 1'b0 : rst_o_pre", waiver="set-up of the test"
+    )
     with pytest.raises(DriftError, match="override_net core"):
         core.override_net("rst_o", "1'b1", enable="other_en_i", keep="rst_o_k2", waiver="second")
     assert "rst_o_k2" not in design.text(vet, "core")
     result = vet.finish()
-    assert [(r.operations, r.waiver) for r in result.equivalence] == [(["override_net core.rst_o"], "first")]
+    (record,) = result.equivalence
+    assert record.operations == ["override_net core.rst_o", "splice core"]
+    assert record.waivers == [("override_net core.rst_o", "first"), ("splice core", "set-up of the test")]
 
 
 PKG = "package p;\n  localparam int INC = 1;\nendpackage\n"
@@ -446,7 +456,7 @@ def test_a_change_in_a_package_is_compared_not_trusted(tmp_path: Path):
     top = vet.module("top")
     top.add_port("test_en_i", "input")
     top.override_net("r", "8'h00", enable="test_en_i")
-    design.replace(vet, "p", b"INC = 1", b"INC = 2")
+    design.replace(vet, "p", b"INC = 1", b"INC = 2", waiver="set-up of the test")
     result = vet.finish()
     (record,) = result.equivalence
     assert (record.module, record.status) == ("top", "refuted"), record.detail

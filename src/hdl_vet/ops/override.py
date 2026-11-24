@@ -69,7 +69,7 @@ def override_net(module: Module, net: str, value: object, enable: str, keep: str
         raise VetError(f"{_OP} {mod}: the net and the enable must be names (text)")
     if waiver is not None and (not isinstance(waiver, str) or not waiver.strip()):
         raise VetError(f"{_OP} {mod}: the waiver must be a text that says why the check is not needed")
-    if waiver is not None and ("\n" in waiver or "\r" in waiver):
+    if waiver is not None and waiver.splitlines() != [waiver]:
         raise VetError(f"{_OP} {mod}: the waiver must be one line")
     if "\n" in str(value) or "\r" in str(value):
         raise VetError(f"{_OP} {mod}: the value must be on one line")

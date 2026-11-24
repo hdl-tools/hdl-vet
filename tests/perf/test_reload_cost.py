@@ -227,7 +227,9 @@ def test_scan_cache_sees_a_generate_copy_added_later(tmp_path: Path):
     _ = vet.design
     text = vet.text(t)
     at = text.index(b"endmodule")
-    vet.splice(t, at, at, b"  if (1) begin : g\n    leaf u_gen (.a(a), .p0(1'b0));\n  end\n")
+    vet.splice(
+        t, at, at, b"  if (1) begin : g\n    leaf u_gen (.a(a), .p0(1'b0));\n  end\n", waiver="set-up of the test"
+    )
     with pytest.raises(VetError, match=r"u_gen.*generate"):
         vet.punch_port("p1", "input", to="t.u_mid.u_leaf")
 
@@ -250,7 +252,7 @@ def test_scan_cache_follows_a_copy_that_is_removed(tmp_path: Path):
     text = vet.text(t)
     start = text.index(b"  if (0) begin : g")
     end = text.index(b"endmodule")
-    vet.splice(t, start, end, b"")  # the branch was not elaborated: no structural change
+    vet.splice(t, start, end, b"", waiver="set-up of the test")  # the branch was not elaborated: no structural change
     vet.punch_port("p0", "input", to="t.u_mid.u_leaf")
     r = vet.finish()
     assert r.ok, r.report()
@@ -292,7 +294,7 @@ def test_scan_cache_sees_a_copy_that_an_edited_header_adds(tmp_path: Path, heade
     vet = Vet(Session(fl, top="t"))
     vet.punch_port("p0", "input", to="t.u_mid.u_leaf")  # caches side: no copies
     hdr = (tmp_path / "inc" / "gen.svh").resolve()
-    vet.splice(hdr, 0, len(old), new)
+    vet.splice(hdr, 0, len(old), new, waiver="set-up of the test")
     with pytest.raises(VetError, match=r"u_gen.*generate"):
         vet.punch_port("p1", "input", to="t.u_mid.u_leaf")
 

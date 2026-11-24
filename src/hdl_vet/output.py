@@ -113,7 +113,8 @@ def write_tree(
                 {"operation": op, "waiver": text, "check": record.check}
                 for record in result.equivalence
                 for op, text in record.waivers
-            ],
+            ]
+            + [{"operation": outside.label, "waiver": outside.waiver, "check": None} for outside in result.outside],
             "files": listed,
         }
         (tmp / "hdl-vet.json").write_bytes((json.dumps(manifest, indent=2, sort_keys=True) + "\n").encode())

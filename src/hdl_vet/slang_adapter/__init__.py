@@ -23,6 +23,7 @@ from hdl_vet.slang_adapter.loading import _Loader as _Loader
 from hdl_vet.slang_adapter.records import (
     AdapterError,
     AssignInfo,
+    BindRef,
     ConnInfo,
     DeclInfo,
     Diag,
@@ -37,11 +38,22 @@ from hdl_vet.slang_adapter.records import (
     PinConn,
     PortInfo,
 )
-from hdl_vet.slang_adapter.text import is_simple_identifier, syntax_equivalent, tokens
+from hdl_vet.slang_adapter.text import (
+    confined,
+    equivalent_bytes,
+    is_simple_identifier,
+    meets_directive,
+    splice_stays,
+    syntax_equivalent,
+    tokens,
+    touches_define,
+    unconfined_reason,
+)
 
 __all__ = [
     "AdapterError",
     "AssignInfo",
+    "BindRef",
     "ConnInfo",
     "DeclInfo",
     "Design",
@@ -58,13 +70,19 @@ __all__ = [
     "PinConn",
     "PortInfo",
     "check_expression",
+    "confined",
     "driven_bases",
+    "equivalent_bytes",
     "instance_parameters",
     "is_simple_identifier",
     "load",
+    "meets_directive",
     "parameter_names",
+    "splice_stays",
     "syntax_equivalent",
     "tokens",
+    "touches_define",
+    "unconfined_reason",
     "value_head_identifiers",
     "value_identifiers",
 ]
