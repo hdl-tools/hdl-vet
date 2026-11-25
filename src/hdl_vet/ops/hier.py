@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from hdl_vet.ops import args
 from hdl_vet.ops.common import VetError, _Check, _Plan
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.ops.instance import Instance
@@ -110,6 +111,10 @@ class _HierOps(_VetHost):
         all_instances: bool = False,
     ) -> None:
         op = "punch_port"
+        args.name(op, "signal", signal, none=True)
+        args.width(op, width)
+        args.text(op, "type", type, none=True)
+        args.flag(op, "all_instances", all_instances)
         to, walked = self._scoped_walk(op, to)
         if direction not in ("input", "output"):
             raise VetError(f"{op}: direction must be 'input' or 'output', not {direction!r}")
@@ -223,6 +228,7 @@ class _HierOps(_VetHost):
 
     def propagate_param(self, name: str, to: str, *, default: object | None = None) -> None:
         op = "propagate_param"
+        args.value(op, "default", default, none=True)
         to, walked = self._scoped_walk(op, to)
         mods, paths, inames = walked or self._walk_path(op, to)
         n = len(mods) - 1

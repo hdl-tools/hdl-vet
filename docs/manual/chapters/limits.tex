@@ -384,11 +384,28 @@ or with a raw splice.
   \apiname{Vet.punch_port} and \apiname{Vet.propagate_param} refuse such a path with an
   error, and they edit nothing. \apiname{Vet.expect} and \apiname{Vet.permit} take the path as the design prints it, for
   example \code{top.\m/esc .\l/esc }. Each escaped name ends with a blank.
-\item \textbf{Wrong types.} The operations check the names that you give, and the
-  arguments of \apiname{Vet.splice} and \apiname{Vet.text}. They do not check the type of
-  every other argument. A name that is not text, such as \code{None}, is refused with a
-  \code{VetError}, because it is not a plain identifier. Another argument of a wrong type,
-  such as a mapping given as a list, raises a Python error and not a \code{VetError}.
+\item \textbf{What a call does not parse.} Every operation refuses an argument of a wrong
+  type with a \code{VetError} where you call it (chapter~\ref{ch:operations}). Six things
+  stay open:
+  \begin{itemize}
+  \item A width that is a text is not computed. A text that the compiler reads as 0 or less,
+    such as \code{1-1} or \code{\$clog2(N)} with \code{N} of 1, is accepted. The
+    declaration then has a range such as \code{[-1:0]}, and the sign-off does not report it.
+    Only a text that Python reads as a whole number is judged at the call.
+  \item An argument whose \code{repr}, \code{str} or iteration raises gives that Python
+    error and no \code{VetError}.
+  \item A type or a width that is a text is not parsed. A text such as \code{logic x1; logic}
+    is caught only at the sign-off.
+  \item A value that is a text is not parsed, because the value of a type parameter is a type
+    and no expression. A value such as \code{8;} for \apiname{Instance.set_param} fails at
+    the sign-off.
+  \item The kind of \apiname{Vet.expect} and \apiname{Vet.permit} is not compared with the
+    kinds that exist. A kind that is spelled wrong is a text, so it is accepted. For
+    \apiname{Vet.expect} the sign-off reports that it did not see the change. For
+    \apiname{Vet.permit} nothing reports it.
+  \item \apiname{Vet.restore} raises \code{SessionError}, not \code{VetError}, for a file
+    that is not there or cannot be read.
+  \end{itemize}
 \item \textbf{Time.} An operation that reads a list that an earlier operation edited
   loads the whole design again. On a large design, a script with many such operations takes
   a long time. The load count rose after a \code{connect} that follows an

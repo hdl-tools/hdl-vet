@@ -6,6 +6,7 @@ from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any
 
 from hdl_vet.listedit import edit_list, line_rule, remove_all
+from hdl_vet.ops import args
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
 from hdl_vet.ops.instance import Instance
 from hdl_vet.ops.override import override_net as _override_net
@@ -62,11 +63,16 @@ class Module:
     # --- selectors
 
     def instance(self, name: str) -> Instance:
+        args.name(f"instance {self._name}", "name", name)
         name = _instance_name(name)
         self.vet._instance_info(self._name, name)
         return Instance(self.vet, self._name, name, self._instances)
 
     def instances(self, module: str | None = None, name: str | None = None, *, count: int) -> list[Instance]:
+        label = f"instances {self._name}"
+        args.name(label, "module", module, none=True)
+        args.name(label, "name", name, none=True)
+        args.count(label, "count", count)
         found = [
             i
             for i in self.vet._info(self._name).instances
@@ -97,6 +103,8 @@ class Module:
     def add_port(self, name: str, direction: str, type: str = "logic", width: int | str | None = None) -> None:
         v, mod = self.vet, self._name
         v._refuse_scope("add_port", mod)
+        args.text(f"add_port {mod}", "type", type)
+        args.width(f"add_port {mod}", width)
         if direction not in _DIRECTIONS:
             raise VetError(f"add_port {mod}: direction must be 'input', 'output' or 'inout', not {direction!r}")
         if not is_simple_identifier(name):
@@ -109,6 +117,8 @@ class Module:
     def add_param(self, name: str, default: object, type: str = "int") -> None:
         v, mod = self.vet, self._name
         v._refuse_scope("add_param", mod)
+        args.text(f"add_param {mod}", "type", type)
+        args.value(f"add_param {mod}", "default", default)
         if not is_simple_identifier(name):
             raise VetError(f"add_param {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
         paths = self._confirm_instances("add_param")
@@ -118,6 +128,8 @@ class Module:
     def add_wire(self, name: str, width: int | str | None = None, type: str = "logic") -> None:
         v, mod = self.vet, self._name
         v._refuse_scope("add_wire", mod)
+        args.text(f"add_wire {mod}", "type", type)
+        args.width(f"add_wire {mod}", width)
         self._confirm_instances("add_wire")
         if not is_simple_identifier(name):
             raise VetError(f"add_wire {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
@@ -165,6 +177,8 @@ class Module:
         v, mod = self.vet, self._name
         v._refuse_scope("add_assign", mod)
         _check_waiver(f"add_assign {mod}", waiver)
+        args.name(f"add_assign {mod}", "target", target)
+        args.expression(f"add_assign {mod}", "expr", expr)
         self._confirm_instances("add_assign")
         if not _IDENT.fullmatch(target):
             raise VetError(f"add_assign {mod}: the target must be a plain identifier, not {target!r}")
