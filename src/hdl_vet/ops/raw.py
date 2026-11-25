@@ -252,11 +252,11 @@ class _RawOps(_VetHost):
 
     def expect(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False) -> None:
         self._check_pattern("expect", kind, path, name, exact)
-        self.session.expect(kind, path, name, exact=exact)
+        self.session.expect(kind, path, name, exact=exact, script=True)
 
     def permit(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False) -> None:
         self._check_pattern("permit", kind, path, name, exact)
-        self.session.permit(kind, path, name, exact=exact)
+        self.session.permit(kind, path, name, exact=exact, script=True)
 
     def text(self, path: Path) -> bytes:
         if not isinstance(path, (str, Path)):

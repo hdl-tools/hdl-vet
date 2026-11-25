@@ -465,7 +465,7 @@ def test_a_resumed_session_keeps_the_marks(design, tmp_path, monkeypatch):
 
 
 def test_the_format_of_the_archive_is_4():
-    assert archive.FORMAT == 4
+    assert archive.FORMAT == 5
 
 
 # --- L9: the other checks -------------------------------------------------------------------------

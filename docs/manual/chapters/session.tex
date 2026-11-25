@@ -43,6 +43,9 @@ archive that an older version wrote (format 3 or less) can hold a logic call wit
 A run could not judge it. hdl-vet refuses such an archive, with the message for another
 format version. Run the scripts again.
 
+The archive also keeps which expectations your script registered with \apiname{Vet.expect}.
+A format 4 archive does not say it, so hdl-vet refuses it too.
+
 \begin{itemize}
 \item Without \opt{-o}, hdl-vet saves, prints \code{saved FILE} and the summary, and then
   prints one line, \code{sign-off so far: ok} or \code{sign-off so far: FAILED}. After

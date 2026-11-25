@@ -98,10 +98,14 @@ Items that say so were not checked by a test.
     \apiname{Instance.set_param} registers the same expectation
   \item a port of the input design that is removed and added again with another width,
     type or direction
-  \item \apiname{Instance.replace_module} and the replacement back
   \item \apiname{Vet.punch_port} undone with \apiname{Module.remove_port} in each module
     of the path
   \end{itemize}
+  \apiname{Instance.replace_module} and the replacement back cancel. Put back the module
+  that the instance has in the input design, and the sign-off expects no change of module
+  there. The replacement back can still leave another
+  parameter value or another connection, and that change is in the result.
+
   No operation changes a port, so declare a change of width or direction with
   \apiname{Vet.expect}. After a pair that cancels, the structural check does not see a raw edit
   that declares the name again inside a generate block. The comparison of the module still

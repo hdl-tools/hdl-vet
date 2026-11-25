@@ -116,6 +116,7 @@ class Expect:
     required: bool = True
     exact: bool = False  # `path` is a hierarchical path, not a glob pattern
     below: bool = False  # matches every path strictly below `path`
+    script: bool = False  # the script registered it with `Vet.expect`; no operation forgets it. Not used to match.
 
 
 def _port(p: tuple[str, int] | None) -> str | None:
