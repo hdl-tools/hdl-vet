@@ -463,8 +463,17 @@ class Session:
         key = self._key(path)
         return key in self._text and (self._editable is None or key in self._editable)
 
-    def expect(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False) -> None:
-        self._expects.append(Expect(kind, path, name, exact=exact, below=below))
+    def expect(
+        self,
+        kind: str,
+        path: str = "*",
+        name: str = "*",
+        *,
+        exact: bool = False,
+        below: bool = False,
+        script: bool = False,
+    ) -> None:
+        self._expects.append(Expect(kind, path, name, exact=exact, below=below, script=script))
 
     def _apply_queue(self) -> None:
         """Apply the queued splices to the text and record the stage."""
@@ -477,9 +486,18 @@ class Session:
         self._queue = {}
         self._waiting = {}  # the raw splices are in the text now
 
-    def permit(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False, below: bool = False) -> None:
+    def permit(
+        self,
+        kind: str,
+        path: str = "*",
+        name: str = "*",
+        *,
+        exact: bool = False,
+        below: bool = False,
+        script: bool = False,
+    ) -> None:
         """Allow a change without requiring it."""
-        self._expects.append(Expect(kind, path, name, required=False, exact=exact, below=below))
+        self._expects.append(Expect(kind, path, name, required=False, exact=exact, below=below, script=script))
 
     @property
     def loaded(self) -> Design:
@@ -576,12 +594,15 @@ class Session:
         self._marks = list(cp.marks)
 
     def drop_expects(self, paths: Collection[str]) -> None:
-        """Forget the required expectations at `paths` and below them (their instance is being removed)."""
+        """Forget the required expectations of operations at `paths` and below them (their instance is being removed).
+
+        An expectation of the script (`script` set) stays: only the script can withdraw it.
+        """
         mine = tuple(paths)
         self._expects = [
             e
             for e in self._expects
-            if not (e.required and (e.path in mine or any(e.path.startswith(p + ".") for p in mine)))
+            if e.script or not (e.required and (e.path in mine or any(e.path.startswith(p + ".") for p in mine)))
         ]
 
     def expected_at(self, kind: str, name: str) -> list[str]:
@@ -601,7 +622,9 @@ class Session:
         expectation is moot, so the rest must still be met.
         """
         mine = set(paths)
-        self._expects = [e for e in self._expects if not (e.kind == kind and e.path in mine and e.name == name)]
+        self._expects = [
+            e for e in self._expects if e.script or not (e.kind == kind and e.path in mine and e.name == name)
+        ]
 
     def compare_since(self, cp: object, drove: Sequence[tuple[str, str]] = ()) -> Comparison | None:
         """What the loaded design has that the design at `cp` did not; None if it is that design.
@@ -983,6 +1006,7 @@ class Session:
                     "required": e.required,
                     "exact": e.exact,
                     "below": e.below,
+                    "script": e.script,
                 }
                 for e in self._expects
             ],
@@ -1126,6 +1150,7 @@ class Session:
                     need_bool(e["required"]),
                     need_bool(e["exact"]),
                     need_bool(e["below"]),
+                    need_bool(e["script"]),
                 )
             )
         self.scripts = [(need_str(n), need_str(h)) for n, h in (need_list(x, 2) for x in need_list(index["scripts"]))]

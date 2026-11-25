@@ -654,6 +654,11 @@ class Instance:
         v._logic_gate(f"{op} {target}", waiver)
 
         before = v.session.loaded
+        # The first module of each instance is the one of the design the session started from:
+        # putting it back is no change, so the expectation is not made and the earlier ones go.
+        base = v.session.baseline_snapshot()
+        back = [p for p in paths if p in base and base[p].module == module]
+        fresh_paths = [p for p in paths if p not in back]
         v._commit_all(
             op,
             [
@@ -663,7 +668,8 @@ class Instance:
                     path=inst.path,
                     splices=splices,
                     mark=("conns", mod_name, inst_name),
-                    expects=[("module-changed", p, "*") for p in paths],
+                    expects=[("module-changed", p, "*") for p in fresh_paths],
+                    cancels=[("module-changed", p, "*") for p in back],
                     permits=[("*", p, "*") for p in paths],
                     check=_Check((op, mod_name, inst_name), op, (mod_name, inst_name, module)),
                 )
