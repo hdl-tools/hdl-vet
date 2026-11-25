@@ -166,6 +166,11 @@ class _PlanOps(_VetHost):
             return
         assert plan.path is not None  # noqa: S101 - every plan that is not skipped names its file
         self._queue(plan.path, plan.splices)
+        if plan.forgets:
+            self.session.drop_expects(plan.forgets)
+        if plan.drops is not None:
+            self._drop_registered(*plan.drops)
+        self._drove.extend(plan.drove)
         if plan.mark is not None:
             self._mark(*plan.mark)
         if plan.added is not None:
