@@ -538,6 +538,9 @@ class Module:
                     expects=[] if undone else [("param-changed", p, name) for p in paths],
                     cancels=[("param-changed", p, name) for p in paths] if undone else [],
                     check=_Check(("param", mod, name), op, (mod, name)),
+                    # the override goes at every instance, so the four-part check of a `set_param` to it
+                    # can say nothing; also where the text has no override (a key not there is no error)
+                    retires=[("param", host, inst.name, name) for host, inst in hosts],
                 )
             ]
             for host, inst in hosts:
