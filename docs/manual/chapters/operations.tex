@@ -714,8 +714,7 @@ override), the rule is:
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
   \item a name that begins with a backslash, or is not a \code{str}
-  \item a name the module does not declare, and that is not a plain identifier or is a
-    keyword
+  \item a name the module does not declare, and that is empty or holds a blank
   \item a name that is a port or something other than a net or variable
   \item a declaration that declares several names, comes from a macro or an include, or
     is in a generate block
@@ -749,8 +748,7 @@ override), the rule is:
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
   \item a name that begins with a backslash, or is not a \code{str}
-  \item a name that is not a port of the module, and that is not a plain identifier or
-    is a keyword
+  \item a name that is not a port of the module, and that is empty or holds a blank
   \item a port whose successor takes its direction or type from it (a declaration like
     \code{output logic [3:0] y0, y1})
   \item a non-ANSI port list
@@ -775,8 +773,7 @@ override), the rule is:
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
   \item a name that begins with a backslash, or is not a \code{str}
-  \item a name that is not a parameter of the module, and that is not a plain identifier
-    or is a keyword
+  \item a name that is not a parameter of the module, and that is empty or holds a blank
   \item a parameter that is declared in the body
   \item a declaration of several names
   \item a header with a macro

@@ -54,10 +54,15 @@ Rules
         the escaped spelling. When the module declares the unescaped name, the message
         names it, so the script author learns what to write.
     M3  A name the module does not declare and that cannot be an identifier is refused:
-        the empty string, a name with a space or a punctuation mark, a name that starts
-        with a digit, a bare keyword, and a value that is not text.
+        the empty string, a name with a space or another blank, and a value that is not
+        text. Changed by #119 (owner decision, 2026-11-22): before it, M3 also refused a
+        name with a punctuation mark, a name that starts with a digit and a bare
+        keyword. Each of those is a legal escaped identifier (`\\my-net `, `\\1bad `,
+        `\\module `), so the refusal said something untrue about a name that could be
+        there. The rule is now the one of `remove_instance` and `remove_assign` (#113).
     M4  A name the module does not declare and that could be an identifier is `skipped`.
-        That is what `skipped` is for, and this part does not change it.
+        That is what `skipped` is for. Since #119 this holds for every name with no
+        blank in it, simple identifier or not.
     M5  A name the module declares is still removed, as before.
     M6  Every refusal happens when the operation is called. Nothing is queued in
         `vet.log` and no file changes.
@@ -99,7 +104,10 @@ DECLARED_ESCAPED = {"remove_wire": "my-net", "remove_port": "wire", "remove_para
 ESCAPED = {"remove_wire": "\\helper ", "remove_port": "\\spare ", "remove_param": "\\P "}
 
 # names that cannot be an identifier and that the module does not declare
-UNUSABLE = ["", "not a name!!", "1bad", "has space", "module", "logic"]
+UNUSABLE = ["", " ", "not a name!!", "has space", "tab\there", "line\nbreak"]
+
+# names the module does not declare and that are legal as an escaped identifier (#119)
+ABSENT_ESCAPABLE = ["no-such", "1bad", "module", "logic", "a/b", "not-a-name!!"]
 
 
 @pytest.fixture
@@ -185,6 +193,21 @@ def test_a_name_that_is_not_text_is_refused(vet, op):
 def test_a_valid_name_that_is_absent_is_still_skipped(vet, op):
     getattr(vet.module("top"), op)("nosuchname")
     assert statuses(vet) == [(op, "skipped")]
+
+
+@pytest.mark.parametrize("op", OPS)
+@pytest.mark.parametrize("name", ABSENT_ESCAPABLE)
+def test_an_absent_name_that_needs_escaping_is_skipped(vet, op, name):
+    """#119: such a name could be in a module, so "absent" is the true answer."""
+    getattr(vet.module("top"), op)(name)
+    assert statuses(vet) == [(op, "skipped")]
+
+
+def test_one_name_is_removed_where_it_is_declared_and_skipped_where_it_is_not(vet):
+    """`my-net` is a wire of `top` and no port of it: the two halves must not drift apart."""
+    vet.module("top").remove_port("my-net")
+    vet.module("top").remove_wire("my-net")
+    assert statuses(vet) == [("remove_port", "skipped"), ("remove_wire", "applied")]
 
 
 @pytest.mark.parametrize("op", OPS)

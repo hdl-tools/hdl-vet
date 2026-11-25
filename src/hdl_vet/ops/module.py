@@ -266,8 +266,10 @@ class Module:
             raise VetError(
                 f"{op} {mod}: {name!r} is an escaped spelling; give the identifier without the backslash{hint}"
             )
-        if name not in declared and not is_simple_identifier(name):
-            raise VetError(f"{op} {mod}: {name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+        # An escaped name is any run of non-blank characters, so only an empty or blank-holding name that
+        # the module does not declare cannot be a name.
+        if (not name or any(c.isspace() for c in name)) and name not in declared:
+            raise VetError(f"{op} {mod}: {name!r} cannot be a name")
 
     def remove_wire(self, name: str) -> None:
         v, mod, op = self.vet, self._name, "remove_wire"
