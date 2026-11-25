@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from hdl_vet.archive import ArchiveError, read_archive, write_archive
+from hdl_vet.ops import args
 from hdl_vet.ops.checks import _DAMAGE, _evaluate, _read_vet_state
 from hdl_vet.ops.common import OpRecord, VetError, _Check, _Plan, _VetState
 from hdl_vet.ops.hier import _HierOps
@@ -75,6 +76,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def finish(self, scripts: Iterable[tuple[str, str]] = ()) -> Result:
         if self._scope is not None:
             raise VetError("finish: not allowed inside a scope")
+        scripts = args.scripts("finish", scripts)
         result = self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
         return replace(result, notes=list(self.notes))
 
@@ -94,6 +96,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         names added since the last load) is kept: the rolled-back session is as unloaded as before.
         """
         self._idle("check")
+        scripts = args.scripts("check", scripts)
         self._sync()
         dirty, everything = set(self._dirty), self._all
         added = {mod: dict(names) for mod, names in self._added.items()}
@@ -115,6 +118,8 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         script ends an offset-map stage there, as a load does. See `tests/cli/test_save_resume.py`.
         """
         self._idle("save")
+        args.path("save", path)
+        scripts = args.scripts("save", scripts)
         dest = Path(path)
         root = self.session.layout_root
         target = dest.resolve()
@@ -149,6 +154,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         SessionError (naming `path`) when it is not a session archive, is damaged in any way, has
         another format version or too much data, or names a path outside its layout root.
         """
+        args.path("restore", path)
         try:
             index, files = read_archive(Path(path))
         except ArchiveError as e:
@@ -168,6 +174,8 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     # --- selectors -----------------------------------------------------------------
 
     def module(self, name: str, instances: int | None = None) -> Module:
+        args.name("module", "name", name)
+        args.count(f"module {name}", "instances", instances, none=True)
         self._sync()
         if self._all:
             self.session.refresh()
@@ -221,6 +229,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         return self._snap_cache
 
     def module_paths(self, module: str) -> list[str]:
+        args.name("module_paths", "module", module)
         if self._paths is None:
             snap = self._snap()
             paths: dict[str, list[str]] = {}

@@ -9,6 +9,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from hdl_vet.ops import args
 from hdl_vet.ops.common import VetError
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.signoff import diff_snapshots
@@ -123,6 +124,7 @@ class _ScopeOps(_VetHost):
         See `tests/ops/test_scope.py` for the rules.
         """
         self._idle("scope")
+        args.name("scope", "module", module)
         st = self._begin("scope")
         self.module(module)  # the errors of `vet.module`
         design = self.session.loaded

@@ -27,6 +27,7 @@ The package `ops` has one module for each group:
 | --- | --- |
 | `vet.py` | the class `Vet`: the session, checked operations, groups |
 | `module.py` | the class `Module`: ports, parameters, wires, assigns, removals |
+| `args.py` | the checks of the arguments that are not names |
 | `override.py` | `override_net`, the operation that changes logic |
 | `instance.py` | the class `Instance`: connections, parameter values, `replace_module` |
 | `hier.py` | `punch_port` and `propagate_param` |

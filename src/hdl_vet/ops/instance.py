@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
 from hdl_vet.listedit import edit_list, remove_all
+from hdl_vet.ops import args
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
 from hdl_vet.ops.raw import _check_waiver
 from hdl_vet.ops.text import (
@@ -147,6 +148,8 @@ class Instance:
         v = self.vet
         v._refuse_scope("connect", self._mod)
         _check_waiver(f"connect {self.target}", waiver)
+        args.name(f"connect {self.target}", "port", port)
+        args.expression(f"connect {self.target}", "expr", expr, blank=True)
         inst, im = self._lookup(("conns",), ("ports",))
         self._refuse_connection_list("connect", inst)
         paths = self._paths("connect")
@@ -209,6 +212,7 @@ class Instance:
     def disconnect(self, port: str, was: object | None = None) -> None:
         v = self.vet
         v._refuse_scope("disconnect", self._mod)
+        args.name(f"disconnect {self.target}", "port", port)
         inst, im = self._lookup(("conns",), ("ports",))
         self._refuse_connection_list("disconnect", inst)
         paths = self._paths("disconnect")
@@ -243,6 +247,8 @@ class Instance:
         v = self.vet
         v._refuse_scope("set_param", self._mod)
         _check_waiver(f"set_param {self.target}", waiver)
+        args.name(f"set_param {self.target}", "name", name)
+        args.value(f"set_param {self.target}", "value", value)
         inst, im = self._lookup(("overrides",), ("params",))
         self._guard_overrides("set_param", inst)
         paths = self._paths("set_param")
@@ -342,7 +348,17 @@ class Instance:
         """Instantiate `module` instead of the current one; it needs a proof or a waiver."""
         self.vet._refuse_scope("replace_module", self._mod)
         _check_waiver(f"replace_module {self.target}", waiver)
-        args = (
+        label = f"replace_module {self.target}"
+        args.mapping(label, "ports", ports, texts=True)
+        args.mapping(label, "params", params, texts=True)
+        args.mapping(label, "connect", connect, values=True)
+        args.mapping(label, "set_params", set_params, values=True)
+        args.name(label, "module", module)
+        drop_ports = args.texts(label, "drop_ports", drop_ports)
+        drop_params = args.texts(label, "drop_params", drop_params)
+        unconnected = args.texts(label, "unconnected", unconnected)
+        accept_types = args.texts(label, "accept_types", accept_types)
+        call = (
             module,
             dict(ports or {}),
             dict(params or {}),
@@ -355,7 +371,7 @@ class Instance:
             was,
             waiver,
         )
-        self.vet._checked("replace_module", self.target, lambda: self._replace(*args), tried=True)
+        self.vet._checked("replace_module", self.target, lambda: self._replace(*call), tried=True)
 
     def _replace(
         self,

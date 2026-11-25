@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from hdl_vet.ops import args
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.ops.text import (
@@ -27,6 +28,7 @@ class _PlanOps(_VetHost):
 
     def add_file(self, path: Path | str) -> None:
         """Bring a source file outside the design into it (loaded last, never edited)."""
+        args.path("add_file", path)
         name = Path(path).name
 
         def run() -> None:

@@ -36,6 +36,18 @@ change. Each entry has the same points:
     header has a macro. Operations on ports need an ANSI port list.
   \end{itemize}
 \item A file is a file on disk. A path is a place in the hierarchy (chapter~\ref{ch:intro}).
+\item An operation checks every argument that is not a name where you call it. It stops with
+  an error that starts with the operation and the module or instance, names the argument,
+  and queues nothing. A width is none, a number of 1 or more, or a text that is not blank.
+  A type is a text that is not blank. A value is a text, an int or a float, and never a bool
+  or none. The expression of \apiname{Module.add_assign} and \apiname{Instance.connect} is
+  one expression with no comment.
+\item A count is an int. A flag, such as \code{exact=}, is a bool. A path is a text or a
+  \code{Path}. The scripts of \apiname{Vet.finish}, \apiname{Vet.check} and
+  \apiname{Vet.save} are pairs of two texts. A text has no line break, as Python counts one.
+\item The maps of \apiname{Instance.replace_module} are a mapping with text keys, such as a
+  dict. Its lists are any collection of texts, such as a list, a set or a generator. One text,
+  bytes and a mapping are no list. A name that is no text is refused too.
 \item A name that does not exist raises an error. The error has up to three
   suggestions, in the form ``did you mean \ldots?''
 \item An operation inserts text with the line ending of the file that the text goes

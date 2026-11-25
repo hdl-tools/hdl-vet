@@ -20,6 +20,7 @@ from dataclasses import replace as replaced
 from pathlib import Path
 
 from hdl_vet import equiv
+from hdl_vet.ops import args
 from hdl_vet.ops.common import VetError, _Plan
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.session import SessionError
@@ -244,10 +245,17 @@ class _RawOps(_VetHost):
         except ValueError:
             return key.as_posix()
 
+    def _check_pattern(self, op: str, kind: object, path: object, name: object, exact: object) -> None:
+        for arg, given in (("kind", kind), ("path", path), ("name", name)):
+            args.text(op, arg, given)
+        args.flag(op, "exact", exact)
+
     def expect(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False) -> None:
+        self._check_pattern("expect", kind, path, name, exact)
         self.session.expect(kind, path, name, exact=exact)
 
     def permit(self, kind: str, path: str = "*", name: str = "*", *, exact: bool = False) -> None:
+        self._check_pattern("permit", kind, path, name, exact)
         self.session.permit(kind, path, name, exact=exact)
 
     def text(self, path: Path) -> bytes:
