@@ -389,8 +389,8 @@ script \file{scope_reset.py} adds a parameter
 to \code{rst_sync} inside a scope, and overrides it on the instance outside the
 block. The script \file{scope_leaves.py} writes to \code{soc_top} inside the scope
 \code{periph_wrap}, and hdl-vet refuses it at the call. The script \file{scope_reaches.py}
-names an instance of \code{rst_sync} from inside \code{periph_wrap}. Without the scope,
-the sign-off accepts this reference. In the scope, it reaches outside, so hdl-vet refuses
+names an instance of \code{rst_sync} from inside \code{periph_wrap}. The name has a dot,
+so the call is logic and needs a proof or a waiver (section~\ref{sec:logicops}). In the scope, it reaches outside, so hdl-vet refuses
 the block and takes it back.
 
 \section{A script is a program}

@@ -60,7 +60,8 @@ use any build tool that reads \file{pyproject.toml}, for example
 \section{The extra for the equivalence check}
 \label{sec:extra}
 
-\apiname{Module.override_net} changes logic. The sign-off proves the change with Yosys
+\apiname{Module.override_net} changes logic, and so do a raw splice and the logic calls
+(section~\ref{sec:logicops}). The sign-off proves the change with Yosys
 (section~\ref{sec:equiv}). Yosys comes from the package \code{yowasp-yosys}. hdl-vet pins
 one version of it, because a new version of Yosys can change an answer.
 
@@ -72,14 +73,14 @@ brackets. Quote the argument, so that your shell does not read the brackets:
 \item \cmd{pip install ".[equiv]"} installs a checkout.
 \end{itemize}
 
-Without the extra, hdl-vet works as before. The exception is a logic operation. Without
-Yosys, \apiname{Module.override_net} refuses the call unless it has a waiver. A raw
+Without the extra, every call that needs a proof needs a waiver. Other calls work as
+before. Without Yosys, \apiname{Module.override_net} refuses the call unless it has a waiver. A raw
 \apiname{Vet.splice} inside a module is refused in the same way. So is a logic call of
 \apiname{Module.add_assign}, \apiname{Instance.connect}, \apiname{Instance.set_param} or
 \apiname{Instance.replace_module}.
 
 A raw splice outside the modules needs a waiver with or
-without Yosys. The message names \code{hdl-vet[equiv]}.
+without Yosys. Its message does not name the extra.
 
 \section{Check the installation}
 

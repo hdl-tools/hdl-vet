@@ -22,9 +22,10 @@ T3  `vet.session.splice` in a script is a raw splice like `vet.splice`: it is
     sorted, marked or refused in the same way. (It takes no waiver: a script
     that needs one uses `vet.splice`.)
 T4  A saved session of an older version is refused. Its raw splices have no
-    mark, so a run that resumes it could not judge them. The format number of
-    the archive is 3; an archive with an older format gives the message of another
-    format version.
+    mark, so a run that resumes it could not judge them. This rule made the
+    format number of the archive 3. It is 4 since the logic calls (rule L8 of
+    tests/ops/test_logic_ops.py); an archive with an older format gives the
+    message of another format version.
 T5  A waiver has no line separator of any kind (also U+2028, U+2029, a form
     feed, a vertical tab).
 
@@ -145,9 +146,8 @@ LIMITS, STATED (in the manual too)
   "blanks and comments only": a comment added there marks the module.
 - A proof costs time: a harmless splice in the top of demo_ss takes about a
   minute.
-- Operations that are given an expression write logic without a comparison:
-  `Module.add_assign`, `Instance.connect` with an expression, `Instance.set_param`.
-  The sign-off records them as structural changes only. (Issue for the owner.)
+- (Closed by issue #75.) The operations that are given an expression wrote logic
+  without a comparison. They are compared now: tests/ops/test_logic_ops.py.
 - The session by itself (Python, without `Vet`) has no marks and no comparison.
 """
 

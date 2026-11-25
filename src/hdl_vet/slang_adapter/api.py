@@ -1,4 +1,8 @@
-"""The functions that load a design and read parameter names."""
+"""The functions that load a design, read parameter names and sort an expression.
+
+`check_expression` says whether a text reads as one expression of its own. `is_wiring` says whether an
+expression is wiring or logic.
+"""
 
 from __future__ import annotations
 

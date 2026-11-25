@@ -243,6 +243,7 @@ def _example_script(top: str, instances: list[InstanceInfo], interfaces: frozens
         ref = f"top.instance({q(editable.name)})"
         port = next((c.port for c in editable.connections if c.port), None)
         lines += [
+            '    # The next three calls need a proof (the extra hdl-vet[equiv]) or waiver="why".',
             f"    #   {ref}.connect({q(port or 'port')}, {q('expression')})",
             f"    #   {ref}.set_param({q('PARAM')}, 8)",
             f"    #   {ref}.replace_module({q('other_module')})",
