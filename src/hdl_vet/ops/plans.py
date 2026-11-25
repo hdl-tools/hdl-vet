@@ -171,6 +171,8 @@ class _PlanOps(_VetHost):
         if plan.added is not None:
             mod, name, value = plan.added
             self._added.setdefault(mod, {})[name] = value
+        if plan.retires:  # before the plan's own check is set, so a retired key is never one it sets
+            self._checks = [c for c in self._checks if c.key not in plan.retires]
         for kind, path, name in plan.cancels:
             self.session.drop_expect(kind, [path], name)
         for kind, path, name in plan.expects:

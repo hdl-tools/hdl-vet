@@ -427,6 +427,7 @@ class Module:
             if splices is None:
                 splices = [remove_all(data, items)]
             hosts = v._instances_of(mod)
+            snap = v._snap()
             v._refuse_generate_copies(op, [mod])
             plans = [
                 _Plan(
@@ -456,7 +457,27 @@ class Module:
                     v._drove.extend(
                         (host, base) for c in inst.connections if c.port == name for base in driven_bases(c.expr)
                     )
-                plans.append(_Plan(op, mod, path=inst.path, splices=sp, mark=("conns", host, inst.name), quiet=True))
+                # The connection of this port goes, so the check of a `connect` to it can say nothing.
+                # The retirement is data on the plan, applied at the commit: a refusal later in this
+                # loop must not lose the check. The expectation of that `connect` is forgotten when the
+                # first design had no such connection (#57).
+                seg = _segment(inst.name)
+                at_paths = [f"{b}.{seg}" for b in v.module_paths(host) if f"{b}.{seg}" in snap]
+                cancels = [
+                    ("connection-changed", p, name) for p in at_paths if not (p in base and name in base[p].connections)
+                ]
+                plans.append(
+                    _Plan(
+                        op,
+                        mod,
+                        path=inst.path,
+                        splices=sp,
+                        mark=("conns", host, inst.name),
+                        cancels=cancels,
+                        retires=[("conn", host, inst.name, name)],
+                        quiet=True,
+                    )
+                )
             v._commit_all(op, plans)
 
         v._checked(op, mod, run)

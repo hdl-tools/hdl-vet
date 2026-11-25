@@ -60,6 +60,7 @@ class _Plan:
     # reachable). Anything the checkpoint does NOT hold must go on the plan instead, and so
     # must a decision that the body would otherwise make twice.
     cancels: list[tuple[str, str, str]] = field(default_factory=list)  # expectations to forget
+    retires: list[tuple[str, ...]] = field(default_factory=list)  # keys of checks to drop at the commit
     quiet: bool = False  # part of an operation whose first plan is logged
 
 
