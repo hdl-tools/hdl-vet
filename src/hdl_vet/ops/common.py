@@ -61,6 +61,9 @@ class _Plan:
     # must a decision that the body would otherwise make twice.
     cancels: list[tuple[str, str, str]] = field(default_factory=list)  # expectations to forget
     retires: list[tuple[str, ...]] = field(default_factory=list)  # keys of checks to drop at the commit
+    forgets: list[str] = field(default_factory=list)  # paths whose required expectations (and below) go
+    drops: tuple[str, str] | None = None  # (module, instance) whose registered checks go
+    drove: list[tuple[str, str]] = field(default_factory=list)  # (module, signal) pairs this edit stops driving
     quiet: bool = False  # part of an operation whose first plan is logged
 
 

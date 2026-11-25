@@ -247,10 +247,8 @@ class Module:
             a, b = line_rule(data, inst.stmt_start, inst.stmt_end)
             snap = v._snap()
             where = [f"{base}.{_segment(name)}" for base in self.paths if f"{base}.{_segment(name)}" in snap]
-            # what earlier operations expected of this instance is moot now it is going
-            v.session.drop_expects(where)
-            v._drop_registered(mod, name)
-            v._drove.extend(v._driven_by(mod, inst))
+            # What earlier operations expected of this instance is moot once it is gone: the plan
+            # carries it, and `_commit` applies it, so a refused call forgets nothing.
 
             v._commit_all(
                 op,
@@ -261,6 +259,9 @@ class Module:
                         path=inst.path,
                         splices=[(a, b, b"")],
                         mark=("decls", mod),
+                        forgets=where,
+                        drops=(mod, name),
+                        drove=v._driven_by(mod, inst),
                         expects=[("instance-removed", p, "") for p in where],
                         check=_Check((op, mod, name), op, (mod, name)),
                     )

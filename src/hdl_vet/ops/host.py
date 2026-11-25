@@ -25,6 +25,7 @@ class _VetHost:
         _checks: list[_Check]
         _depth: int
         _dirty: set[tuple[str, ...]]
+        _drove: list[tuple[str, str]]
         _scope: _Scope | None
         _script_dir: Path | None
         session: Session
