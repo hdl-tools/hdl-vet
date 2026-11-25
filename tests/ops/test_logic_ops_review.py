@@ -42,7 +42,28 @@ M7  A select with a variable index that can leave the range of its vector (`v[i 
     `i` of 2 bits) gives an undefined value that the report cannot see. Its result counts as a named net
     does in M6. A select whose index cannot leave the range does not count.
 
+The owner's decision of 2026-11-25 closes the last known case of this family:
+
+M8  A division or a modulo (`/`, `%`, signed or not) whose divisor can be zero gives an undefined value
+    that the report cannot see. Its result counts as a named net does in M6. The divisor cannot be zero
+    only when one of its bits is the constant 1 in the netlist (`{d[3:1], 1'b1}`, or a constant other
+    than zero). Every other divisor counts.
+
+The narrow review of M8 found a case that was open before it:
+
+M9  An output port of the input design that holds a constant undefined bit (`x` or `z`) is seen from
+    outside, and so is such a bit on an input pin of a child that stayed a black box. The answer is
+    "error". A division or a modulo by a constant zero is this case: the reader folds it to `x`, so
+    no cell is left for M8.
+
 STATED LIMITS
+
+- M9 does not ask what the edit touches. A module with an output tied to `'z` or `'x`, or with an output
+  that nothing drives, gives "error" for every logic edit, also for one that leaves that output alone.
+  Such an edit needs a waiver.
+
+- M8 looks at the netlist only. A divisor that the logic keeps from zero (`(d != 0) ? n / d : 0`) still
+  gives "error". Such an edit needs a waiver.
 
 - M6 follows the netlist and not the logic: an undefined value that a net leads to but that can never
   pass (it is masked by other logic) still gives "error". M7 looks at the widths only, so a select whose
@@ -382,3 +403,149 @@ def test_a_select_that_stays_in_the_range_is_proved(tmp_path):
     result = vet.finish()
     assert one(result).status == "proved", one(result)
     assert result.ok, result.report()
+
+
+# --- M8: a division or a modulo whose divisor can be zero -----------------------------------------
+
+DPORTS = (
+    "input logic clk_i, input logic a_i, input logic [3:0] n_i, input logic [3:0] d_i, "
+    "output logic q_o, output logic y_o"
+)
+DTOP = f"module top ({DPORTS});\n  mid u_m (.*);\nendmodule\n"
+DHEAD = f"module mid ({DPORTS});\n"
+DIV = DHEAD + U_C + "  assign y_o = ^(n_i / d_i);\nendmodule\n"
+MOD = DHEAD + U_C + "  assign y_o = ^(n_i % d_i);\nendmodule\n"
+SDIV = DHEAD + (
+    "  logic signed [3:0] sn;\n  logic signed [3:0] sd;\n  assign sn = n_i;\n  assign sd = d_i;\n"
+    + U_C
+    + "  assign y_o = ^(sn / sd);\nendmodule\n"
+)
+SMOD = SDIV.replace("sn / sd", "sn % sd")
+DIVFLOP = DHEAD + (
+    "  logic r;\n" + U_C + "  always_ff @(posedge clk_i) r <= ^(n_i / d_i);\n  assign y_o = r;\nendmodule\n"
+)
+DIVBOX = DHEAD + ("  child u_c (.clk_i(clk_i), .en_i(^(n_i / d_i)), .q_o(q_o));\n  assign y_o = a_i;\nendmodule\n")
+# The quotient feeds nothing that the outside sees.
+DIVDEAD = DHEAD + ("  logic m;\n" + U_C + "  assign m = ^(n_i / d_i);\n  assign y_o = a_i;\nendmodule\n")
+# The divisor has a bit that is the constant 1.
+DIVODD = DHEAD + U_C + "  assign y_o = ^(n_i / {d_i[3:1], 1'b1});\nendmodule\n"
+DIVCONST = DHEAD + U_C + "  assign y_o = ^(n_i / 4'd3);\nendmodule\n"
+MODCONST = DHEAD + U_C + "  assign y_o = ^(n_i % 4'd5);\nendmodule\n"
+# The logic keeps the divisor from zero. The netlist does not show that (the stated limit).
+DIVGUARD = DHEAD + U_C + "  assign y_o = (d_i != 0) ? ^(n_i / d_i) : 1'b0;\nendmodule\n"
+
+
+def dbuild(tmp_path: Path, mid: str) -> Design:
+    return Design(tmp_path / "design", {"child": CHILD, "mid": mid, "top": DTOP})
+
+
+@needs_yosys
+@pytest.mark.parametrize(
+    ("mid", "old", "new"),
+    [
+        (DIV, b"^(n_i / d_i)", b"(d_i == 0) ? 1'b1 : ^(n_i / d_i)"),
+        (MOD, b"^(n_i % d_i)", b"(d_i == 0) ? 1'b1 : ^(n_i % d_i)"),
+        (SDIV, b"^(sn / sd)", b"(sd == 0) ? 1'b1 : ^(sn / sd)"),
+        (SMOD, b"^(sn % sd)", b"(sd == 0) ? 1'b1 : ^(sn % sd)"),
+        (DIVFLOP, b"r <= ^(n_i / d_i)", b"r <= (d_i == 0) ? 1'b1 : ^(n_i / d_i)"),
+        (DIVBOX, b".en_i(^(n_i / d_i))", b".en_i((d_i == 0) ? 1'b1 : ^(n_i / d_i))"),
+    ],
+    ids=["div", "mod", "signed-div", "signed-mod", "flop", "pin-of-a-child"],
+)
+def test_a_division_whose_divisor_can_be_zero_is_never_proved(tmp_path, mid, old, new):
+    design = dbuild(tmp_path, mid)
+    vet = design.vet()
+    design.replace(vet, "mid", old, new)
+    result = vet.finish()
+    assert one(result).status in ("refuted", "error"), one(result)
+    assert not result.ok
+
+
+@needs_yosys
+@pytest.mark.parametrize(
+    ("mid", "old", "new"),
+    [
+        (DIVDEAD, b"assign m = ^(n_i / d_i);", b"assign m = (d_i == 0) ? 1'b1 : ^(n_i / d_i);"),
+        (DIVODD, b"assign y_o = ^(", b"assign y_o = 1'b1 & ^("),
+        (DIVCONST, b"assign y_o = ^(", b"assign y_o = 1'b1 & ^("),
+        (MODCONST, b"assign y_o = ^(", b"assign y_o = 1'b1 & ^("),
+    ],
+    ids=["nothing-sees-it", "a-constant-1-bit", "constant-divisor", "constant-modulus"],
+)
+def test_a_division_that_cannot_show_an_undefined_value_is_proved(tmp_path, mid, old, new):
+    design = dbuild(tmp_path, mid)
+    vet = design.vet()
+    design.replace(vet, "mid", old, new)
+    result = vet.finish()
+    assert one(result).status == "proved", one(result)
+    assert result.ok, result.report()
+
+
+@needs_yosys
+def test_a_divisor_that_only_the_logic_keeps_from_zero_is_not_proved(tmp_path):
+    design = dbuild(tmp_path, DIVGUARD)
+    vet = design.vet()
+    design.replace(vet, "mid", b"assign y_o = (d_i", b"assign y_o = 1'b1 & (d_i")
+    result = vet.finish()
+    assert one(result).status == "error", one(result)
+    assert not result.ok
+
+
+# --- M9: a constant undefined bit on a port -------------------------------------------------------
+
+# No child: the netlist has no box, and the port holds nothing but the constant.
+XHEAD = DHEAD + "  assign q_o = a_i;\n"
+
+
+@needs_yosys
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        (b"^(n_i / 4'd0)", b"1'b1"),
+        (b"^(n_i % 4'd0)", b"^n_i"),
+        (b"^(n_i / (4'd2 - 4'd2))", b"1'b1"),
+        (b"1'bx", b"1'b1"),
+        (b"1'bz", b"1'b1"),
+    ],
+    ids=["div-by-0", "mod-by-0", "computed-0", "x", "z"],
+)
+def test_a_constant_undefined_bit_on_a_port_is_never_proved(tmp_path, old, new):
+    design = dbuild(tmp_path, XHEAD + f"  assign y_o = {old.decode()};\nendmodule\n")
+    vet = design.vet()
+    design.replace(vet, "mid", old, new)
+    result = vet.finish()
+    assert one(result).status in ("refuted", "error"), one(result)
+    assert not result.ok
+
+
+@needs_yosys
+def test_a_constant_undefined_bit_on_a_pin_of_a_child_is_never_proved(tmp_path):
+    mid = DHEAD + "  child u_c (.clk_i(clk_i), .en_i(1'bx), .q_o(q_o));\n  assign y_o = a_i;\nendmodule\n"
+    design = dbuild(tmp_path, mid)
+    vet = design.vet()
+    design.replace(vet, "mid", b".en_i(1'bx)", b".en_i(1'b1)")
+    result = vet.finish()
+    assert one(result).status in ("refuted", "error"), one(result)
+    assert not result.ok
+
+
+@needs_yosys
+def test_an_output_that_nothing_drives_and_the_edit_drives_is_never_proved(tmp_path):
+    design = dbuild(tmp_path, XHEAD + "endmodule\n")
+    vet = design.vet()
+    design.replace(vet, "mid", b"assign q_o = a_i;", b"assign q_o = a_i;\n  assign y_o = 1'b0;")
+    result = vet.finish()
+    assert one(result).status in ("refuted", "error"), one(result)
+    assert not result.ok
+
+
+@needs_yosys
+@pytest.mark.parametrize("tie", ["1'bz", "1'bx"])
+def test_an_edit_beside_an_output_tied_to_an_undefined_constant_is_not_proved(tmp_path, tie):
+    """The stated limit of M9: the edit leaves `y_o` alone, and the answer is still "error"."""
+    design = dbuild(tmp_path, XHEAD + f"  assign y_o = {tie};\nendmodule\n")
+    vet = design.vet()
+    design.replace(vet, "mid", b"assign q_o = a_i;", b"assign q_o = a_i & 1'b1;")
+    result = vet.finish()
+    assert one(result).status == "error", one(result)
+    assert not result.ok

@@ -54,8 +54,11 @@ Stated limits (each gives "error" or "refuted", never a wrong "proved", except t
   choose). The detail then says "the gold has undefined values on " and names those outputs. They
   are found by one more proof of the gold against itself, the undriven bits as 0 against the same
   bits as free values that are independent of each other, run only when the
-  gold has an x constant or a used net that nothing drives, or a select that can leave its range.
-  `Result.undefined_seen` is True when a named net, or the output of such a select, leads through the
+  gold has an x constant or a used net that nothing drives, or a select that can leave its range, or a
+  division or modulo whose divisor can be zero (it cannot only when a bit of it is the constant 1 in the
+  netlist).
+  A constant x or z bit on an output port or on a box pin counts at once (`n / 4'd0` is folded to x).
+  `Result.undefined_seen` is True when a named net, or the output of such a select or division, leads through the
   netlist of the gold to an output port or to an input pin of a box (see `_leads_outside`), or when that
   cannot be told. The caller then turns the "proved" into an "error".
 - Defines: a name must be a plain identifier. A value is passed on as it is, with `"` escaped,
@@ -65,8 +68,8 @@ Stated limits (each gives "error" or "refuted", never a wrong "proved", except t
 - The report of undefined values has a time budget of its own (30 s, a second process). When it
   runs out or fails, the answer of the engine is still "proved". The detail says that the report
   could not be made, and the sign-off (`prove.py`) counts that answer as an "error".
-  The report does not see an undefined value of the gold that cancels (`u ^ u`) or one that a
-  division by zero makes.
+  The report does not see an undefined value of the gold that cancels (`u ^ u`). The one that a
+  division by zero makes is not seen either, but it counts through its cell, as a select does.
 - Checks run one at a time (a lock). The lock holds for the threads of one process, not for two
   processes.
 """
@@ -1010,7 +1013,7 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
         return clock_answer
     code, log = _run_yosys(proof_script(), "proof")
     status, detail = _verdict(code, log, gold_ports)
-    if status == "proved" and (_has_undefined(gold_side) or _wide_selects(gold_side)):
+    if status == "proved" and (_has_undefined(gold_side) or _undefined_sources(gold_side)):
         Path("report.wanted").write_text("", encoding="utf-8")  # the parent runs the report, with its own budget
     return status, detail
 
@@ -1022,7 +1025,7 @@ def _has_undefined(side: Mapping[str, Any]) -> bool:
     for port in side["ports"].values():
         bits = {b for b in port["bits"] if isinstance(b, int)}
         (driven if port["direction"] == "input" else used).update(bits)
-        if port["direction"] != "input" and "x" in port["bits"]:
+        if port["direction"] != "input" and any(b in ("x", "z") for b in port["bits"]):
             return True
     for cell in side["cells"].values():
         directions = cell.get("port_directions", {})
@@ -1073,14 +1076,35 @@ def _wide_selects(side: Mapping[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def _zero_divisors(side: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The division and modulo cells whose divisor can be zero, by the netlist alone.
+
+    The divisor cannot be zero only when one of its bits is the constant 1 (a constant bit is the text "1").
+    Every other divisor counts, and so does a cell that is not understood.
+    """
+    return [
+        cell
+        for cell in side["cells"].values()
+        if cell.get("type") in ("$div", "$mod", "$divfloor", "$modfloor")
+        and "1" not in cell.get("connections", {}).get("B", ())
+    ]
+
+
+def _undefined_sources(side: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The cells whose result is undefined for some input that the report cannot see: wide selects and zero divisors."""
+    return _wide_selects(side) + _zero_divisors(side)
+
+
 def _leads_outside(side: Mapping[str, Any], names: Iterable[str]) -> bool:
     """True when an undefined value of the gold can be seen from outside the module, or when that cannot be told.
 
     The start bits are the bits of the nets that the report names and the outputs of the selects of
-    `_wide_selects`. The walk goes forward through every cell, flops and memories too (an input bit leads to all
+    `_undefined_sources` (a select that can leave its range, a division or modulo whose divisor can be zero).
+    The walk goes forward through every cell, flops and memories too (an input bit leads to all
     the output bits), any number of steps. It reaches the outside at a bit of an output or inout port, or at an
     input pin of a cell that is not a Yosys primitive (a child that stayed a black box, wherever it is
-    in the hierarchy). A named net that is not in the netlist counts as seen. The walk follows the netlist and not
+    in the hierarchy). A constant `x` or `z` bit on such a port or pin counts at once (`n / 4'd0` is folded to it).
+    A named net that is not in the netlist counts as seen. The walk follows the netlist and not
     the logic: a value that other logic masks still counts.
     """
     netnames = side.get("netnames", {})
@@ -1105,10 +1129,15 @@ def _leads_outside(side: Mapping[str, Any], names: Iterable[str]) -> bool:
                 outs += ints
         if not str(cell.get("type", "")).startswith("$"):
             box_pins.update(ins)
+            for pin, bits in cell["connections"].items():
+                if directions.get(pin, "inout") != "output" and any(b in ("x", "z") for b in bits):
+                    return True  # a constant undefined bit on a box pin
         for bit in ins:
             reads.setdefault(bit, []).extend(outs)
-    for cell in _wide_selects(side):
+    for cell in _undefined_sources(side):
         todo += [b for pin, bits in cell["connections"].items() if pin == "Y" for b in bits if isinstance(b, int)]
+    if any(b in ("x", "z") for port in side["ports"].values() if port["direction"] != "input" for b in port["bits"]):
+        return True  # a constant undefined bit on an output port
     visible = {
         b for port in side["ports"].values() if port["direction"] != "input" for b in port["bits"] if isinstance(b, int)
     }
