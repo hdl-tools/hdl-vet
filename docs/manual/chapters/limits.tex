@@ -300,8 +300,15 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   undefined value. The check looks at the widths only. A select whose index stays in range
   by its logic still gives \code{error} when the width allows more.
 \item \textbf{A division by zero.} A division or a modulo whose divisor can be zero makes
-  an undefined value. The report of undefined values does not see it, so the guard does
-  not turn the answer into \code{error}.
+  an undefined value. The check counts it as it counts the select, from the netlist
+  only. The divisor counts unless one of its bits is the constant 1. A divisor that the logic
+  keeps from zero, as in \code{(d != 0) ? n / d : 0}, still gives \code{error}.
+  A constant zero divisor is a constant undefined value, and on an output port or a pin of
+  a black box child it gives \code{error}.
+\item \textbf{A port tied to an undefined constant.} A module can have an output that is the
+  constant \code{'z} or \code{'x}, or an output that nothing drives. Every logic edit of such
+  a module gives \code{error}, also an edit that does not touch that output. Such an edit
+  needs a waiver.
 \item \textbf{A waiver on wiring.} A call that needs no proof, such as wiring, can still
   carry \code{waiver=}. That waiver leaves no record, because the call leaves no mark.
 \item \textbf{A report that cannot be made.} The report of undefined values has a budget of
