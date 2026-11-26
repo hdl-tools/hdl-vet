@@ -244,19 +244,21 @@ def _run(
         expects=expects,
         check=_Check(("override_net", mod, net), _OP, (mod, net, enable, value, keep_name, waiver)),
     )
+    # Every refusal comes before the commit: `_retarget` only decides here and moves the checks after it.
+    moves = _retarget(module, net, keep_name, found)
     v._commit_all(_OP, [plan])
     if found.kind == "instance":
         v._mark("conns", mod, found.instance)
-    _retarget(module, net, keep_name, found)
+    v._checks = [moves.get(id(c), c) for c in v._checks]  # cannot refuse
 
 
-def _retarget(module: Module, net: str, keep: str, found: _Found) -> None:
+def _retarget(module: Module, net: str, keep: str, found: _Found) -> dict[int, _Check]:
     """The driver now drives `keep`: the post-condition that named `net` for the same driver names `keep`.
 
     This is the check of an earlier `add_assign` of `net`, or of an earlier `connect` of the output pin.
     """
     v, mod = module.vet, module.name
-    out: list[_Check] = []
+    out: dict[int, _Check] = {}  # id of a check now registered -> the check that replaces it
     for c in v._checks:
         if found.kind == "assign" and c.kind == "add_assign" and c.args[:2] == (mod, net):
             moved = (c.key[0], c.key[1], keep, *c.key[3:])
@@ -269,16 +271,15 @@ def _retarget(module: Module, net: str, keep: str, found: _Found) -> None:
                     f"{_OP} {mod}: the keep name {keep!r} already has a post-condition from an "
                     f"earlier operation of this run; choose a name this run has not touched"
                 )
-            c = _Check(moved, c.kind, (mod, keep, *c.args[2:]))
+            out[id(c)] = _Check(moved, c.kind, (mod, keep, *c.args[2:]))
         elif (
             found.kind == "instance"
             and c.kind == "conn"
             and c.args[:3] == (mod, found.instance, found.port)
             and c.args[3] == net
         ):
-            c = _Check(c.key, c.kind, (*c.args[:3], keep))
-        out.append(c)
-    v._checks = out
+            out[id(c)] = _Check(c.key, c.kind, (*c.args[:3], keep))
+    return out
 
 
 def _set_waiver(module: Module, net: str, waiver: str | None) -> None:
