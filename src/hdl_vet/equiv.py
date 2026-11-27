@@ -12,7 +12,8 @@ loads Yosys, so a crash or a time-out of the tool cannot reach the caller.
 Each side is read once, made into plain logic (unpacked arrays are mapped to flops), and
 written as a netlist. The checks below read that netlist. The proof flow is `clk2fflogic`,
 `equiv_make`, `equiv_simple -undef -seq 5`, `equiv_induct -undef -seq 5` and
-`equiv_status -assert`. Only a complete, explicit proof is "proved".
+`equiv_status -assert`, then the first step (`sat` on a miter, every flop undefined). Only a complete,
+explicit proof is "proved".
 
 What the engine does so that "proved" is true
 - Undefined values (`-undef`): x in the gate, or a net nobody drives, is a difference. x in the
@@ -55,8 +56,14 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   step before the edge, where the clock still has its old value. Such a module gives "error" for every edit.
 - A memory with an asynchronous reset makes the proof slower: 16 words of 8 bits take about 10 seconds,
   64 words about two minutes, and more can reach the time limit ("error").
-- The first state of a flop is not compared. A gate that differs only before its first clock edge or its
-  first reset is a wrong "proved". The old model had this limit too.
+- The first state of a flop is compared in one step, after a proof that is "proved" (`first_script`):
+  every flop of both sides starts undefined, every input is defined, and the outputs must agree by the
+  rule for undefined values. A difference there is "refuted" ("first state" in the detail). The cells
+  `$specify2`, `$specify3`, `$specrule` and `$print` are taken out first; a run that fails is an
+  "error" that starts with "the first state could not be checked: ". The step is one step, so a gate
+  that differs only in a later step from a state the induction does not ask about is still a wrong
+  "proved". An undefined value does not cancel there (`a ^ a` of a flop `a` with no reset is "refuted"
+  against 0). A design with a memory was not measured.
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct port or of the
   order of the ports is "proved": the module computes the same, but a parent that connects by
@@ -574,6 +581,10 @@ def ports_script(module: str, params: Mapping[str, str], same: Sequence[str]) ->
     return "\n".join(lines) + "\n"
 
 
+# Cells that `sat` has no model for (`equiv_simple` and the first step use it): specify cells and `$display`.
+_NO_LOGIC = "delete t:$specify2 t:$specify3 t:$specrule t:$print"
+
+
 def prepare_script(
     module: str,
     free: Mapping[str, int],
@@ -597,7 +608,7 @@ def prepare_script(
         bits = format(value, "b").zfill(width)
         lines += ["cd gate", f"delete -port w:{name}", f"connect -set {name} {width}'b{bits}", "cd .."]
     lines += [f"delete -port gate/{name}" for name in drop]
-    lines += ["write_rtlil prepared.il", "opt_expr", "opt_clean", "write_json check.json"]
+    lines += [_NO_LOGIC, "write_rtlil prepared.il", "opt_expr", "opt_clean", "write_json check.json"]
     return "\n".join(lines) + "\n"
 
 
@@ -617,6 +628,37 @@ def proof_script() -> str:
         "equiv_status -assert",
     ]
     return "\n".join(lines) + "\n"
+
+
+def first_script() -> str:
+    """The first step (#139): every flop starts undefined, every input is defined, one step, outputs compared.
+
+    The specify cells and `$print` are already out (`_NO_LOGIC`, in the prepare step). Any other cell that
+    `sat` has no model for is an "error" of the run.
+    """
+    lines = [
+        "read_rtlil prepared.il",
+        "clk2fflogic",
+        "miter -equiv -ignore_gold_x -flatten -make_outputs gold gate miter",
+        "hierarchy -top miter",
+        "sat -verify -prove trigger 0 -seq 1 -set-init-undef -set-def-inputs -enable_undef miter",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+_FIRST_OK = "SAT proof finished - no model found: SUCCESS!"
+_FIRST_FAIL = "SAT proof finished - model found: FAIL!"
+
+
+def _first_state() -> tuple[str, str] | None:
+    """None when the first step proves the outputs equal; else the "error" or "refuted" answer."""
+    code, log = _run_yosys(first_script(), "first")
+    # shortcut: only the two Yosys sentences decide; a log with both, or neither, is an error.
+    if _FIRST_FAIL in log and _FIRST_OK not in log:
+        return "refuted", "differs in the first state of a flop (every flop starts undefined)"
+    if code == 0 and _FIRST_OK in log and _FIRST_FAIL not in log:
+        return None
+    return "error", "the first state could not be checked: " + _problem(log)
 
 
 def undefined_script(module: str) -> str:
@@ -1093,6 +1135,10 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
             return "error", f"the clock {read} is read as data by a flop: the check cannot judge it; give a waiver"
     code, log = _run_yosys(proof_script(), "proof")
     status, detail = _verdict(code, log, gold_ports)
+    if status == "proved":
+        first = _first_state()
+        if first is not None:
+            return first
     if status == "proved" and (_has_undefined(gold_side) or _undefined_sources(gold_side)):
         Path("report.wanted").write_text("", encoding="utf-8")  # the parent runs the report, with its own budget
     return status, detail

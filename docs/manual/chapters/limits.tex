@@ -246,9 +246,20 @@ undefined values. A waiver is the way to go on when the check cannot judge.
 \item \textbf{Memories with a reset.} A memory with an asynchronous reset makes the proof
   slower. A memory of 16 words of 8 bits takes about 10 seconds, and one of 64 words about
   two minutes. A larger one can reach the time limit, and the answer is then \code{error}.
-\item \textbf{The first state.} The check does not compare the first state of a flop. A
-  gate that differs only before its first clock edge or its first reset is \code{proved}
-  although it differs.
+\item \textbf{The first state.} After a proof, the check compares one more step. In that
+  step every flop of both sides starts with an undefined value. A gate that differs only
+  before its first clock edge or its first reset is \code{refuted}. The check is one step. A
+  gate that differs only in a later step can still be \code{proved}, but no such pair is
+  known.
+\item \textbf{An undefined value that cancels.} In the first step an undefined value does
+  not cancel. Take a flop with no reset and the exclusive or of that flop with itself. In
+  hardware it is 0, and in the first step it is undefined. A gate that adds such a term to
+  an output is \code{refuted} although it computes the same. Write the edit without the flop,
+  or give a waiver.
+\item \textbf{The cost of the first step.} The first step leaves out a specify block and a
+  \code{\$display}, because they are no logic. If it meets another cell that it cannot
+  model, the answer is \code{error}. The step takes about 4 seconds on a large design and
+  under 0.1 second on a small module.
 \item \textbf{A child that is not proved.} A module can have an override, and a child can
   have one too. If every comparison of the child is \code{proved}, the child is a black box
   in the comparison of the module. If the child is waived, refuted or not checked, hdl-vet
