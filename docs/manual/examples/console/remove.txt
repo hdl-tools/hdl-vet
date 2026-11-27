@@ -35,7 +35,7 @@ $ vet apply --no-project -f design/design.f --top soc_top -s scripts/retire.py -
 
 -  assign irq_o = |irq;
  endmodule
-note: group: variable 'irq' is assigned but its value is never used [module soc_top, soc_top.sv:11]
+note: group: variable 'irq' is assigned but its value is never used [module soc_top, soc_top.sv:12]
 3 applied, 0 skipped
 $ vet apply --no-project -f design/design.f --top soc_top -s scripts/remove_timer.py --dry-run
 vet: script remove_timer.py: group: left partly undriven: signal 'irq_o' of module periph_wrap loses the driver of bit(s) 1

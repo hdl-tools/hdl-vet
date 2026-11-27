@@ -147,6 +147,11 @@ Items that say so were not checked by a test.
   only the active branch of a conditional directive declares. The edited design then does
   not compile in the other configuration, and the sign-off accepts the run. hdl-vet does
   not check an expression against the directives.
+\item \textbf{Notes about unused signals.} A note stays only while the final design still
+  gives its diagnostic. Two signals of one name in one module, one at the level of the
+  module and one in a generate block, give the same message. The note of the one that is
+  gone then stays while the other is there. A signal that is removed, added again and made
+  unused again leaves the note of each operation that made it unused. When the final design cannot be loaded, every note stays.
 \end{itemize}
 
 \lstinputlisting[style=script]{examples/scripts/logic_change.py}
