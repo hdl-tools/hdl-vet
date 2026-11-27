@@ -200,19 +200,37 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   \item an initial value, such as \code{logic r = 1'b1;}, or an \code{initial} block, on
     either side, also when both sides are the same
   \item a latch
-  \item a clock that reaches a flop through an inverter, through a multiplexer that is
-    not tied, or through a divider
+  \item a clock that reaches a flop through a multiplexer that is not tied, or through a
+    divider
   \item flops on both edges of one clock
-  \item two asynchronous resets
+  \item an asynchronous set together with an asynchronous reset on one flop
   \item an interface port
   \item a memory that the tool cannot map to flops
   \end{itemize}
+\item \textbf{Resets and the clock.} A step of the proof is half a clock period or a
+  reset pulse. In a step that is no clock edge the flops hold, and an asynchronous reset,
+  set or load still acts. So a reset pulse between two clock edges is compared. An inverter
+  on the clock is read as the other edge of the input. Flops with different asynchronous
+  resets are compared too.
 \item \textbf{Time.} A time limit of 300 seconds holds for each check. A wide multiplier
   that is written in another way, and a memory of 1000 words of 32 bits, reach it. The
   answer is \code{error}.
-\item \textbf{Renamed registers.} A renamed chain of more than five registers is
-  \code{refuted}. A rewrite that keeps the name of an internal signal but changes what it
+\item \textbf{Renamed registers.} A chain of two or more registers that are renamed
+  between the two sides is \code{refuted}, also when the logic is the same. The clock is
+  free in the proof, so it cannot take the registers as unchanged. A single renamed register
+  is compared. A rewrite that keeps the name of an internal signal but changes what it
   carries is \code{refuted} too.
+\item \textbf{A clock that is read as data.} The proof takes the data of a flop from the
+  step before the clock edge, where the clock still has its old value. So the check gives
+  \code{error} when the clock input reaches a data, enable or synchronous reset pin of a
+  flop, on either side. The detail asks for a waiver. Such a module gives \code{error} for
+  every edit.
+\item \textbf{Memories with a reset.} A memory with an asynchronous reset makes the proof
+  slower. A memory of 16 words of 8 bits takes about 10 seconds, and one of 64 words about
+  two minutes. A larger one can reach the time limit, and the answer is then \code{error}.
+\item \textbf{The first state.} The check does not compare the first state of a flop. A
+  gate that differs only before its first clock edge or its first reset is \code{proved}
+  although it differs.
 \item \textbf{A child that is not proved.} A module can have an override, and a child can
   have one too. If every comparison of the child is \code{proved}, the child is a black box
   in the comparison of the module. If the child is waived, refuted or not checked, hdl-vet

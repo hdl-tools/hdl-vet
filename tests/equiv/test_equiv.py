@@ -150,11 +150,33 @@ def test_the_same_module_is_proved(tmp_path):
     assert result.seconds > 0
 
 
+ONE_REGISTER = (
+    "module one (input logic clk_i, input logic rst_ni, input logic d_i, output logic q_o);\n"
+    "  logic held;\n"
+    "  always_ff @(posedge clk_i or negedge rst_ni) if (!rst_ni) held <= 1'b0; else held <= d_i;\n"
+    "  assign q_o = held;\n"
+    "endmodule\n"
+)
+
+
 @needs_yosys
-def test_a_renamed_internal_signal_is_proved(tmp_path):
+def test_one_renamed_register_is_proved(tmp_path):
+    gate = ONE_REGISTER.replace("held", "kept")
+    assert gate != ONE_REGISTER
+    assert run(tmp_path, (ONE_REGISTER,), (gate,), "one").status == "proved"
+
+
+@needs_yosys
+def test_a_renamed_chain_of_registers_is_refuted(tmp_path):
+    """The stated limit since #137. Before it, this pair (two renamed registers that feed each other) was "proved".
+
+    The clock is a free input of the proof since then, so that a reset pulse between two edges is compared.
+    The proof can no longer take registers that it cannot match by name as unchanged. The answer is a
+    difference that is not there, never a "proved" that is wrong. Such a rewrite needs a waiver.
+    """
     gate = RST_SYNC.replace("q", "stage")
     assert gate != RST_SYNC
-    assert run(tmp_path, (RST_SYNC,), (gate,), "rst_sync").status == "proved"
+    assert run(tmp_path, (RST_SYNC,), (gate,), "rst_sync").status == "refuted"
 
 
 @needs_yosys

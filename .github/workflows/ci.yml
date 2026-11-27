@@ -69,7 +69,8 @@ jobs:
           # are covered on Linux and on Windows. `pyslang` is one abi3 wheel for both.
           - { os: macos-15, python: "3.13", select: "not bigproof" }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # The macOS job takes about 30 minutes; the others take 8 to 16.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:

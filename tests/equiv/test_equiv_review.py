@@ -55,11 +55,14 @@ the last one, which the caller must know)
 
 - A module compared with its children flattened and flops on more than one
   clock: "error". Name the children of each clock domain in `same`.
-- A clock that reaches a flop through an inverter, a mux that is not tied or a
-  divider; flops on both edges of one clock; latches; two asynchronous resets;
-  interface ports: "error".
-- A renamed chain of more than five registers, and a rewrite that keeps the name
-  of an internal signal but changes what it carries: "refuted".
+- A clock that reaches a flop through a mux that is not tied or a divider; flops
+  on both edges of one clock; latches; an asynchronous set together with a reset
+  on one flop; interface ports: "error". An inverter on the clock is the other
+  edge, and flops with different asynchronous resets are compared (rules Z5 and
+  Z6 of tests/equiv/test_equiv_reset.py, which corrected this item).
+- A renamed chain of two or more registers, and a rewrite that keeps the name of
+  an internal signal but changes what it carries: "refuted". Before #137 the
+  chain could have five registers; one renamed register is still "proved".
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct
   port or of the order of the ports is "proved": the module computes the same,

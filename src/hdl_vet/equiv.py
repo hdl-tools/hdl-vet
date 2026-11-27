@@ -10,16 +10,18 @@ folder, runs Yosys on it, and writes its answer back to that folder. The parent 
 loads Yosys, so a crash or a time-out of the tool cannot reach the caller.
 
 Each side is read once, made into plain logic (unpacked arrays are mapped to flops), and
-written as a netlist. The checks below read that netlist. The proof flow is `async2sync`,
+written as a netlist. The checks below read that netlist. The proof flow is `clk2fflogic`,
 `equiv_make`, `equiv_simple -undef -seq 5`, `equiv_induct -undef -seq 5` and
 `equiv_status -assert`. Only a complete, explicit proof is "proved".
 
 What the engine does so that "proved" is true
 - Undefined values (`-undef`): x in the gate, or a net nobody drives, is a difference. x in the
   gold means that the gate may have any value.
-- Clocks: the proof flow treats every flop as if one common clock drove it and ignores the clock
-  input. So every flop of both sides must be clocked by one input port, with one edge, the same on
-  both sides, after the ties are applied. Else the answer is "refuted" or "error".
+- Clocks: `clk2fflogic` makes every flop logic around a state cell that steps with a global clock, and
+  the clock of the design is an input like the others. A step is half a clock period or a pulse: in a
+  step that is no clock edge the flops hold and an asynchronous reset, set or load still acts, so a
+  reset pulse between two edges is compared. Every flop of both sides must be clocked by one input
+  port, with one edge, the same on both sides, after the ties are applied. Else the answer is "refuted" or "error".
 - Initial values (`logic r = 1'b1;`, an `initial` block) on either side: "error", also when both
   sides are identical. The proof is by induction and has no start state.
 - Children named in `same`: the engine compares the module of each such instance, with
@@ -35,14 +37,26 @@ What the engine does so that "proved" is true
 - Names in `params` must be parameters of the module on both sides (checked with the reader of
   `hdl_vet.slang_adapter`, because Yosys drops an unknown name without a word).
 
-Stated limits (each gives "error" or "refuted", never a wrong "proved", except the last)
+Stated limits (each gives "error" or "refuted", except those that say "proved" or "wrong proved")
 - Flops on more than one clock, when the module is compared with its children flattened:
   "error". Name the children of each clock domain in `same`.
-- A clock that reaches a flop through an inverter, a mux that is not tied or a divider, flops on
-  both edges of one clock, latches, two asynchronous resets, interface ports, and memories that
-  cannot be mapped to flops: "error".
-- A renamed chain of more than five registers, and a rewrite that keeps the name of an internal
-  signal but changes what it carries: "refuted".
+- A clock that reaches a flop through a mux that is not tied or a divider, flops on both edges
+  of one clock, latches, an asynchronous set together with a reset on one flop, interface ports,
+  and memories that cannot be mapped to flops: "error". A clock through an inverter is the other
+  edge of the input and is compared. Flops with different asynchronous resets are compared.
+- A step of the proof is half a clock period or a pulse, and the proof looks a fixed number of
+  steps back (`_SEQ`). A chain of two or more registers that are renamed between the two sides is
+  "refuted", also when the logic is the same: the clock is free, so the proof cannot take the
+  registers as unchanged. A single renamed register, and a rewrite that keeps the names, are
+  compared. A rewrite that keeps the name of an internal signal but changes what it carries:
+  "refuted".
+- A flop that reads its clock as data (the clock input reaches a data, enable or synchronous reset pin
+  through any logic, on either side): "error" that asks for a waiver. The proof takes the data from the
+  step before the edge, where the clock still has its old value. Such a module gives "error" for every edit.
+- A memory with an asynchronous reset makes the proof slower: 16 words of 8 bits take about 10 seconds,
+  64 words about two minutes, and more can reach the time limit ("error").
+- The first state of a flop is not compared. A gate that differs only before its first clock edge or its
+  first reset is a wrong "proved". The old model had this limit too.
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct port or of the
   order of the ports is "proved": the module computes the same, but a parent that connects by
@@ -587,15 +601,19 @@ def prepare_script(
     return "\n".join(lines) + "\n"
 
 
+# A step is half a clock period or a pulse of a reset, so this looks back half as far in clock cycles.
+_SEQ = 5
+
+
 def proof_script() -> str:
     """The proof flow (step 4 of the child). `-undef`: an x of the gold is free, an x of the gate is a difference."""
     lines = [
         "read_rtlil prepared.il",
-        "async2sync",
+        "clk2fflogic",
         "equiv_make gold gate equiv",
         "hierarchy -top equiv",
-        "equiv_simple -undef -seq 5",
-        "equiv_induct -undef -seq 5",
+        f"equiv_simple -undef -seq {_SEQ}",
+        f"equiv_induct -undef -seq {_SEQ}",
         "equiv_status -assert",
     ]
     return "\n".join(lines) + "\n"
@@ -605,8 +623,13 @@ def undefined_script(module: str) -> str:
     """The gold against itself: its undriven nets as 0 on one side and as free, independent bits on the other."""
     lines = ["read_rtlil gold.il", f"rename {module} gold", "setundef -undriven -zero", "design -stash gold"]
     lines += ["read_rtlil gold.il", f"rename {module} gate", "setundef -undriven -anyseq", "design -stash gate"]
-    lines += ["design -copy-from gold -as gold gold", "design -copy-from gate -as gate gate", "async2sync"]
-    lines += ["equiv_make gold gate equiv", "hierarchy -top equiv", "equiv_simple -seq 5", "equiv_induct -seq 5"]
+    lines += ["design -copy-from gold -as gold gold", "design -copy-from gate -as gate gate", "clk2fflogic"]
+    lines += [
+        "equiv_make gold gate equiv",
+        "hierarchy -top equiv",
+        f"equiv_simple -seq {_SEQ}",
+        f"equiv_induct -seq {_SEQ}",
+    ]
     lines += ["equiv_status"]
     return "\n".join(lines) + "\n"
 
@@ -721,6 +744,59 @@ def _clock_verdict(gold: Mapping[str, Any], gate: Mapping[str, Any]) -> tuple[st
     if gold_clocks and gate_clocks and gold_clocks != gate_clocks:
         was, now = next(iter(gold_clocks)), next(iter(gate_clocks))
         return "refuted", f"the clock differs: {was} in the gold, {now} in the gate"
+    return None
+
+
+_ASYNC_PINS = ("ARST", "SET", "CLR", "ALOAD")
+
+
+def _clock_as_data(side: Mapping[str, Any]) -> str | None:
+    """The name of an input that is the clock of a flop and also reaches a data pin of a flop (Z7), else None.
+
+    The proof takes the data of a flop from the step before the edge, where the clock still has its old
+    value, so a flop that reads its clock is not judged. The clock is an input that reaches a CLK pin through
+    buffers alone (as in `_clocks`). Data pins are all pins of a flop but the clock, the output and the
+    asynchronous ones. The walk goes forward through combinational cells and follows the netlist and not the
+    logic. A child that is not a Yosys primitive is not entered.
+    """
+    reads: dict[int, list[int]] = {}  # an input bit of a combinational cell -> its output bits
+    buffered: dict[int, list[int]] = {}  # the same, for buffers only
+    clocks: set[int] = set()
+    data: set[int] = set()
+    for cell in side["cells"].values():
+        kind = str(cell["type"])
+        if not kind.startswith("$"):
+            continue
+        pins = {pin: [b for b in bits if isinstance(b, int)] for pin, bits in cell["connections"].items()}
+        if _FLOP.match(kind):
+            clocks.update(pins.get("CLK", []))
+            data.update(b for pin, bits in pins.items() if pin not in ("CLK", "Q", *_ASYNC_PINS) for b in bits)
+            continue
+        directions = cell.get("port_directions", {})
+        outs = [b for pin, bits in pins.items() if directions.get(pin) == "output" for b in bits]
+        for pin, bits in pins.items():
+            if directions.get(pin) != "output":
+                for bit in bits:
+                    reads.setdefault(bit, []).extend(outs)
+                    if kind in ("$buf", "$_BUF_"):
+                        buffered.setdefault(bit, []).extend(outs)
+
+    def reach(start: int, graph: Mapping[int, list[int]]) -> set[int]:
+        seen: set[int] = set()
+        todo = [start]
+        while todo:
+            bit = todo.pop()
+            if bit not in seen:
+                seen.add(bit)
+                todo += graph.get(bit, [])
+        return seen
+
+    for name, port in side["ports"].items():
+        if port["direction"] != "input":
+            continue
+        for index, bit in enumerate(port["bits"]):
+            if isinstance(bit, int) and reach(bit, buffered) & clocks and reach(bit, reads) & data:
+                return name if len(port["bits"]) == 1 else f"{name}[{index}]"
     return None
 
 
@@ -1011,6 +1087,10 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
     clock_answer = _clock_verdict(gold_clean, gate_clean)
     if clock_answer is not None:
         return clock_answer
+    for side in (gold_clean, gate_clean):
+        read = _clock_as_data(side)
+        if read is not None:
+            return "error", f"the clock {read} is read as data by a flop: the check cannot judge it; give a waiver"
     code, log = _run_yosys(proof_script(), "proof")
     status, detail = _verdict(code, log, gold_ports)
     if status == "proved" and (_has_undefined(gold_side) or _undefined_sources(gold_side)):
