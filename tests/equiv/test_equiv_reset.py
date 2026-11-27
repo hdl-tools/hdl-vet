@@ -56,8 +56,8 @@ STATED LIMITS
   "error" for every logic edit. Such an edit needs a waiver.
 - The proof is slower for a memory with an asynchronous reset. 16 words of 8 bits take about
   10 seconds, 64 words about two minutes, and more can reach the time limit, which is "error".
-- The first state of a flop is not compared. A gate that differs only before its first clock
-  edge or its first reset is "proved". The old model had this limit too.
+- The first state of a flop was not compared when this was written. Since #139 the proof has a
+  first step for it: see tests/equiv/test_equiv_first.py.
 
 - A step of the proof is now half a clock period or a pulse, and the proof looks a fixed number
   of steps back. A rewrite that needs more of them than before can be "refuted" where it was

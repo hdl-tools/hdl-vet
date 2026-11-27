@@ -290,8 +290,9 @@ compared with it inside.
 
 With the enables at 0, every output of the edited module equals the same output of the
 input module. The proof has no start state. It holds from every state of the registers.
-Yosys proves it by induction. It does not simulate. Only a complete proof gives
-\code{proved}.
+Yosys proves it by induction and does not simulate. After the proof the check compares one
+more step, in which every register starts with an undefined value. Only a complete proof
+gives \code{proved}.
 
 The check can give three answers:
 

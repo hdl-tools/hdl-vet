@@ -12,7 +12,8 @@ loads Yosys, so a crash or a time-out of the tool cannot reach the caller.
 Each side is read once, made into plain logic (unpacked arrays are mapped to flops), and
 written as a netlist. The checks below read that netlist. The proof flow is `clk2fflogic`,
 `equiv_make`, `equiv_simple -undef -seq 5`, `equiv_induct -undef -seq 5` and
-`equiv_status -assert`. Only a complete, explicit proof is "proved".
+`equiv_status -assert`, then the first step (`sat` on a miter, every flop undefined). Only a complete,
+explicit proof is "proved".
 
 What the engine does so that "proved" is true
 - Undefined values (`-undef`): x in the gate, or a net nobody drives, is a difference. x in the
@@ -55,8 +56,22 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   step before the edge, where the clock still has its old value. Such a module gives "error" for every edit.
 - A memory with an asynchronous reset makes the proof slower: 16 words of 8 bits take about 10 seconds,
   64 words about two minutes, and more can reach the time limit ("error").
-- The first state of a flop is not compared. A gate that differs only before its first clock edge or its
-  first reset is a wrong "proved". The old model had this limit too.
+- The first state of a flop is compared in one step, after a proof that is "proved" (`first_script`):
+  every flop of both sides starts undefined, every input is defined, and the outputs must agree by the
+  rule for undefined values. A difference there is "refuted" ("first state" in the detail). The cells
+  `$specify2`, `$specify3`, `$specrule` and `$print` are taken out first; a run that fails,
+  except by the time limit, is an "error" that starts with "the first state could not be checked: ".
+  The step is one step, so a gate
+  that differs only in a later step from a state the induction does not ask about is still a wrong
+  "proved", for example `q = g ^ a` where the gate differs from the gold only from the second step on
+  (a wrong "proved"). An undefined value does not cancel there (`a ^ a` of a flop `a` with no reset is
+  "refuted" against 0). I7: the step is skipped when neither side has a cell that keeps state (a flop, a
+  latch, a memory or another state primitive); an instance of a black box does not count. I8: `opt_merge`
+  runs before `sat`, so that two equal copies of the same logic are one cell. The step can still reach
+  the time limit when an edit rewrites arithmetic in front of a wide multiplier; the detail then says
+  "timed out" (the whole run is stopped, so that detail has no "the first state could not be checked: "
+  prefix). A design with a memory was not
+  measured.
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct port or of the
   order of the ports is "proved": the module computes the same, but a parent that connects by
@@ -115,7 +130,7 @@ _VALUE = re.compile(r"[A-Za-z0-9_'.+\-]+\Z")
 _MACRO_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _MOUNT = "/hostfs_"  # POSIX: the child sees the top-level folder NAME of the host as /hostfs_NAME (see `_Seen`)
 _MOUNT_IN_TEXT = re.compile(r"/hostfs_([^/\s'\"]+)")
-_FILES = re.compile(r"(?<![\w/.-])((?:gold|gate)(?:_h|_w)?\.(?:f|json|il)|prepared\.il|check\.json)(?!\w)")
+_FILES = re.compile(r"(?<![\w/.-])((?:gold|gate)(?:_h|_w)?\.(?:f|json|il)|prepared\.(?:il|json)|check\.json)(?!\w)")
 _REPORT_TIMEOUT = 30.0  # seconds for the report of undefined values, apart from the timeout of the proof
 _MAX_DETAIL = 300
 _LOCK = threading.Lock()
@@ -574,6 +589,10 @@ def ports_script(module: str, params: Mapping[str, str], same: Sequence[str]) ->
     return "\n".join(lines) + "\n"
 
 
+# Cells that `sat` has no model for (`equiv_simple` and the first step use it): specify cells and `$display`.
+_NO_LOGIC = "delete t:$specify2 t:$specify3 t:$specrule t:$print"
+
+
 def prepare_script(
     module: str,
     free: Mapping[str, int],
@@ -597,7 +616,14 @@ def prepare_script(
         bits = format(value, "b").zfill(width)
         lines += ["cd gate", f"delete -port w:{name}", f"connect -set {name} {width}'b{bits}", "cd .."]
     lines += [f"delete -port gate/{name}" for name in drop]
-    lines += ["write_rtlil prepared.il", "opt_expr", "opt_clean", "write_json check.json"]
+    lines += [
+        _NO_LOGIC,
+        "write_rtlil prepared.il",
+        "write_json prepared.json",
+        "opt_expr",
+        "opt_clean",
+        "write_json check.json",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -617,6 +643,38 @@ def proof_script() -> str:
         "equiv_status -assert",
     ]
     return "\n".join(lines) + "\n"
+
+
+def first_script() -> str:
+    """The first step (#139): every flop starts undefined, every input is defined, one step, outputs compared.
+
+    The specify cells and `$print` are already out (`_NO_LOGIC`, in the prepare step). Any other cell that
+    `sat` has no model for is an "error" of the run.
+    """
+    lines = [
+        "read_rtlil prepared.il",
+        "clk2fflogic",
+        "miter -equiv -ignore_gold_x -flatten -make_outputs gold gate miter",
+        "hierarchy -top miter",
+        "opt_merge",
+        "sat -verify -prove trigger 0 -seq 1 -set-init-undef -set-def-inputs -enable_undef miter",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+_FIRST_OK = "SAT proof finished - no model found: SUCCESS!"
+_FIRST_FAIL = "SAT proof finished - model found: FAIL!"
+
+
+def _first_state() -> tuple[str, str] | None:
+    """None when the first step proves the outputs equal; else the "error" or "refuted" answer."""
+    code, log = _run_yosys(first_script(), "first")
+    # shortcut: only the two Yosys sentences decide; a log with both, or neither, is an error.
+    if _FIRST_FAIL in log and _FIRST_OK not in log:
+        return "refuted", "differs in the first state of a flop (every flop starts undefined)"
+    if code == 0 and _FIRST_OK in log and _FIRST_FAIL not in log:
+        return None
+    return "error", "the first state could not be checked: " + _problem(log)
 
 
 def undefined_script(module: str) -> str:
@@ -684,6 +742,13 @@ _STATE_CELLS = frozenset({"$ff", "$sr", "$anyinit", "$initstate"})
 _FLOP = re.compile(r"\$[a-z]*dff[a-z0-9]*\Z")
 
 
+def _keeps_state(kind: str) -> bool:
+    """True for a Yosys primitive that holds state; an instance of a black box (no `$`) does not."""
+    if not kind.startswith("$"):
+        return False
+    return bool(_FLOP.match(kind)) or kind.startswith(("$mem", "$fsm", "$_")) or "latch" in kind or kind in _STATE_CELLS
+
+
 def _clocks(loaded: Mapping[str, Any]) -> frozenset[str] | str:
     """The clocks of all flops of a module as `edge port[bit]` texts, or the reason they cannot be told.
 
@@ -711,8 +776,7 @@ def _clocks(loaded: Mapping[str, Any]) -> frozenset[str] | str:
             return f"the cell {cell_name} is an instance of {kind}, which is not looked into"
         if not _FLOP.match(kind):
             # `$_...` are gate-level cells, which the reader never makes.
-            stateful = kind.startswith(("$mem", "$fsm", "$_")) or "latch" in kind or kind in _STATE_CELLS
-            if stateful or any("CLK" in str(port) for port in cell["connections"]):
+            if _keeps_state(kind) or any("CLK" in str(port) for port in cell["connections"]):
                 return f"the cell {cell_name} is a {kind}: only flops are supported"
             continue
         clock = cell["connections"].get("CLK")
@@ -1093,6 +1157,15 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
             return "error", f"the clock {read} is read as data by a flop: the check cannot judge it; give a waiver"
     code, log = _run_yosys(proof_script(), "proof")
     status, detail = _verdict(code, log, gold_ports)
+    # The first step reads prepared.il, which still has the flops that the clean-up of check.json drops.
+    before_clean = (_load("prepared.json", "gold"), _load("prepared.json", "gate"))
+    if status == "proved" and (
+        None in before_clean
+        or any(_keeps_state(str(c["type"])) for side in before_clean if side for c in side["cells"].values())
+    ):
+        first = _first_state()
+        if first is not None:
+            return first
     if status == "proved" and (_has_undefined(gold_side) or _undefined_sources(gold_side)):
         Path("report.wanted").write_text("", encoding="utf-8")  # the parent runs the report, with its own budget
     return status, detail
