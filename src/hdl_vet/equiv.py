@@ -99,6 +99,13 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   could not be made, and the sign-off (`prove.py`) counts that answer as an "error".
   The report does not see an undefined value of the gold that cancels (`u ^ u`). The one that a
   division by zero makes is not seen either, but it counts through its cell, as a select does.
+- A combinational loop (#143): before the proof, the netlist of each side (gold first, after the ties and
+  the clean-up) is searched for a path from a cell output back to one of its inputs that passes no flop.
+  A loop on either side, also the same on both, is an "error" ("combinational loop", the side, a net name).
+  Bit by bit are `&`, `|`, `^`, `~`, a mux and a buffer; any other cell takes every output bit from every
+  input bit, so a vector that feeds its low bits into an adder is an "error" although it is no loop. A
+  child that is flattened is looked through; a black box (`same=`) cuts the path, so a loop through it is
+  not seen. A loop that the clean-up removes is not reported. A loop on purpose needs a waiver.
 - Checks run one at a time (a lock). The lock holds for the threads of one process, not for two
   processes.
 """
@@ -864,6 +871,65 @@ def _clock_as_data(side: Mapping[str, Any]) -> str | None:
     return None
 
 
+_BITWISE = frozenset({"$and", "$or", "$xor", "$xnor", "$not", "$pos", "$buf", "$mux"})
+
+
+def _loop_net(side: Mapping[str, Any]) -> str | None:
+    """A net name of a combinational loop (Q1), "?" when the loop has no name, None when there is none.
+
+    The graph runs over net bits. A cell that keeps state and a cell that is not a Yosys primitive add no
+    edge. The cells in `_BITWISE` with equal widths on all pins go bit by bit (a mux: the select feeds
+    every bit); any other cell makes every output bit from every input bit.
+    """
+    edges: dict[int, list[int]] = {}
+    for cell in side["cells"].values():
+        kind = str(cell["type"])
+        if not kind.startswith("$") or _keeps_state(kind):
+            continue
+        directions = cell.get("port_directions", {})
+        pins = cell["connections"]
+        outs = [pin for pin in pins if directions.get(pin) == "output"]
+        ins = [pin for pin in pins if directions.get(pin) != "output"]
+        width = len(pins[outs[0]]) if outs else 0
+        if kind in _BITWISE and len(outs) == 1 and all(len(pins[p]) == width for p in ins if p != "S"):
+            for i in range(width):
+                for pin in ins:
+                    source = pins[pin][0] if pin == "S" else pins[pin][i]
+                    if isinstance(source, int) and isinstance(pins[outs[0]][i], int):
+                        edges.setdefault(source, []).append(pins[outs[0]][i])
+        else:
+            targets = [b for pin in outs for b in pins[pin] if isinstance(b, int)]
+            for pin in ins:
+                for source in pins[pin]:
+                    if isinstance(source, int):
+                        edges.setdefault(source, []).extend(targets)
+    state: dict[int, int] = {}  # 1 on the path, 2 finished
+    for root in edges:
+        if root in state:
+            continue
+        state[root] = 1
+        path = [(root, iter(edges[root]))]
+        while path:
+            bit, following = path[-1]
+            for nxt in following:
+                if state.get(nxt) == 1:
+                    return _loop_name(side, nxt)
+                if nxt not in state:
+                    state[nxt] = 1
+                    path.append((nxt, iter(edges.get(nxt, []))))
+                    break
+            else:
+                state[bit] = 2
+                path.pop()
+    return None
+
+
+def _loop_name(side: Mapping[str, Any], bit: int) -> str:
+    names = [n for n, info in side.get("netnames", {}).items() if bit in info["bits"]]
+    names.sort(key=lambda n: (n.startswith("$"), n))
+    return names[0] if names else "?"
+
+
 def _decide_ports(
     gold: Mapping[str, tuple[str, int]], gate: Mapping[str, tuple[str, int]], tie: Mapping[str, int]
 ) -> tuple[tuple[str, str] | None, dict[str, int], dict[str, tuple[int, int]], list[str]]:
@@ -1155,6 +1221,11 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
         read = _clock_as_data(side)
         if read is not None:
             return "error", f"the clock {read} is read as data by a flop: the check cannot judge it; give a waiver"
+    for label, side in (("gold", gold_clean), ("gate", gate_clean)):
+        net = _loop_net(side)
+        if net is not None:
+            where = "" if net == "?" else f" through {net}"
+            return "error", f"the {label} has a combinational loop{where}: the check cannot judge it; give a waiver"
     code, log = _run_yosys(proof_script(), "proof")
     status, detail = _verdict(code, log, gold_ports)
     # The first step reads prepared.il, which still has the flops that the clean-up of check.json drops.
