@@ -111,6 +111,23 @@ Items that say so were not checked by a test.
   there. The replacement back can still leave another
   parameter value or another connection, and that change is in the result.
 
+  The status \code{cancelled} of the log has limits. \apiname{Vet.punch_port} is
+  \apiname{Module.add_port} in each module and \apiname{Instance.connect} at each instance.
+  When \apiname{Module.remove_port} undoes it, the port records are cancelled. The connect
+  record has no partner and stays applied, although its connection went with the port.
+
+  \apiname{Instance.set_param} and \apiname{Instance.connect} back to the first value,
+  \apiname{Module.override_net} and \apiname{Module.insert_cell_on_net} have no operation
+  that undoes them as a pair. Their records stay applied.
+
+  A replacement pair that later calls on the same instance follow is cancelled without a
+  look at the design. The design of the middle does not exist. A removal of a thing of the
+  input design and the addition that puts it back are no pair, so both stay applied.
+
+  A raw splice is no record. A pair stays cancelled when a raw splice afterwards writes the
+  same thing again. After a resume, a record of the saved part is paired only when the module
+  has one thing of that kind with a check. With two, the records stay applied.
+
   No operation changes a port, so declare a change of width or direction with
   \apiname{Vet.expect}. After a pair that cancels, the structural check does not see a raw edit
   that declares the name again inside a generate block. The comparison of the module still

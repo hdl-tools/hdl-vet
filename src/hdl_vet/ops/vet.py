@@ -20,7 +20,7 @@ from hdl_vet.ops.module import Module
 from hdl_vet.ops.plans import _PlanOps
 from hdl_vet.ops.raw import _RawOps
 from hdl_vet.ops.scope import _Scope, _ScopeOps
-from hdl_vet.ops.text import _did_you_mean
+from hdl_vet.ops.text import _did_you_mean, _norm
 from hdl_vet.prove import LogicOp, Outside, Proof, prove
 from hdl_vet.session import Result, Session, SessionError, describe
 from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceInfo, ModuleInfo
@@ -39,6 +39,41 @@ def _is_diag_note(note: str) -> bool:
     """A note that `_conclude` made from a diagnostic ends in "]" and holds " [module "; no other note does
     (the `accept_types` note ends in a quote). The text alone tells, so a restored session needs no marker."""
     return note.endswith("]") and " [module " in note
+
+
+# op -> (kind of thing, +1 puts it in, -1 takes it out, 0 swaps it); the key of a check is (kind, module, name)
+_PAIR = {
+    "add_wire": ("wire", 1),
+    "remove_wire": ("wire", -1),
+    "add_assign": ("assign", 1),
+    "remove_assign": ("assign", -1),
+    "add_port": ("port", 1),
+    "remove_port": ("port", -1),
+    "add_param": ("param", 1),
+    "remove_param": ("param", -1),
+    "replace_module": ("replace_module", 0),
+}
+
+
+def _state(info: ModuleInfo, key: tuple[str, ...]) -> object:
+    """What the module `info` has of the thing `key`, as text without whitespace; None when it is not there."""
+    kind, name = key[0], key[2]
+    if kind == "wire":
+        return next((_norm(d.type_text) for d in info.decls if d.name == name), None)
+    if kind == "assign":
+        return sorted(_norm(a.right) for a in info.assigns if a.left == name)
+    if kind == "port":
+        return next(((p.direction, _norm(p.type_text), p.unpacked) for p in info.ports if p.name == name), None)
+    if kind == "param":
+        return next((_norm(p.type_text) + "=" + _norm(p.default or "") for p in info.params if p.name == name), None)
+    inst = next((i for i in info.instances if i.name == name), None)
+    if inst is None:
+        return None
+    return (
+        inst.module,
+        sorted((o.name or "", _norm(o.value)) for o in inst.param_overrides),
+        sorted((c.port or "", _norm(c.expr)) for c in inst.connections),
+    )
 
 
 def _take(seen: list[Design], design: Design) -> None:
@@ -102,6 +137,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         seen: list[Design] = []
         checks: list[Callable[[Design], str | None]] = [*self._evaluators(), partial(_take, seen)]
         result = self.session.finish([*self.session.scripts, *scripts], checks, self._proof())
+        self._cancel(seen[0] if seen else None)
         return replace(result, notes=self._kept_notes(seen))
 
     def _notes_since(self, first: int) -> list[str]:
@@ -149,6 +185,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
             seen: list[Design] = []
             checks: list[Callable[[Design], str | None]] = [*self._evaluators(), partial(_take, seen)]
             result = self.session.check([*self.session.scripts, *scripts], checks, self._proof())
+            self._cancel(seen[0] if seen else None)
             return replace(result, notes=self._kept_notes(seen))
         finally:
             self._dirty, self._all, self._added = dirty, everything, added
@@ -182,7 +219,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         self._sync()
         applied = [(str(n), str(h)) for n, h in scripts]
         extra = {
-            "log": [[r.op, r.target, r.status] for r in self.log],
+            "log": [[r.op, r.target, "applied" if r.status == "cancelled" else r.status] for r in self.log],
             "notes": list(self.notes),
             "checks": [{"key": list(c.key), "kind": c.kind, "args": list(c.args)} for c in self._checks],
             "swapped": [[mod, name, sorted(mods)] for (mod, name), mods in sorted(self._swapped.items())],
@@ -216,6 +253,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         except _DAMAGE as e:
             raise SessionError(f"{path}: the session archive is damaged ({type(e).__name__}: {e})") from e
         vet.log, vet.notes, vet._checks, vet._swapped = log, notes, checks, swapped
+        vet._keyed()
         return vet
 
     # --- selectors -----------------------------------------------------------------
@@ -415,8 +453,55 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
             out[host] = flagged
         return out
 
-    def _record(self, op: str, target: str, status: str) -> None:
-        self.log.append(OpRecord(op, target, status))
+    def _record(self, op: str, target: str, status: str, key: tuple[str, ...] | None = None) -> None:
+        self.log.append(OpRecord(op, target, status, key))
+
+    def _cancel(self, final: Design | None) -> None:
+        """Decide again which records are "cancelled" (#57). The records of one thing are paired in order: an
+        addition with the next removal, a replacement with the next replacement. A removal with no addition
+        before it has no partner. A replacement pair is cancelled when the instance is in `final` as in the input
+        design, or when more replacements follow it (no design of the middle exists: a stated limit)."""
+        log = [replace(r, status="applied") if r.status == "cancelled" else r for r in self.log]
+        runs: dict[tuple[str, ...], list[int]] = {}
+        for i, r in enumerate(log):
+            if r.status == "applied" and r._key is not None and r.op in _PAIR:
+                runs.setdefault(r._key, []).append(i)
+        if final is not None:
+            for key, at in runs.items():
+                open_at: int | None = None  # an addition or a replacement that waits for its partner
+                for i in at:
+                    side = _PAIR[log[i].op][1]
+                    if open_at is None:
+                        # a removal that no addition stands before has no partner
+                        open_at = i if side >= 0 else None
+                        continue
+                    # an addition and its removal need no look at the design; a replacement pair does
+                    if side == -_PAIR[log[open_at].op][1] and (side != 0 or i != at[-1] or self._unchanged(key, final)):
+                        for j in (open_at, i):
+                            log[j] = replace(log[j], status="cancelled")
+                    open_at = None
+        self.log[:] = log
+
+    def _unchanged(self, key: tuple[str, ...], final: Design) -> bool:
+        """The thing `key` names is in `final` as in the input design (or is in neither)."""
+        try:
+            return _state(self.session.baseline.module(key[1]), key) == _state(final.module(key[1]), key)
+        except AdapterError:
+            return False
+
+    def _keyed(self) -> None:
+        """Give the records of a restored log their keys: a thing is known when the module has one such check."""
+        for i, r in enumerate(self.log):
+            if r._key is not None or r.op not in _PAIR:
+                continue
+            kind = _PAIR[r.op][0]
+            keys = [
+                c.key
+                for c in self._checks
+                if c.key[0] == kind and (".".join(c.key[1:]) if kind == "replace_module" else c.key[1]) == r.target
+            ]
+            if len(keys) == 1:
+                self.log[i] = replace(r, _key=keys[0])
 
     # --- checked operations, groups ---------------------------------------------------
 

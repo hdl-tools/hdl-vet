@@ -187,7 +187,7 @@ class _PlanOps(_VetHost):
         if plan.check is not None:
             self._set_check(plan.check)
         if not plan.quiet:
-            self._record(plan.op, plan.target, "applied")
+            self._record(plan.op, plan.target, "applied", plan.check.key if plan.check else None)
 
     def _plan_add_port(
         self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str], width: str | None = None
