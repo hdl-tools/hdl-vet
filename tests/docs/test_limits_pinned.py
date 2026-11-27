@@ -24,9 +24,11 @@ P6  A hierarchical path through an instance with an escaped name works when the 
     as the design prints it, with the backslash and the blank after the name. The spelling
     without them is refused. (The chapter said that such a path is refused.)
 
-Not pinned here: what `Instance.replace_module` does with a module that has an interface port.
-The chapter says it refuses one. A port that is an interface with no modport is not refused; that
-is a defect with its own issue, and the sentence of the chapter stays until it is decided.
+Pinned in another file: what `Instance.replace_module` does with a module that has an interface
+port. The chapter says it refuses one. When this file was written, a port that is an interface
+with no modport was not refused (#141). It is refused since #148, and the rules F1 to F10 of
+tests/ops/test_replace_interface.py and tests/ops/test_replace_interface_review.py pin the
+sentence of the chapter.
 """
 
 from __future__ import annotations
