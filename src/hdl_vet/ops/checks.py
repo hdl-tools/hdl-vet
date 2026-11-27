@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,33 @@ def _ev_override_net(session: Session, a: tuple[Any, ...], design: Design) -> st
     # The text may have been edited by hand since (the proof judges what it does), so only the mux is looked for.
     if not any(x.left == net and {enable, keep} <= set(tokens(x.right)) for x in m.assigns):
         return f"override_net {mod} {net}: no assignment of {net} uses {enable} and {keep} any more"
+    return None
+
+
+def _ev_insert_cell_on_net(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, net, _enable, _waiver, name, cell, keep, wires, params, keep_type = a
+    label = f"insert_cell_on_net {mod}.{net}"
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(label)
+    inst = next((i for i in m.instances if i.name == name), None)
+    if inst is None:
+        return f"{label}: the instance {name!r} is not in the final design"
+    if inst.module != cell:
+        return f"{label}: the instance {name!r} is of {inst.module!r}, expected {cell!r}"
+    have = {c.port: c.expr for c in inst.connections}
+    for pin, expr in json.loads(wires).items():
+        if pin not in have or not _same(have[pin], expr):
+            return f"{label}: pin {pin!r} of {name!r} expected {expr!r}, found {have.get(pin)!r}"
+    expected = json.loads(params)
+    over = {o.name: o.value for o in inst.param_overrides}
+    if over.keys() != expected.keys() or not all(_same(over[k], x) for k, x in expected.items()):
+        return f"{label}: the parameters of {name!r} expected {expected!r}, found {over!r}"
+    decl = next((d for d in m.decls if d.name == keep), None)
+    if decl is None:
+        return f"{label}: the declaration of {keep!r} is not in the final design"
+    if not _same(decl.type_text, keep_type):
+        return f"{label}: {keep!r} expected type {keep_type!r}, found {decl.type_text!r}"
     return None
 
 
@@ -205,6 +233,7 @@ _EVALUATORS: dict[str, tuple[Callable[[Session, tuple[Any, ...], Design], str | 
     "add_wire": (_ev_add_wire, 3),
     "add_assign": (_ev_add_assign, 3),
     "override_net": (_ev_override_net, 6),
+    "insert_cell_on_net": (_ev_insert_cell_on_net, 10),
     "propagate_param": (_ev_propagate_param, 3),
     "remove_instance": (_ev_remove_instance, 2),
     "remove_wire": (_ev_remove_wire, 2),

@@ -320,7 +320,8 @@ def test_the_example_design_is_the_planners():
         "rtl/periph_wrap.sv",
         "rtl/soc_top.sv",
     ]
-    assert sorted(p.name for p in (EXAMPLES / "cells").iterdir()) == ["tech_rst_sync.sv"]
+    # `tech_iso.sv` came with `insert_cell_on_net` (#41): the example needs a cell that is off at 0.
+    assert sorted(p.name for p in (EXAMPLES / "cells").iterdir()) == ["tech_iso.sv", "tech_rst_sync.sv"]
     files = sorted(
         p.relative_to(EXAMPLES).as_posix()
         for folder in ("design", "regenerated")

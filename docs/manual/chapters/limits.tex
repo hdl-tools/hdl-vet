@@ -243,6 +243,29 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   array or a generate loop. Or the child has a new port other than the enable pins. hdl-vet then
   compares the module with the child inside. This holds for the interface only, never for a
   pin that is not 0.
+\item \textbf{A cell is off when its enable pin is 0.} \apiname{Module.insert_cell_on_net}
+  proves the edited module equal to the input module with the enable at 0. A cell whose
+  bypass is active at 1 is \code{refuted}. Wrap it in a module that inverts the pin, or
+  give a waiver.
+\item \textbf{A cell that the check cannot judge.} A clock gate with a latch is an
+  \code{error}, and the call needs a waiver.
+\item \textbf{A cell at the driver.} \apiname{Module.insert_cell_on_net} puts the cell at
+  the driver, so every reader of the net is behind it. A cell in front of one reader only
+  is not this operation.
+\item \textbf{A cell with a port that is not plain.} A cell with an interface port, a
+  non-ANSI port list or a port list from a macro is refused.
+\item \textbf{A net with two widths.} \apiname{Module.insert_cell_on_net} refuses a net
+  whose width is not the same in every elaboration of the module.
+\item \textbf{A loop that a raw splice writes.} The engine says \code{proved} for a
+  combinational loop that can hold more than one value.
+  \apiname{Module.insert_cell_on_net} does not write one, because it refuses a connection
+  that reads the net. A raw splice that writes a loop is not caught.
+\item \textbf{A type as a parameter value.} A value in \code{params} that is a type, for
+  a type parameter, is refused, because it is no expression.
+\item \textbf{A new instance in the same run.} An operation on the instance that
+  \apiname{Module.insert_cell_on_net} wrote, such as \apiname{Instance.connect} or
+  \apiname{Instance.replace_module}, is refused for the rest of the run. The top does not
+  know the instance, also after the design is loaded again.
 \item \textbf{A loop through other nets.} \apiname{Module.override_net} refuses a value
   that reads the net itself. It also refuses one that reads a name which the net drives
   inside the same module. The walk follows every driver of a name, with two exceptions.
