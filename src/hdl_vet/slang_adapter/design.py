@@ -48,6 +48,7 @@ class Design(_DiagnosticsOps, _SnapshotOps, _HierRefOps, _ModelOps, _PinOps):
         self._udps: frozenset[str] | None = None
         self._instance_cache: tuple[Any, ...] | None = None
         self._modules: dict[str, ModuleInfo] = {}
+        self._ifc_ports: dict[str, frozenset[str]] = {}
         self._buffer_paths: dict[int, Path | None] = {}
         self._buffer_texts: dict[int, bytes] = {}
 

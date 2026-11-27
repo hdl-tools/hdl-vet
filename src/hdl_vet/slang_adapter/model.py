@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from hdl_vet.slang_adapter.records import (
 )
 from hdl_vet.slang_adapter.text import _clean_text, _first_token, _items, _text, _tokens_of, tokens
 
+_PROBE = "__hdlvet_probe"  # the helper module of `interface_ports`
 _DIRECTIVES = {
     "IfDefDirective": "`ifdef",
     "IfNDefDirective": "`ifndef",
@@ -266,6 +268,56 @@ class _ModelOps(_DesignHost):
         return frozenset(
             d.name for d in self._comp.getDefinitions() if getattr(d, "definitionKind", None) == dk.Interface
         )
+
+    def interface_ports(self, name: str) -> frozenset[str]:
+        """Names of the ports of module `name` that the compiler resolved to an interface (with or without a modport).
+
+        The module need not be instantiated: it is elaborated as the top of a second compilation of the same
+        syntax trees. Raises AdapterError when it cannot be elaborated.
+        """
+        if name in self._ifc_ports:
+            return self._ifc_ports[name]
+        if name == _PROBE:
+            raise AdapterError(f"module {name!r}: the name is taken by the tool, rename the module")
+        info = self.module(name)
+        # A module with a parameter that has no default cannot be a top. A wrapper instantiates it with a legal
+        # value for each such parameter (`1`, or `logic` for a type): the kind of a port does not depend on the value.
+        # A value that fails a check of the body only adds a diagnostic of the probe, which nobody reads.
+        bs = "\\"  # an escaped identifier takes any name
+        given = ", ".join(
+            f".{bs}{p.name} ({'logic' if info.param_kinds.get(p.name) == 'type' else '1'})"
+            for p in info.params
+            if p.default is None and info.param_kinds.get(p.name) != "local"
+        )
+        text = f"module {_PROBE};\n  {bs}{name} #({given}) __p ();\nendmodule\n"
+        # An option bag of its own: the shared one is not touched (restoring its parameter overrides crashes pyslang).
+        driver = pyslang.driver.Driver()
+        driver.addStandardArgs()
+        if not driver.parseCommandLine("slang -", pyslang.driver.CommandLineOptions()) or not driver.processOptions():
+            raise AdapterError("slang rejected its default options")
+        bag = driver.createOptionBag()
+        opts = bag.compilationOptions
+        opts.topModules = {_PROBE}
+        bag.compilationOptions = opts
+        comp = pyslang.ast.Compilation(bag)
+        for tree in self._trees.values():
+            comp.addSyntaxTree(tree)
+        comp.addSyntaxTree(
+            pyslang.syntax.SyntaxTree.fromText(text, self._sm, "probe.sv", f"__hdlvet_probe_{uuid.uuid4().hex}.sv")
+        )
+        root = comp.getRoot()
+        found: frozenset[str] | None = None
+        inst = None
+        if root.topInstances:
+            inst = root.topInstances[0].body.find("__p")
+            if inst is not None:
+                sym = pyslang.ast.SymbolKind
+                found = frozenset(p.name for p in inst.body.portList if p.kind == sym.InterfacePort)
+        del inst, root, comp  # the symbols go before their compilation
+        if found is None:  # an answer that is not known is not "no interface port"
+            raise AdapterError(f"module {name!r}: cannot be elaborated to read its ports")
+        self._ifc_ports[name] = found
+        return found
 
     def module(self, name: str) -> ModuleInfo:
         info = self._modules.get(name)
