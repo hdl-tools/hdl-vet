@@ -165,6 +165,7 @@ class _PlanOps(_VetHost):
             self._record(plan.op, plan.target, "skipped")
             return
         assert plan.path is not None  # noqa: S101 - every plan that is not skipped names its file
+        self._need_editable(f"{plan.op} {plan.target}", plan.path)
         self._queue(plan.path, plan.splices)
         if plan.forgets:
             self.session.drop_expects(plan.forgets)

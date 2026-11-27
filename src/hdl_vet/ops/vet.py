@@ -375,13 +375,16 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         for start, end, text in splices:
             self.session._queue_edit(path, start, end, text, old=data[start:end])
 
-    def _commit_all(self, op: str, plans: list[_Plan]) -> None:
+    def _need_editable(self, who: str, path: Path | None) -> None:
+        """Refuse, as `who` (the operation and its target), a file that this session may not edit."""
+        if path is not None and not self.session.is_editable(path):
+            raise VetError(f"{who}: cannot edit {path}: not editable in this session")
+
+    def _commit_all(self, op: str, plans: list[_Plan], who: str | None = None) -> None:
         """Commit validated plans; nothing is queued unless every file to edit is editable."""
-        bad = sorted(
-            {str(p.path) for p in plans if not p.skip and p.path is not None and not self.session.is_editable(p.path)}
-        )
-        if bad:
-            raise VetError(f"{op}: cannot edit {', '.join(bad)}: not editable in this session")
+        for p in plans:
+            if not p.skip:
+                self._need_editable(who or f"{op} {p.target}", p.path)
         for plan in plans:
             self._commit(plan)
 

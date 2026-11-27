@@ -224,7 +224,7 @@ class _HierOps(_VetHost):
                 raise VetError(f"{op}: {host}.{iname} is not elaborated under the top at a known path")
             expr = signal if (host == mods[0] and not out and signal is not None) else name
             plans.append(handle._plan_connect(inst, infos[child], where, name, expr, None))
-        self._commit_all(op, plans)
+        self._commit_all(op, plans, f"{op} {name}")
 
     def propagate_param(self, name: str, to: str, *, default: object | None = None) -> None:
         op = "propagate_param"
@@ -317,6 +317,6 @@ class _HierOps(_VetHost):
         else:
             found = self.session.loaded.snapshot().get(to)
             before = None if found is None else found.params.get(name)
-        self._commit_all(op, plans)
+        self._commit_all(op, plans, f"{op} {name}")
         if any(not p.skip for p in plans):
             self._set_check(_Check((op, name, to), op, (name, to, before)))
