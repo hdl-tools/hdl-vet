@@ -168,6 +168,7 @@ class Module:
             raise VetError(f"add_wire {mod}: the module header line ends inside a block comment")
         eol = _eol(data)
         text = info.body_indent.encode() + f"{type_text} {name};".encode() + eol
+        v._need_editable(f"add_wire {mod}", info.path)
         v._queue(info.path, [(nl + 1, nl + 1, text)])
         v._mark("decls", mod)
         v._added.setdefault(mod, {})[name] = ("decl", _norm(type_text))

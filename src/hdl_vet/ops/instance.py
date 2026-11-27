@@ -235,6 +235,7 @@ class Instance:
             splices = [(cur.open + 1, cur.end - 1, b"")]
         else:
             splices = [(cur.start, cur.end, f".{port}()".encode())]
+        v._need_editable(f"disconnect {self.target}", inst.path)
         v._queue(inst.path, splices)
         v._mark("conns", self._mod, self._name)
         for p in paths:

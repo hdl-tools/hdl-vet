@@ -390,6 +390,7 @@ def _widths(module: Module, info: ModuleInfo, exprs: list[str], fail: _Fail, op:
     at = start if not data[start : info.body_end].strip() else info.body_end
     names = [f"__vet_{i}" for i in range(len(exprs))]
     probe = " ".join(f"localparam int {n} = $bits(( {e} ));" for n, e in zip(names, exprs, strict=True))
+    v._need_editable(f"{op} {mod}", info.path)
     state = v._begin(f"{op} {mod}")
     try:
         v._queue(info.path, [(at, at, probe.encode() + _eol(data))])
