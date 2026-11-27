@@ -28,6 +28,7 @@ class _VetHost:
         _drove: list[tuple[str, str]]
         _scope: _Scope | None
         _script_dir: Path | None
+        _swapped: dict[tuple[str, str], set[str]]
         session: Session
 
         def _begin(self, label: str) -> _VetState: ...
