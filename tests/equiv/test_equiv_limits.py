@@ -6,6 +6,11 @@ the two sides differ by a harmless rewrite (`a` against `a & 1'b1`), so a compar
 judge the module would answer "proved". A test that fails means that the limit is gone or is
 stated wrongly, and the chapter has to change with it.
 
+A review of the tests asked for two things. Each "error" is tied to its construct by a part of
+its detail, because the comparison has other ways to an "error". And the body of V7 is `a - b`,
+which is not the same when two ports change places, so "proved" shows that the ports are matched
+by name.
+
 V1  A latch gives "error".
 V2  Flops on both edges of one clock give "error".
 V3  An asynchronous set together with an asynchronous reset on one flop gives "error".
@@ -58,6 +63,16 @@ CASES = {
 }
 
 
+# The answer must come from the construct, not from another way to an "error".
+DETAIL = {
+    "latch": "only flops are supported",
+    "both-edges": "more than one clock",
+    "set-and-reset": "multiple asynchronous loads unsupported",
+    "clock-mux": "clocked by something other than an input port",
+    "clock-divider": "clocked by something other than an input port",
+}
+
+
 def module(body: str, o: str) -> str:
     return f"module m ({PORTS});\n  assign o = {o};\n{body}endmodule\n"
 
@@ -67,6 +82,7 @@ def module(body: str, o: str) -> str:
 def test_a_module_that_the_check_cannot_model_is_an_error(tmp_path, case):
     result = run(tmp_path, (module(CASES[case], "a"),), (module(CASES[case], "a & 1'b1"),), "m")
     assert result.status == "error", (result.status, result.detail)
+    assert DETAIL[case] in result.detail, result.detail
 
 
 @needs_yosys
@@ -106,7 +122,7 @@ def test_a_parameter_with_a_string_value_is_an_error_at_the_sign_off(tmp_path, i
     assert "parameter S" in result.equivalence[0].detail, result.equivalence[0].detail
 
 
-BODY = "  assign y = a + b;\nendmodule\n"
+BODY = "  assign y = a - b;\nendmodule\n"
 CHANGES = {
     "port-order": (
         "module m (input logic [3:0] a, input logic [3:0] b, output logic [4:0] y);\n",
