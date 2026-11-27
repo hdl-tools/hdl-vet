@@ -14,7 +14,7 @@ S2  `set_param` to a value and back to the first value: both records stay "appli
 S3  A replacement pair that another replacement of the instance follows is "cancelled" with no
     look at the design, also when the way back left another parameter value.
 S4  A pair stays "cancelled" when a raw splice afterwards writes the same thing again. The
-    sign-off of that run fails.
+    sign-off of that run fails, by the check of the removal.
 S5  After a resume, two things of one kind in one module: the records of the saved part stay
     "applied".
 
@@ -149,6 +149,7 @@ def test_a_pair_stays_cancelled_when_a_raw_splice_writes_the_thing_again(vet):
     vet.splice(path, at, at, b"  logic w2;\n", waiver=WHY)
     result = vet.finish()
     assert not result.ok
+    assert "remove_wire top w2: the declaration is still there" in result.report(), result.report()
     assert [(op, status) for op, _, status in log(vet)][:2] == [("add_wire", "cancelled"), ("remove_wire", "cancelled")]
 
 

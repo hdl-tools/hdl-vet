@@ -6,13 +6,15 @@ replacement" and the list of what the tool does not edit. Each test shows that t
 a limit. A test that fails means that the limit is gone or is stated wrongly, and the chapter has
 to change with it.
 
-T1  An argument whose `repr` or `str` raises gives that Python error, and no `VetError`.
+T1  An argument whose `repr` or `str` raises gives that Python error, and no `VetError`. (The
+    chapter also names an iteration that raises. That is not tested here.)
 T2  A type that is a text is not parsed at the call. `logic x1; logic` for `add_wire` is taken,
     and the sign-off fails.
 T3  A value that is a text is not parsed at the call. `8;` for `set_param` is taken, and the
     sign-off fails.
 T4  The kind of `Vet.expect` and of `Vet.permit` is not compared with the kinds that exist: a
-    kind that is spelled wrong is taken.
+    kind that is spelled wrong is taken. For `expect` the sign-off then says that it did not
+    see the change. For `permit` nothing says so.
 T5  An instance with a positional parameter override is not edited: `set_param` refuses it.
 T6  After `replace_module`, `punch_port` through that instance still walks the design of the
     start of the run. It adds the port to the old module, and the sign-off fails (#149).
@@ -74,18 +76,26 @@ def test_an_argument_whose_repr_raises_gives_that_error(vet):
 def test_a_type_text_is_caught_only_at_the_sign_off(vet):
     vet.module("leaf").add_wire("w4", None, type="logic x1; logic")
     assert [(r.op, r.status) for r in vet.log] == [("add_wire", "applied")]
-    assert not vet.finish().ok
+    result = vet.finish()
+    assert not result.ok
+    assert "add_wire leaf w4" in result.report(), result.report()
 
 
 def test_a_value_text_is_caught_only_at_the_sign_off(vet):
     vet.module("top").instance("u").set_param("N", "8;", waiver=WHY)
     assert [(r.op, r.status) for r in vet.log] == [("set_param", "applied")]
-    assert not vet.finish().ok
+    result = vet.finish()
+    assert not result.ok
+    assert "new diagnostic" in result.report(), result.report()
 
 
 @pytest.mark.parametrize("call", ["expect", "permit"])
 def test_a_kind_that_is_spelled_wrong_is_taken(vet, call):
     getattr(vet, call)("prot-added", "top", "x")
+    result = vet.finish()
+    assert result.ok == (call == "permit"), result.report()
+    if call == "expect":
+        assert "expected change not seen: prot-added" in result.report(), result.report()
 
 
 def test_a_positional_parameter_override_is_not_edited(tmp_path):
@@ -122,5 +132,5 @@ def test_a_name_of_disabled_text_is_refused_as_a_new_name(tmp_path, name):
         vet.module("top").add_wire(name)
     message = str(caught.value)
     assert message.startswith("add_wire top: "), message
-    assert name in message, message
+    assert name in message and "disabled by" in message, message
     assert list(vet.log) == []
