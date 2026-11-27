@@ -52,7 +52,9 @@ Items that say so were not checked by a test.
     modules. So does another construct whose opening keyword pairs with the closing keyword
     of a declaration at file level.
   \item A \code{fork}, a covergroup, a property and a \code{specify} block are sorted
-    correctly. The comparison then gives \code{error}, because Yosys does not read them.
+    correctly. A \code{specify} block or a covergroup does not stop the comparison. A
+    harmless edit beside one is \code{proved}. A property with an assertion and a
+    \code{fork} give \code{error}, because Yosys does not read them.
   \item A module with a type parameter at another type than its default is \code{error}.
     On a large generated design, three of five leaf modules that were tried had one. A
     harmless raw splice there needs a waiver.
@@ -62,8 +64,9 @@ Items that say so were not checked by a test.
   \item \code{`__LINE__} changes when a line is added above it. The header line that hdl-vet
     writes into a changed file adds one.
   \item The comparison reads the sources as a synthesis tool does. It does not see a change
-    in what only a simulation runs: the text of a \code{$display}, a delay, an
-    \code{initial} block.
+    in what only a simulation runs. A changed text of a \code{$display} is \code{proved}.
+    A changed delay gives \code{error}. A changed value of an \code{initial} block is
+    never \code{proved}.
   \item The reader of Yosys defines \code{SYNTHESIS}. The load of hdl-vet does not. A run
     with \code{`ifdef SYNTHESIS} showed both: hdl-vet saw the \code{`else} branch, and
     Yosys the other one. A change in the \code{`else} branch was \code{proved}. A change in
@@ -122,13 +125,6 @@ Items that say so were not checked by a test.
   elaborated design cannot give them. Reading the drive strength of a primitive raises in
   pyslang 12.1.0 and in 12.2.0, which is reported upstream, and the elaborated delay
   carries no value.
-\item \textbf{More that the dangling check does not see.} The dangling check does not see
-  these things:
-  \begin{itemize}
-  \item an inout port
-  \item a new reader of a signal that had no driver already in the baseline
-  \end{itemize}
-  These two cases were not checked by a test. The specification of the check lists them.
 \item \textbf{A driver in a generate branch that is not taken.} The compiler counts an
   assignment inside a generate branch as a driver, also when the elaboration does not take
   that branch. The signal then has no driver in the design that is built, and the compiler
@@ -378,7 +374,8 @@ or with a raw splice.
   \end{itemize}
 \item modules that are not instantiated under the top module
 \item modules that come from an added file. hdl-vet never edits an added file.
-\item interface ports. \apiname{Vet.punch_port} refuses them and
+\item interface ports. \apiname{Vet.punch_port} refuses to take an interface port as its
+  \code{signal}. It does punch a plain new port into a module that has an interface port.
   \apiname{Instance.replace_module} refuses a module that has one. There is no operation
   that adds an interface port.
 \item a replacement (\apiname{Instance.replace_module}) by a module whose port has another
@@ -404,10 +401,11 @@ or with a raw splice.
   tree itself is right.
 \item \textbf{Escaped names in hierarchical paths.} An instance handle works with an
   escaped identifier, such as \texttt{\textbackslash u/esc}. A hierarchical path
-  that goes through such an instance does not work in the same way.
-  \apiname{Vet.punch_port} and \apiname{Vet.propagate_param} refuse such a path with an
-  error, and they edit nothing. \apiname{Vet.expect} and \apiname{Vet.permit} take the path as the design prints it, for
-  example \code{top.\m/esc .\l/esc }. Each escaped name ends with a blank.
+  that goes through such an instance works when you write it as the design prints it, for
+  example \code{top.\m/esc .\l/esc }. Each escaped name has a backslash before it and a
+  blank after it. \apiname{Vet.punch_port}, \apiname{Vet.propagate_param},
+  \apiname{Vet.expect} and \apiname{Vet.permit} take this spelling. The spelling without
+  the backslash and the blank is refused with an error, and nothing is edited.
 \item \textbf{What a call does not parse.} Every operation refuses an argument of a wrong
   type with a \code{VetError} where you call it (chapter~\ref{ch:operations}). Six things
   stay open:
