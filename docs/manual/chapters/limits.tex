@@ -274,6 +274,10 @@ undefined values. A waiver is the way to go on when the check cannot judge.
 \item \textbf{A loop that is none.} Through an adder, a comparison or a shift the loop
   check takes every output bit as made from every input bit. A vector that feeds its own
   lower bits into such a cell gives \code{error} although it has no loop.
+\item \textbf{A flop that loads its own output.} A flop with an asynchronous load passes
+  its load value to its output while the load is active. If the load value depends on the
+  output of the same flop, the loop check reports a loop. It does not ask whether the load
+  can be active. Such a module gives \code{error} for every edit.
 \item \textbf{A child that is not proved.} A module can have an override, and a child can
   have one too. If every comparison of the child is \code{proved}, the child is a black box
   in the comparison of the module. If the child is waived, refuted or not checked, hdl-vet
