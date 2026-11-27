@@ -56,6 +56,8 @@ Each word has one meaning in this manual.
 \item[skipped] An operation is \term{skipped} when the design already shows the
   result it asks for. A skipped operation changes nothing. This is why you can
   run a script a second time.
+\item[cancelled] Two applied operations are \term{cancelled} when the second undoes
+  the first and the design is the one it was. The sign-off decides it.
 \item[drift] The design is in a state that the operation does not expect. The state
   is neither the state before the edit nor the state after the edit. The operation
   stops with an error. Chapter~\ref{ch:scripts} explains how \code{was=} detects drift.

@@ -99,6 +99,7 @@ edit changes every copy. hdl-vet makes you confirm this.
 \end{itemize}
 
 \section{Applied and skipped}
+\label{sec:applied}
 
 Every operation looks at the design before it edits.
 
@@ -119,6 +120,20 @@ the script already changed. Nothing happens twice. The summary line,
 with \apiname{Vet.splice} is not an operation, and the summary line does not count it.
 The sign-off judges it, though: a raw splice needs a proof or a waiver
 (section~\ref{sec:rawsplice}).
+
+When two operations of the run undo each other, the sign-off marks both
+\term{cancelled}, and the line ends with \code{, K cancelled}. The pairs are
+\apiname{Module.add_wire} and \apiname{Module.remove_wire} of one name, the same for an
+assignment, a port and a parameter, and \apiname{Instance.replace_module} and the
+replacement back.
+
+The reverse order is no pair: a removal of a thing of the input design, and then the
+addition that puts it back. The addition writes the thing anew, and what hung on the first
+one does not come back. Both operations stay applied.
+
+A replacement back that leaves another parameter value or another connection keeps both
+operations applied. The records of one thing are paired in order, so three calls are one
+pair and one applied operation. The status does not change the result of the sign-off.
 
 \lstinputlisting[style=script]{examples/scripts/skipped.py}
 

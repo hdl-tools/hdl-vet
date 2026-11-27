@@ -25,7 +25,9 @@ The command line does this:
 The errors of the operations are \code{hdl_vet.ops.VetError}, and its subclass
 \code{DriftError}. A script can catch them (chapter~\ref{ch:operations} has an
 example). \code{vet.log} is the list of \code{OpRecord(op, target, status)}. The status is
-\code{"applied"} or \code{"skipped"}. \code{vet.notes} is the list of notes.
+\code{"applied"} or \code{"skipped"}, and after a sign-off (\code{finish} or \code{check})
+\code{"cancelled"} for two operations that undo each other (section~\ref{sec:applied}).
+A saved session holds no \code{"cancelled"}. \code{vet.notes} is the list of notes.
 
 \section{The calls}
 

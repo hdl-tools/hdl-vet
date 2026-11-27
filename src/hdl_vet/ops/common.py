@@ -18,7 +18,9 @@ class DriftError(VetError):
 class OpRecord:
     op: str
     target: str
-    status: str  # "applied" | "skipped"
+    status: str  # "applied" | "skipped" | "cancelled" (the sign-off decides the last one)
+    # The thing of an add, a remove or a replace, for the pairing at the sign-off. Not stored in an archive.
+    _key: tuple[str, ...] | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)

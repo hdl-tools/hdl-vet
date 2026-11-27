@@ -287,7 +287,10 @@ def _read_vet_state(
     index: dict[str, Any],
 ) -> tuple[list[OpRecord], list[str], list[_Check], dict[tuple[str, str], set[str]]]:
     """The Vet's own part of an archive's index, type-checked."""
-    log = [OpRecord(*(need_str(x) for x in need_list(e, 3))) for e in need_list(index["log"])]
+    log = []
+    for e in need_list(index["log"]):
+        op, target, status = (need_str(x) for x in need_list(e, 3))
+        log.append(OpRecord(op, target, status))
     notes = [need_str(n) for n in need_list(index["notes"])]
     checks = [_stored_check(c) for c in need_list(index["checks"])]
     if len({c.key for c in checks}) != len(checks):

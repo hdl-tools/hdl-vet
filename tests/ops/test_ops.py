@@ -777,14 +777,16 @@ def test_add_param_then_remove_param_leaves_no_stale_expectation(vet, kit):
 def test_a_pair_that_cancels_is_still_in_the_log(vet, kit):
     """Both operations ran, so both are logged. Neither is hidden because they cancelled.
 
-    `OpRecord.status` stays "applied" | "skipped": a third value would be a change to
-    what `vet apply` prints, and #57 asks only that the expectations cancel.
+    Before the sign-off both are "applied". The sign-off marks them "cancelled", the third
+    status that the owner decided on 2026-11-20 (tests/ops/test_cancelled.py has its rules).
+    An earlier form of this test said that the status stays "applied" | "skipped".
     """
     vet.module("mid").add_port("dft_en", "input")
     vet.module("mid").remove_port("dft_en")
+    assert {e.status for e in vet.log} == {"applied"}
     assert vet.finish().ok
     assert [(e.op, e.target) for e in vet.log] == [("add_port", "mid"), ("remove_port", "mid")]
-    assert {e.status for e in vet.log} <= {"applied", "skipped"}
+    assert {e.status for e in vet.log} == {"cancelled"}
 
 
 def test_removing_a_parameter_the_design_already_had_still_expects_the_change(vet, kit):
@@ -895,7 +897,8 @@ def test_add_wire_then_remove_wire_leaves_no_stale_check(vet: Vet) -> None:
     assert r.failed_checks == []
     assert r.ok, r.report()
     assert r.files == {}
-    assert statuses(vet) == [("add_wire", "top", "applied"), ("remove_wire", "top", "applied")]
+    # The sign-off marks the pair (the status `cancelled`, tests/ops/test_cancelled.py).
+    assert statuses(vet) == [("add_wire", "top", "cancelled"), ("remove_wire", "top", "cancelled")]
 
 
 def test_add_assign_then_remove_assign_leaves_no_stale_check(vet: Vet) -> None:
@@ -1036,9 +1039,10 @@ def test_a_wire_can_be_added_removed_and_added_again(vet: Vet) -> None:
     assert r.unmatched_expects == [], [str(e) for e in r.unmatched_expects]
     assert r.ok, r.report()
     assert edits(r.diff) == ["+  logic [3:0] t;"]
+    # The first two are a pair, and the third stands alone (rule C4 of tests/ops/test_cancelled.py).
     assert [(op, status) for op, _, status in statuses(vet)] == [
-        ("add_wire", "applied"),
-        ("remove_wire", "applied"),
+        ("add_wire", "cancelled"),
+        ("remove_wire", "cancelled"),
         ("add_wire", "applied"),
     ]
 

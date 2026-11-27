@@ -173,7 +173,7 @@ class Module:
         v._added.setdefault(mod, {})[name] = ("decl", _norm(type_text))
 
         v._set_check(_Check(("wire", mod, name), "add_wire", (mod, name, type_text, _judged_width(width))))
-        v._record("add_wire", mod, "applied")
+        v._record("add_wire", mod, "applied", ("wire", mod, name))
 
     def add_assign(self, target: str, expr: object, *, waiver: str | None = None) -> None:
         """`assign target = expr;`. An expression with logic in it needs a proof or a waiver (see `is_wiring`)."""
