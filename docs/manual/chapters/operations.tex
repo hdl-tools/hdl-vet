@@ -38,7 +38,8 @@ change. Each entry has the same points:
 \item A file is a file on disk. A path is a place in the hierarchy (chapter~\ref{ch:intro}).
 \item An operation checks every argument that is not a name where you call it. It stops with
   an error that starts with the operation and the module or instance, names the argument,
-  and queues nothing. A width is none, a number of 1 or more, or a text that is not blank.
+  and queues nothing. A width is none, a number of 1 or more, or a text that is one expression
+  or a range in brackets.
   A type is a text that is not blank. A value is a text, an int or a float, and never a bool
   or none. The expression of \apiname{Module.add_assign} and \apiname{Instance.connect} is
   one expression with no comment.
@@ -125,10 +126,13 @@ Operation & Edits the text of & \code{was} & Second run \\
   \code{input  logic [3:0] name}. The range comes from \code{width}:
   \begin{itemize}
   \item An integer greater than 1 gives \code{[N-1:0]}.
-  \item A string \code{W} gives \code{[W-1:0]}.
+  \item A string \code{W} gives \code{[W-1:0]}. A \code{W} of more than one name or number
+    is written in parentheses, as \code{[(N >> 1)-1:0]}.
   \item A string that starts with \code{[} gives that string as the range, as written.
   \item \code{None} or 1 gives no range.
   \end{itemize}
+  The sign-off fails if a string \code{W} gives a range below 1 bit in an instance
+  (\code{1-1}, or \code{\$clog2(N)} with \code{N} of 1).
   If the closing parenthesis is alone at the start of its line, the new port
   goes on a new line, indented like the last port. A comma follows the last
   port. Otherwise the text \code{, declaration} follows the last port. An empty
@@ -259,7 +263,8 @@ Operation & Edits the text of & \code{was} & Second run \\
 \item[Writes] The operation writes a declaration such as \code{logic [3:0] name;} on a
   new line directly below the line that ends the module header. It indents the
   declaration like the first line of the body. If the body is empty, it indents with two
-  blanks.
+  blanks. A \code{width} that is a text is read at the sign-off: it fails if the range
+  is below 1 bit in an instance.
 \item[Refused] hdl-vet refuses the operation in these cases:
   \begin{itemize}
   \item a name that is not a plain identifier, or is a keyword, or begins with a
@@ -531,7 +536,8 @@ before it changes anything.
   If you give \code{type} or \code{width}, the operation declares the port as
   \apiname{Module.add_port} does. If you give neither and there is a signal, the port
   takes the type of that signal as written (an output always has one). Without a signal
-  the input is a 1-bit \code{logic}.
+  the input is a 1-bit \code{logic}. A \code{width} that is a text is written and judged as for
+  \apiname{Module.add_port}.
 
   The type must mean the same in every module on the path. For this, you must write
   every identifier in the type as \code{pkg::NAME}. The operation refuses a type that

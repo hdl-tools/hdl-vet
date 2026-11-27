@@ -170,6 +170,30 @@ class _SnapshotOps(_DesignHost):
                         found[(str(p.name), str(p.targetType.type))] = None
         return list(found)
 
+    def packed_ranges(self, module: str, name: str) -> list[tuple[str, tuple[tuple[int, int], ...]]]:
+        """For each instance of `module`: (path, the packed dimensions of the port, net or variable `name`).
+
+        Only the dimensions that the declaration writes are given, outermost first: the walk stops at a typedef.
+        A dimension is (left, right) as declared, so `logic [-1:0] w` gives ((-1, 0),).
+        The tuple is empty when the symbol is not there or has no packed dimension, so a caller
+        cannot take "nothing read" for "good".
+        """
+        out: list[tuple[str, tuple[tuple[int, int], ...]]] = []
+        for sym in self._instances():
+            body = sym.body
+            if body.definition.name != module:
+                continue
+            dims: list[tuple[int, int]] = []
+            found = body.find(name)
+            t = None if found is None else getattr(found, "type", None)
+            # a type alias is where the declaration's own dimensions end: what is inside is the typedef's
+            while t is not None and t.kind == pyslang.ast.SymbolKind.PackedArrayType:
+                r = t.fixedRange
+                dims.append((r.left, r.right))
+                t = t.elementType
+            out.append((str(sym.hierarchicalPath), tuple(dims)))
+        return out
+
     def gate_snapshot(self) -> dict[str, InstanceSnap]:
         """The snapshot of the instances that are not module instances: primitives and checkers.
 

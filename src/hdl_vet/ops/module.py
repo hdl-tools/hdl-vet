@@ -20,6 +20,7 @@ from hdl_vet.ops.text import (
     _eol,
     _header_line_in_comment,
     _instance_name,
+    _judged_width,
     _list_gap,
     _norm,
     _range,
@@ -114,7 +115,7 @@ class Module:
         paths = self._confirm_instances("add_port")
         decl = f"{direction:<6} {type}{_range(width)} {name}"
         info = v._info(mod, [("ports", mod)])
-        v._commit(v._plan_add_port(mod, name, decl, info, paths))
+        v._commit(v._plan_add_port(mod, name, decl, info, paths, _judged_width(width)))
 
     def add_param(self, name: str, default: object, type: str = "int") -> None:
         v, mod = self.vet, self._name
@@ -171,7 +172,7 @@ class Module:
         v._mark("decls", mod)
         v._added.setdefault(mod, {})[name] = ("decl", _norm(type_text))
 
-        v._set_check(_Check(("wire", mod, name), "add_wire", (mod, name, type_text)))
+        v._set_check(_Check(("wire", mod, name), "add_wire", (mod, name, type_text, _judged_width(width))))
         v._record("add_wire", mod, "applied")
 
     def add_assign(self, target: str, expr: object, *, waiver: str | None = None) -> None:

@@ -24,6 +24,27 @@ def _module_of(design: Design, mod: str) -> ModuleInfo | None:
         return None
 
 
+def _width_failure(label: str, design: Design, mod: str, name: str, width: str | None) -> str | None:
+    """A width the operation wrote as `[W-1:0]` must not run upward in the last packed range of any instance (#130).
+
+    A range that cannot be read (no packed dimension) fails too, and says so: an error is better than a wrong ok.
+    """
+    if width is None:
+        return None
+    bad, unread = [], []
+    for path, dims in design.packed_ranges(mod, name):
+        if not dims:
+            unread.append(path)
+        elif dims[-1][0] < dims[-1][1]:  # the operation writes its range after the type, so it is the last one
+            bad.append(f"{path} (the range is [{dims[-1][0]}:{dims[-1][1]}])")
+    found = []
+    if unread:
+        found.append(f"the range of the width {width!r} cannot be read in {', '.join(unread)}")
+    if bad:
+        found.append(f"the width {width!r} is 0 or less in {', '.join(bad)}")
+    return f"{label}: {'; '.join(found)}" if found else None
+
+
 def _ev_add_file(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
     name, path = a
     mods = set(design.defined_in(Path(path)))
@@ -33,7 +54,7 @@ def _ev_add_file(session: Session, a: tuple[Any, ...], design: Design) -> str | 
 
 
 def _ev_add_port(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
-    mod, name, decl = a
+    mod, name, decl, width = a
     m = _module_of(design, mod)
     if m is None:
         return _MISSING.format(f"add_port {mod} {name}")
@@ -43,7 +64,7 @@ def _ev_add_port(session: Session, a: tuple[Any, ...], design: Design) -> str | 
     text = session.text(m.path)[port.start : port.end].decode("utf-8", errors="replace")
     if not _same(text, decl):
         return f"add_port {mod} {name}: expected {decl!r}, found {text!r}"
-    return None
+    return _width_failure(f"add_port {mod} {name}", design, mod, name, width)
 
 
 def _ev_add_param(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
@@ -62,7 +83,7 @@ def _ev_add_param(session: Session, a: tuple[Any, ...], design: Design) -> str |
 
 
 def _ev_add_wire(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
-    mod, name, type_text = a
+    mod, name, type_text, width = a
     m = _module_of(design, mod)
     if m is None:
         return _MISSING.format(f"add_wire {mod} {name}")
@@ -71,7 +92,7 @@ def _ev_add_wire(session: Session, a: tuple[Any, ...], design: Design) -> str | 
         return f"add_wire {mod} {name}: declaration not found in the final design"
     if not _same(d.type_text, type_text):
         return f"add_wire {mod} {name}: expected type {type_text!r}, found {d.type_text!r}"
-    return None
+    return _width_failure(f"add_wire {mod} {name}", design, mod, name, width)
 
 
 def _ev_add_assign(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
@@ -228,9 +249,9 @@ def _ev_replace_module(session: Session, a: tuple[Any, ...], design: Design) -> 
 # kind -> (evaluator, number of arguments)
 _EVALUATORS: dict[str, tuple[Callable[[Session, tuple[Any, ...], Design], str | None], int]] = {
     "add_file": (_ev_add_file, 2),
-    "add_port": (_ev_add_port, 3),
+    "add_port": (_ev_add_port, 4),
     "add_param": (_ev_add_param, 4),
-    "add_wire": (_ev_add_wire, 3),
+    "add_wire": (_ev_add_wire, 4),
     "add_assign": (_ev_add_assign, 3),
     "override_net": (_ev_override_net, 6),
     "insert_cell_on_net": (_ev_insert_cell_on_net, 10),

@@ -1,12 +1,12 @@
 """The session archive: one zip of plain data, written and read here and nowhere else.
 
-`session.json` is the index (JSON, `"format": 5`); every other entry is file content. The zip
+`session.json` is the index (JSON, `"format": 6`); every other entry is file content. The zip
 holds no code and is never extracted: a reader looks entries up by the names the index implies.
 The bytes depend only on what is saved: entries sorted by name, one fixed timestamp, one
 creator system, deflated at one fixed level, the index with sorted keys and fixed separators.
 It is written to a temporary file next to its destination and renamed, so a failure leaves
-neither a partial archive nor a temporary file behind. Only format 5 is read: a format 4 archive
-does not say which expectations the script registered, so it is refused.
+neither a partial archive nor a temporary file behind. Only format 6 is read: a format 5 archive
+holds no width in its checks of `add_port` and `add_wire`, so it is refused.
 
 Reading is defensive: the uncompressed sizes the zip directory declares are added up and
 refused above `MAX_BYTES` before anything is read, no entry is read past its declared size,
@@ -47,8 +47,9 @@ __all__ = [
 # 2: one check key for a pair of operations. 3: the index holds the marks of the raw splices; an
 # archive without them cannot be judged, so every older format is refused. 4: a mark has a label, and
 # the logic calls (add_assign, connect, set_param, replace_module) leave marks too. 5: an expectation says
-# whether the script registered it; a format 4 archive does not say it, so it is refused.
-FORMAT = 5
+# whether the script registered it; a format 4 archive does not say it, so it is refused. 6: the checks of add_port
+# and add_wire hold the width text; a format 5 archive does not, so it is refused.
+FORMAT = 6
 MAX_BYTES = 2 * 1024**3  # the most uncompressed data an archive may declare
 INDEX = "session.json"
 _STAMP = (1980, 1, 1, 0, 0, 0)  # the earliest time a zip can hold

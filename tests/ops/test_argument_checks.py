@@ -64,10 +64,10 @@ and the `nan` of A4. It also found the first two of the limits below.
 
 STATED LIMITS
 
-- A width that is a text is not computed. A text that the compiler reads as 0 or less
-  (`"1-1"`, `"32'd0"`, `"$clog2(N)"` with `N` of 1) is accepted, and the declaration that is
-  written has a range such as `[-1:0]`, which is 2 bits. The sign-off does not report it.
-  Only a text that Python reads as a whole number is judged at the call.
+- A width that is a text is not computed at the call. A text that the compiler reads as 0 or
+  less (`"1-1"`, `"32'd0"`, `"$clog2(N)"` with `N` of 1) is accepted there. Since #130 the
+  check of the operation fails the sign-off for it (tests/ops/test_width_check.py). Only a
+  text that Python reads as a whole number is judged at the call.
 - An argument that is an object whose `repr`, `str` or iteration raises gives that Python
   error and no `VetError`.
 

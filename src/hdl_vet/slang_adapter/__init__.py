@@ -11,6 +11,7 @@ from __future__ import annotations
 from hdl_vet.slang_adapter.api import (
     check_expression,
     instance_parameters,
+    is_atom,
     is_wiring,
     load,
     parameter_names,
@@ -75,6 +76,7 @@ __all__ = [
     "driven_bases",
     "equivalent_bytes",
     "instance_parameters",
+    "is_atom",
     "is_simple_identifier",
     "is_wiring",
     "load",
