@@ -104,6 +104,8 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   A loop on either side, also the same on both, is an "error" ("combinational loop", the side, a net name).
   Bit by bit are `&`, `|`, `^`, `~`, a mux and a buffer; any other cell takes every output bit from every
   input bit, so a vector that feeds its low bits into an adder is an "error" although it is no loop. A
+  `case` mux (`$pmux`) is followed bit by bit too (Q8). A flop with an asynchronous load passes its load
+  value and load condition to its output (Q7). The net name is a source name when one is on the loop (Q9). A
   child that is flattened is looked through; a black box (`same=`) cuts the path, so a loop through it is
   not seen. A loop that the clean-up removes is not reported. A loop on purpose needs a waiver.
 - Checks run one at a time (a lock). The lock holds for the threads of one process, not for two
@@ -884,14 +886,30 @@ def _loop_net(side: Mapping[str, Any]) -> str | None:
     edges: dict[int, list[int]] = {}
     for cell in side["cells"].values():
         kind = str(cell["type"])
-        if not kind.startswith("$") or _keeps_state(kind):
+        if not kind.startswith("$"):
             continue
         directions = cell.get("port_directions", {})
         pins = cell["connections"]
+        if _keeps_state(kind):
+            # Q7: a flop with an asynchronous load is transparent while it loads.
+            load, value, out = pins.get("ALOAD", pins.get("L")), pins.get("AD"), pins.get("Q")
+            if load is not None and value is not None and out is not None and len(value) == len(out):
+                for i, target in enumerate(out):
+                    for source in [value[i], *load]:
+                        if isinstance(source, int) and isinstance(target, int):
+                            edges.setdefault(source, []).append(target)
+            continue
         outs = [pin for pin in pins if directions.get(pin) == "output"]
         ins = [pin for pin in pins if directions.get(pin) != "output"]
         width = len(pins[outs[0]]) if outs else 0
-        if kind in _BITWISE and len(outs) == 1 and all(len(pins[p]) == width for p in ins if p != "S"):
+        if kind == "$pmux" and len(outs) == 1 and _pmux_shape(pins, width):  # Q8
+            for i in range(width):
+                target = pins["Y"][i]
+                sources = [pins["A"][i], *pins["B"][i::width], *pins["S"]]
+                for source in sources:
+                    if isinstance(source, int) and isinstance(target, int):
+                        edges.setdefault(source, []).append(target)
+        elif kind in _BITWISE and len(outs) == 1 and all(len(pins[p]) == width for p in ins if p != "S"):
             for i in range(width):
                 for pin in ins:
                     source = pins[pin][0] if pin == "S" else pins[pin][i]
@@ -913,7 +931,8 @@ def _loop_net(side: Mapping[str, Any]) -> str | None:
             bit, following = path[-1]
             for nxt in following:
                 if state.get(nxt) == 1:
-                    return _loop_name(side, nxt)
+                    cycle = [b for b, _ in path]
+                    return _loop_name(side, cycle[cycle.index(nxt) :])
                 if nxt not in state:
                     state[nxt] = 1
                     path.append((nxt, iter(edges.get(nxt, []))))
@@ -924,8 +943,18 @@ def _loop_net(side: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _loop_name(side: Mapping[str, Any], bit: int) -> str:
-    names = [n for n, info in side.get("netnames", {}).items() if bit in info["bits"]]
+def _pmux_shape(pins: Mapping[str, Any], width: int) -> bool:
+    return (
+        width > 0
+        and all(p in pins for p in ("A", "B", "S", "Y"))
+        and len(pins["A"]) == width
+        and len(pins["B"]) == width * len(pins["S"])
+    )
+
+
+def _loop_name(side: Mapping[str, Any], bits: list[int]) -> str:
+    """A name of a net on the cycle `bits`: a source name when one exists (Q9), else an internal one."""
+    names = [n for n, info in side.get("netnames", {}).items() if set(bits) & set(info["bits"])]
     names.sort(key=lambda n: (n.startswith("$"), n))
     return names[0] if names else "?"
 
