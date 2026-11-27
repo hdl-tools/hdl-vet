@@ -16,8 +16,9 @@ T4  The kind of `Vet.expect` and of `Vet.permit` is not compared with the kinds 
     kind that is spelled wrong is taken. For `expect` the sign-off then says that it did not
     see the change. For `permit` nothing says so.
 T5  An instance with a positional parameter override is not edited: `set_param` refuses it.
-T6  After `replace_module`, `punch_port` through that instance still walks the design of the
-    start of the run. It adds the port to the old module, and the sign-off fails (#149).
+T6  After `replace_module`, `punch_port` through that instance is refused (#149). It walked the
+    design of the start of the run and edited the old module, until
+    tests/ops/test_replaced_path.py.
 T7  A name that text disabled by a conditional directive only reads is refused as a new name,
     as a name that it declares is: every identifier of the disabled text counts.
 """
@@ -108,14 +109,11 @@ def test_a_positional_parameter_override_is_not_edited(tmp_path):
     assert list(vet.log) == []
 
 
-def test_a_punch_after_a_replacement_edits_the_old_module(vet):
+def test_a_punch_after_a_replacement_is_refused(vet):
     vet.module("top").instance("u").replace_module("leaf3", waiver=WHY)
-    vet.punch_port("pin", "input", "top.u")
-    assert ("add_port", "leaf") in [(r.op, r.target) for r in vet.log]
-    assert ("add_port", "leaf3") not in [(r.op, r.target) for r in vet.log]
-    result = vet.finish()
-    assert not result.ok
-    assert "leaf.sv" in [p.name for p in result.files]
+    with pytest.raises(VetError, match="replace_module"):
+        vet.punch_port("pin", "input", "top.u")
+    assert "add_port" not in [r.op for r in vet.log]
 
 
 DISABLED = (
