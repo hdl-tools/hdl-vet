@@ -9,7 +9,7 @@ from hdl_vet.ops import args
 from hdl_vet.ops.common import VetError, _Check, _Plan
 from hdl_vet.ops.host import _VetHost
 from hdl_vet.ops.instance import Instance
-from hdl_vet.ops.text import _IDENT, _bare_name, _did_you_mean, _logic_type, _range, _unsegment
+from hdl_vet.ops.text import _IDENT, _bare_name, _did_you_mean, _judged_width, _logic_type, _range, _unsegment
 from hdl_vet.slang_adapter import AdapterError, InstanceInfo, ModuleInfo, is_simple_identifier, tokens
 
 
@@ -210,7 +210,7 @@ class _HierOps(_VetHost):
                 continue
             if special and i == n:
                 continue
-            port_plan = self._plan_add_port(m, name, decl, infos[m], self.module_paths(m))
+            port_plan = self._plan_add_port(m, name, decl, infos[m], self.module_paths(m), _judged_width(pwidth))
             plans.append(port_plan)
             if out and i == n:
                 assert sig is not None  # noqa: S101 - an output always has a source signal

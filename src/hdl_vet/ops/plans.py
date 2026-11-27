@@ -189,7 +189,9 @@ class _PlanOps(_VetHost):
         if not plan.quiet:
             self._record(plan.op, plan.target, "applied")
 
-    def _plan_add_port(self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str]) -> _Plan:
+    def _plan_add_port(
+        self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str], width: str | None = None
+    ) -> _Plan:
         if info.port_list_kind != "ansi":
             what = "a non-ANSI" if info.port_list_kind == "nonansi" else "no"
             raise VetError(f"add_port {mod}: the module has {what} port list; only ANSI port lists can be extended")
@@ -235,7 +237,7 @@ class _PlanOps(_VetHost):
             expects=[("port-added", p, name) for p in paths if not had],
             cancels=[("port-removed", p, name) for p in paths if p in removed],
             permits=[("connection-changed", p, name) for p in paths],
-            check=_Check(("port", mod, name), "add_port", (mod, name, decl)),
+            check=_Check(("port", mod, name), "add_port", (mod, name, decl, width)),
         )
 
     def _plan_add_param(

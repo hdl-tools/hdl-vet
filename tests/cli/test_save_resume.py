@@ -387,14 +387,14 @@ def test_another_format_version_is_refused(work, capsys):
             data = src.read(item.filename)
             if item.filename == "session.json":
                 index = json.loads(data)
-                assert index["format"] == 5 and index["tool"] == "hdl-vet"
+                assert index["format"] == 6 and index["tool"] == "hdl-vet"
                 index["format"] = 99
                 data = json.dumps(index).encode()
             dst.writestr(item, data)
     capsys.readouterr()
     assert run("apply", "--resume", other, "-o", w.tmp / "out") == 2
     err = capsys.readouterr().err
-    assert "format" in err and "99" in err and "reads format 5" in err and "Traceback" not in err
+    assert "format" in err and "99" in err and "reads format 6" in err and "Traceback" not in err
     with pytest.raises(SessionError, match="99"):
         Vet.restore(other)
 
@@ -524,7 +524,7 @@ def test_the_archive_can_be_read_with_a_zip_tool(kit, cells, tmp_path: Path):
         assert z.read("current/rtl/mid.sv") == vet.text(kit.mid)
         assert z.read("added/cell_leaf.sv") == CELLS["cell_leaf.sv"].encode()
         index = json.loads(z.read("session.json"))
-        assert index["format"] == 5 and index["tool"] == "hdl-vet" and index["top"] == "top"
+        assert index["format"] == 6 and index["tool"] == "hdl-vet" and index["top"] == "top"
         assert index["scripts"] == []
 
 
@@ -750,7 +750,7 @@ def test_a_new_archive_has_format_two(kit, tmp_path: Path) -> None:
     """F1."""
     Vet(Session(kit.filelist, top="top")).save(tmp_path / "s.zip")
     with zipfile.ZipFile(tmp_path / "s.zip") as z:
-        assert json.loads(z.read("session.json"))["format"] == 5
+        assert json.loads(z.read("session.json"))["format"] == 6
 
 
 def test_an_archive_of_format_one_is_refused(kit, tmp_path: Path, capsys) -> None:
@@ -759,7 +759,7 @@ def test_an_archive_of_format_one_is_refused(kit, tmp_path: Path, capsys) -> Non
     vet.module("top").add_wire("t", width=4)
     vet.save(tmp_path / "s.zip")
     old = with_format(tmp_path / "s.zip", tmp_path / "old.zip", 1)
-    message = "session archive format 1, but this hdl-vet reads format 5 (an integer)"
+    message = "session archive format 1, but this hdl-vet reads format 6 (an integer)"
     with pytest.raises(SessionError) as refused:
         Vet.restore(old)
     assert message in str(refused.value) and str(old) in str(refused.value)

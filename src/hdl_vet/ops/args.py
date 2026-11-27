@@ -48,6 +48,9 @@ def width(label: str, value: object) -> None:
     if isinstance(value, str):
         stripped = value.strip()
         if stripped and not (_WHOLE.fullmatch(stripped) and int(stripped) < 1):
+            # a text in brackets is the script's own range and is not parsed (#56); any other is one expression
+            if not stripped.startswith("[") and check_expression(stripped) is not None:
+                raise _no(label, "width", "one expression with no comment, or a range in brackets", value)
             return
     elif _is_int(value) and value >= 1:  # type: ignore[operator]
         return

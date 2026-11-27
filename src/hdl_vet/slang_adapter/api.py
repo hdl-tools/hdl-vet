@@ -111,6 +111,20 @@ def _load(
     return Design(fl, loader, shared, dict(zip(fl.files, trees, strict=True)), comp, used)
 
 
+def is_atom(text: str) -> bool:
+    """True when `text` is one name, one name with scopes in front, or one number; False for anything else.
+
+    Decided from the syntax tree of the text. A text that does not parse, a comment and an escaped name are False.
+    """
+    if check_expression(text) is not None or text.strip().startswith("\\"):
+        return False
+    tree = pyslang.syntax.SyntaxTree.fromText(f"module _p;\nassign _x = _e ? {text} : _k;\nendmodule\n")
+    root: Any = tree.root
+    kind = next(iter(next(iter(root.members)).assignments)).right.left.kind
+    sk = pyslang.syntax.SyntaxKind
+    return kind in (sk.IdentifierName, sk.ScopedName, sk.IntegerLiteralExpression, sk.IntegerVectorExpression)
+
+
 def check_expression(text: str) -> str | None:
     """None when `text` reads as ONE expression of its own, else the reason it does not.
 

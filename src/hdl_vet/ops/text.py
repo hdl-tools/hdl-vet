@@ -8,7 +8,7 @@ from collections.abc import Iterable
 
 from hdl_vet.listedit import append_items
 from hdl_vet.ops.common import VetError
-from hdl_vet.slang_adapter import ConnInfo, ParamOverride, is_simple_identifier, tokens
+from hdl_vet.slang_adapter import ConnInfo, ParamOverride, is_atom, is_simple_identifier, tokens
 
 _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
@@ -118,7 +118,17 @@ def _range(width: int | str | None) -> str:
             raise VetError(f"width must be at least 1, not {width}")
         return "" if width == 1 else f" [{width - 1}:0]"
     w = str(width).strip()
-    return " " + w if w.startswith("[") else f" [{w}-1:0]"
+    if w.startswith("["):
+        return " " + w
+    # an operator that binds less than `-` would take the `-1` (#130), so more than one name or number is bracketed
+    return f" [{w}-1:0]" if is_atom(w) else f" [({w})-1:0]"
+
+
+def _judged_width(width: int | str | None) -> str | None:
+    """The width text that `_range` wrapped as `[TEXT-1:0]`, for the check at the sign-off; else None."""
+    if not isinstance(width, str) or width.strip().startswith("["):
+        return None
+    return width.strip()
 
 
 def _line_start(data: bytes, offset: int) -> int:

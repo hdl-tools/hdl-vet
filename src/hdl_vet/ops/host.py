@@ -52,7 +52,9 @@ class _VetHost:
             self, mod: str, name: str, type: str, default: object, info: ModuleInfo, paths: list[str]
         ) -> _Plan: ...
 
-        def _plan_add_port(self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str]) -> _Plan: ...
+        def _plan_add_port(
+            self, mod: str, name: str, decl: str, info: ModuleInfo, paths: list[str], width: str | None = None
+        ) -> _Plan: ...
 
         def _plan_assign(
             self, mod: str, info: ModuleInfo, target: str, expr: object, planned_port: bool = False

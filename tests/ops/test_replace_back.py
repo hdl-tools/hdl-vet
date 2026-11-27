@@ -329,7 +329,7 @@ def test_a_save_keeps_whose_expectation_it_is(vet, tmp_path):
     assert own(result, "module-changed") == ["top.u0"]
 
 
-def test_the_format_of_the_archive_is_5():
+def test_the_format_of_the_archive_is_6():
     from hdl_vet import archive
 
-    assert archive.FORMAT == 5
+    assert archive.FORMAT == 6

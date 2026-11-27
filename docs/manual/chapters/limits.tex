@@ -433,14 +433,16 @@ or with a raw splice.
   type with a \code{VetError} where you call it (chapter~\ref{ch:operations}). Six things
   stay open:
   \begin{itemize}
-  \item A width that is a text is not computed. A text that the compiler reads as 0 or less,
-    such as \code{1-1} or \code{\$clog2(N)} with \code{N} of 1, is accepted. The
-    declaration then has a range such as \code{[-1:0]}, and the sign-off does not report it.
-    Only a text that Python reads as a whole number is judged at the call.
+  \item A width that is a text is not computed at the call. The sign-off asks the compiler
+    for the range in every instance. It fails when the range runs upward, as \code{[-1:0]}
+    does for \code{\$clog2(N)} with \code{N} of 1. It does not judge a range in brackets or a
+    raw splice such as \code{logic [N-2:0] w;}. A width can be 0 after a new generation, so
+    run the script again. A type with no range in the design, such as \code{interconnect},
+    fails for any width: give the range in brackets.
   \item An argument whose \code{repr}, \code{str} or iteration raises gives that Python
     error and no \code{VetError}.
-  \item A type or a width that is a text is not parsed. A text such as \code{logic x1; logic}
-    is caught only at the sign-off.
+  \item A type that is a text is not parsed, and neither is a width in brackets. A text such as
+    \code{logic x1; logic} is caught only at the sign-off.
   \item A value that is a text is not parsed, because the value of a type parameter is a type
     and no expression. A value such as \code{8;} for \apiname{Instance.set_param} fails at
     the sign-off.

@@ -46,6 +46,10 @@ format version. Run the scripts again.
 The archive also keeps which expectations your script registered with \apiname{Vet.expect}.
 A format 4 archive does not say it, so hdl-vet refuses it too.
 
+The checks of \apiname{Module.add_port} and \apiname{Module.add_wire} keep the width that
+you gave. A format 5 archive does not hold it, so hdl-vet refuses it as well. The current
+format is 6.
+
 \begin{itemize}
 \item Without \opt{-o}, hdl-vet saves, prints \code{saved FILE} and the summary, and then
   prints one line, \code{sign-off so far: ok} or \code{sign-off so far: FAILED}. After
