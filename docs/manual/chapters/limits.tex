@@ -497,11 +497,11 @@ or with a raw splice.
   loads the whole design again. On a large design, a script with many such operations takes
   a long time. The load count rose after a \code{connect} that follows an
   \code{add_port}. The times were not measured.
-\item \textbf{Paths after a replacement.} After \apiname{Instance.replace_module}, a
-  hierarchical operation (\apiname{Vet.punch_port}, \apiname{Vet.propagate_param}) still
-  resolves its path against the original design. It edits the old module, and the sign-off
-  reports the result as errors or failed checks. Do such operations before the
-  replacement, or in another run.
+\item \textbf{Paths after a replacement.} After \apiname{Instance.replace_module}, hdl-vet
+  refuses a hierarchical operation (\apiname{Vet.punch_port}, \apiname{Vet.propagate_param})
+  whose path ends at that instance or passes through it. The path is resolved against the
+  original design, and the instance has another module now. The refusal also holds after a
+  replacement back. Do such operations before the replacement, or in another run.
 \item \textbf{Scopes and shared modules.} hdl-vet refuses \apiname{Vet.punch_port} and
   \apiname{Vet.propagate_param} in a scope whose module the design instantiates more than
   once. The scope takes the name of a module, not an instance path. The check for

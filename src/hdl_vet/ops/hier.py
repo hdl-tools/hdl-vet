@@ -62,6 +62,13 @@ class _HierOps(_VetHost):
             mods.append(snap[path].module)
         if len(set(mods)) != len(mods):
             raise VetError(f"{op}: a module appears twice on the path {to!r}")
+        for parent, iname in zip(mods, names, strict=False):
+            if (parent, iname) in self._swapped:
+                raise VetError(
+                    f"{op}: instance {iname!r} of module {parent!r} was replaced by replace_module in this run, "
+                    f"so the path {to!r} no longer matches the design; do {op} before the replacement, "
+                    f"or in another run"
+                )
         return mods, paths, names
 
     def _refresh_for(self, mods: Iterable[str]) -> None:
