@@ -327,7 +327,6 @@ def _apply(args: argparse.Namespace) -> int:
     ran = vet.log[first_record:]
     applied = sum(1 for r in ran if r.status == "applied")
     summary = f"{applied} applied, {len(ran) - applied} skipped"
-    notes = [f"note: {note}" for note in vet.notes[first_note:]]
     if args.save is not None:
         try:
             vet.save(args.save, ident)
@@ -336,6 +335,7 @@ def _apply(args: argparse.Namespace) -> int:
         ident = []  # the session lists them now
         if plan.outdir is None and not args.dry_run:
             status = vet.check()
+            notes = [f"note: {note}" for note in vet._notes_since(first_note)]
             sys.stdout.write("\n".join([f"saved {args.save}", summary, *notes]) + "\n")
             if status.ok:
                 sys.stdout.write("sign-off so far: ok\n")
@@ -345,6 +345,7 @@ def _apply(args: argparse.Namespace) -> int:
                 sys.stderr.write("".join(ln for ln in status.report().splitlines(True) if ln.strip() not in notes))
             return 0
     result = vet.finish(ident)
+    notes = [f"note: {note}" for note in vet._notes_since(first_note)]
     saved_lines = [] if args.save is None else [f"saved {args.save}"]
     if not result.ok:
         (sys.stderr if args.dry_run else sys.stdout).write("".join(f"{line}\n" for line in saved_lines))

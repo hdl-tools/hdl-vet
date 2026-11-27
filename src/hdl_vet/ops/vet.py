@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import weakref
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
@@ -22,7 +23,27 @@ from hdl_vet.ops.scope import _Scope, _ScopeOps
 from hdl_vet.ops.text import _did_you_mean
 from hdl_vet.prove import LogicOp, Outside, Proof, prove
 from hdl_vet.session import Result, Session, SessionError, describe
-from hdl_vet.slang_adapter import AdapterError, Design, InstanceInfo, ModuleInfo
+from hdl_vet.slang_adapter import AdapterError, Design, Diag, InstanceInfo, ModuleInfo
+
+
+def _tail(d: Diag) -> re.Pattern[str]:
+    """The end of the note of `d`: ": " and `describe(d)` with any line number, nothing after the "]"."""
+    text = describe(d)
+    if d.path is not None and d.line is not None:
+        text = text[: -len(f":{d.line}]")]
+        return re.compile(re.escape(f": {text}") + r"(?::\d+)?\]\Z")
+    return re.compile(re.escape(f": {text}") + r"\Z")
+
+
+def _is_diag_note(note: str) -> bool:
+    """A note that `_conclude` made from a diagnostic ends in "]" and holds " [module "; no other note does
+    (the `accept_types` note ends in a quote). The text alone tells, so a restored session needs no marker."""
+    return note.endswith("]") and " [module " in note
+
+
+def _take(seen: list[Design], design: Design) -> None:
+    """A post-condition that never fails: it hands the final design to `Vet._kept_notes`."""
+    seen.append(design)
 
 
 class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
@@ -35,6 +56,7 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         self.log: list[OpRecord] = []
         self._script_dir: Path | None = None  # folder of the running script, set by the CLI per script
         self.notes: list[str] = []
+        self._kept: list[tuple[int, str]] = []  # (index in `notes`, text) the last finish or check gave
         self._depth = 0  # open `group` blocks (a checked operation counts as one while it runs)
         self._scope: _Scope | None = None  # the open `scope` block, if any
         # (module, instance) -> modules the instance's baseline path had before `replace_module`
@@ -77,8 +99,31 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         if self._scope is not None:
             raise VetError("finish: not allowed inside a scope")
         scripts = args.scripts("finish", scripts)
-        result = self.session.finish([*self.session.scripts, *scripts], self._evaluators(), self._proof())
-        return replace(result, notes=list(self.notes))
+        seen: list[Design] = []
+        checks: list[Callable[[Design], str | None]] = [*self._evaluators(), partial(_take, seen)]
+        result = self.session.finish([*self.session.scripts, *scripts], checks, self._proof())
+        return replace(result, notes=self._kept_notes(seen))
+
+    def _notes_since(self, first: int) -> list[str]:
+        """The notes of the last `finish` or `check` that operations from number `first` of `self.notes` made."""
+        return [text for index, text in self._kept if index >= first]
+
+    def _kept_notes(self, seen: list[Design]) -> list[str]:
+        """`self.notes` as the sign-off gives them: a note of an unused-signal diagnostic stays only while the
+        final design still gives it, by message (kind and name), module and file, never by line; it then carries
+        the line of the final design. Any other note stays. Without a final design (it did not load) all stay."""
+        unused = seen[0].unused() if seen else None
+        out: list[tuple[int, str]] = []
+        for index, note in enumerate(self.notes):
+            if unused is None or not _is_diag_note(note):
+                out.append((index, note))
+                continue
+            for d in unused:
+                if m := _tail(d).search(note):
+                    out.append((index, f"{note[: m.start()]}: {describe(d)}"))
+                    break
+        self._kept = out
+        return [text for _, text in out]
 
     def _idle(self, op: str) -> None:
         """Refuse `op` inside a `group` block and after `finish`."""
@@ -101,8 +146,10 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
         dirty, everything = set(self._dirty), self._all
         added = {mod: dict(names) for mod, names in self._added.items()}
         try:
-            result = self.session.check([*self.session.scripts, *scripts], self._evaluators(), self._proof())
-            return replace(result, notes=list(self.notes))
+            seen: list[Design] = []
+            checks: list[Callable[[Design], str | None]] = [*self._evaluators(), partial(_take, seen)]
+            result = self.session.check([*self.session.scripts, *scripts], checks, self._proof())
+            return replace(result, notes=self._kept_notes(seen))
         finally:
             self._dirty, self._all, self._added = dirty, everything, added
             self._seen = self.session.reloads

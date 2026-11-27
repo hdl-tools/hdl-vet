@@ -95,7 +95,10 @@ of each kind.
 
 \item[note: MESSAGE] An operation left something for you to read, for example an unused
   signal or an accepted type difference. This line is no failure. It comes after the
-  failures and before the lines of the equivalence check.
+  failures and before the equivalence lines. A note about an unused signal
+  is kept only while the final design still has that signal unused, in the same module.
+  A later operation that removes the signal takes the note away. The line is the line of
+  the final design.
 
 \item[equivalence proved: MODULE (OPERATIONS; equal when ENABLE is 0)] The check proved
   the module. This line is no failure. hdl-vet prints it on the error output also when
