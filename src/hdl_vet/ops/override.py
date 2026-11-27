@@ -27,6 +27,7 @@ from hdl_vet.ops.text import (
 from hdl_vet.slang_adapter import (
     AdapterError,
     ConnInfo,
+    DeclInfo,
     ModuleInfo,
     PortInfo,
     check_expression,
@@ -39,6 +40,7 @@ from hdl_vet.slang_adapter import (
 
 if TYPE_CHECKING:
     from hdl_vet.ops.module import Module
+    from hdl_vet.ops.vet import Vet
 
 _OP = "override_net"
 _SCALARS = frozenset({"logic", "wire", "reg", "bit", "tri", "tri0", "tri1", "uwire", "wand", "wor", "signed"})
@@ -83,7 +85,7 @@ def override_net(module: Module, net: str, value: object, enable: str, keep: str
         raise VetError(f"{_OP} {mod}: the value {text!r} reads {net!r}, which would make a loop")
     if keep is not None and (not isinstance(keep, str) or not is_simple_identifier(keep)):
         raise VetError(f"{_OP} {mod}: {keep!r} is not a simple identifier (or is a SystemVerilog keyword)")
-    paths = module._confirm_instances(_OP)
+    module._confirm_instances(_OP)
     if bad := v.session.loaded.unfollowable_heads(mod, value_head_identifiers(text)):
         raise VetError(
             f"{_OP} {mod}: the value {text!r} reads {bad[0]!r}, which hdl-vet cannot follow: "
@@ -98,54 +100,21 @@ def override_net(module: Module, net: str, value: object, enable: str, keep: str
             f"{_OP} {mod}: the value {text!r} reads {hit!r}, which {net!r} drives inside "
             "the module, so it would make a loop"
         )
-    v._checked(_OP, f"{mod}.{net}", lambda: _run(module, paths, net, text, enable, keep, waiver))
+    v._checked(_OP, f"{mod}.{net}", lambda: _run(module, net, text, enable, keep, waiver))
 
 
-def _run(
-    module: Module, paths: list[str], net: str, value: str, enable: str, keep: str | None, waiver: str | None
-) -> None:
+def _run(module: Module, net: str, value: str, enable: str, keep: str | None, waiver: str | None) -> None:
     v, mod = module.vet, module.name
     target = f"{mod}.{net}"
-
-    def fail(message: str) -> VetError:
-        return VetError(f"{_OP} {mod}: {message}")
-
-    v._refresh_all_dirty()  # the drivers depend on everything queued
-    info = v._info(mod)
+    fail = _failer(_OP, mod)
+    info, port, decls, keep_name = _site(module, _OP, net, enable, keep, fail)
     ports = {p.name: p for p in info.ports}
-    decls = [d for d in info.decls if d.name == net]
-    port = ports.get(net)
-    if port is None and not decls:
-        if net in info.generate_decls:
-            raise fail(f"{net!r} is declared inside a generate block, which is not supported")
-        other = v._other_use(info, net, _OP)
-        if other is not None:
-            raise fail(f"{net!r} is {other}, not a net or variable")
-        raise fail(f"no signal {net!r} in the module{_did_you_mean(net, [*ports, *(d.name for d in info.decls)])}")
-    if port is not None:
-        if port.direction == "input":
-            raise fail(f"{net!r} is an input port, which the module cannot drive")
-        if port.direction != "output":
-            raise fail(f"{net!r} is an {port.direction} port, which is not supported")
-        if info.port_list_kind != "ansi" or not port.type_text or port.unpacked:
-            raise fail(f"the type of port {net!r} cannot be copied (an ANSI port without unpacked dimensions)")
-    if len(decls) > 1:
-        raise fail(f"{net!r} is declared {len(decls)} times")
-    if decls and v.session.text(info.path)[decls[0].start : decls[0].end] != net.encode():
-        raise fail(f"the declaration of {net!r} has an unpacked dimension or an initial value, which is not supported")
-    _check_enable(fail, ports, enable)
-    _refuse_inout(module, info, net, fail)
-    keep_name = f"{net}_pre" if keep is None else keep
-    if not is_simple_identifier(keep_name):
-        raise fail(f"{keep_name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+    _refuse_other_pattern(module, net, ("insert_cell_on_net",), fail)
 
     # A second run: the net is driven by the assign that this operation writes.
     wanted = f"{enable} ? {value} : {keep_name}"
     mine = [a for a in info.assigns if a.left == net]
-    try:
-        old_ports = {p.name for p in v.session.baseline.module(mod).ports}
-    except AdapterError:
-        old_ports = set()
+    old_ports = _old_ports(v, mod)
     # One override for a net. What the run registered decides. A mux of the input design counts only
     # when it looks like the output of an earlier run: its select is a port that the input design has.
     key = ("override_net", mod, net)
@@ -176,25 +145,132 @@ def _run(
                 f"{_OP} {mod}: {net!r} has an override already, 'assign {net} = {mine[0].right};', "
                 f"and a net gets one override (this call asks for 'assign {net} = {wanted};')"
             )
+    _guards(module, _OP, info, enable, keep_name, waiver, old_ports, fail)
+    found = _find_driver(module, info, net, fail, _OP)
+    _check_width(module, info, net, value, fail, _OP)
+    splices, expects, type_text = _rewire(
+        module, _OP, info, net, keep_name, port, decls, found, [f"assign {net} = {wanted};"], fail
+    )
+
+    plan = _Plan(
+        _OP,
+        target,
+        path=info.path,
+        splices=splices,
+        mark=("decls", mod),
+        added=(mod, keep_name, ("decl", _norm(type_text))),
+        expects=expects,
+        check=_Check(("override_net", mod, net), _OP, (mod, net, enable, value, keep_name, waiver)),
+    )
+    # Every refusal comes before the commit: `_retarget` only decides here and moves the checks after it.
+    moves = _retarget(module, net, keep_name, found, _OP)
+    v._commit_all(_OP, [plan])
+    if found.kind == "instance":
+        v._mark("conns", mod, found.instance)
+    v._checks = [moves.get(id(c), c) for c in v._checks]  # cannot refuse
+
+
+def _refuse_other_pattern(module: Module, net: str, kinds: tuple[str, ...], fail: _Fail) -> None:
+    """One logic pattern on a net in a run: refuse a net that an operation of this run (one of `kinds`) changed."""
+    mod = module.name
+    for c in module.vet._checks:
+        if c.kind in kinds and c.args[:2] == (mod, net):
+            raise fail(f"{net!r} is changed by {c.kind} {mod}.{net} already: a net gets one cell or one override")
+
+
+def _failer(op: str, mod: str) -> _Fail:
+    return lambda message: VetError(f"{op} {mod}: {message}")
+
+
+def _old_ports(v: Vet, mod: str) -> set[str]:
+    try:
+        return {p.name for p in v.session.baseline.module(mod).ports}
+    except AdapterError:
+        return set()
+
+
+def _site(
+    module: Module, op: str, net: str, enable: str, keep: str | None, fail: _Fail
+) -> tuple[ModuleInfo, PortInfo | None, list[DeclInfo], str]:
+    """The net as the module declares it, and the name of `keep`: the refusals that both operations share."""
+    v, mod = module.vet, module.name
+    v._refresh_all_dirty()  # the drivers depend on everything queued
+    info = v._info(mod)
+    ports = {p.name: p for p in info.ports}
+    decls = [d for d in info.decls if d.name == net]
+    port = ports.get(net)
+    if port is None and not decls:
+        if net in info.generate_decls:
+            raise fail(f"{net!r} is declared inside a generate block, which is not supported")
+        other = v._other_use(info, net, op)
+        if other is not None:
+            raise fail(f"{net!r} is {other}, not a net or variable")
+        raise fail(f"no signal {net!r} in the module{_did_you_mean(net, [*ports, *(d.name for d in info.decls)])}")
+    if port is not None:
+        if port.direction == "input":
+            raise fail(f"{net!r} is an input port, which the module cannot drive")
+        if port.direction != "output":
+            raise fail(f"{net!r} is an {port.direction} port, which is not supported")
+        if info.port_list_kind != "ansi" or not port.type_text or port.unpacked:
+            raise fail(f"the type of port {net!r} cannot be copied (an ANSI port without unpacked dimensions)")
+    if len(decls) > 1:
+        raise fail(f"{net!r} is declared {len(decls)} times")
+    if decls and v.session.text(info.path)[decls[0].start : decls[0].end] != net.encode():
+        raise fail(f"the declaration of {net!r} has an unpacked dimension or an initial value, which is not supported")
+    _check_enable(fail, ports, enable)
+    _refuse_inout(module, info, net, fail)
+    keep_name = f"{net}_pre" if keep is None else keep
+    if not is_simple_identifier(keep_name):
+        raise fail(f"{keep_name!r} is not a simple identifier (or is a SystemVerilog keyword)")
+    return info, port, decls, keep_name
+
+
+def _guards(
+    module: Module,
+    op: str,
+    info: ModuleInfo,
+    enable: str,
+    keep_name: str,
+    waiver: str | None,
+    old_ports: set[str],
+    fail: _Fail,
+) -> None:
+    """What both operations refuse once a second run is ruled out: the enable, the names, a missing Yosys."""
+    v, mod = module.vet, module.name
     if enable in old_ports:
         raise fail(
             f"the enable {enable!r} is a port of the input design. The proof ties only an enable that this run "
             f"adds (add_port or punch_port), so that the module is as before when it is 0"
         )
-
-    other = v._other_use(info, keep_name, _OP)
+    other = v._other_use(info, keep_name, op)
     if other is not None:
         raise fail(f"the name {keep_name!r} is already used by {other}")
-    v._refuse_disabled(_OP, mod, info, keep_name)
-    v._refuse_disabled(_OP, mod, info, net)
+    v._refuse_disabled(op, mod, info, keep_name)
     if waiver is None and not equiv.available():
         raise fail(
             "the equivalence check needs Yosys, which is not installed (install the extra hdl-vet[equiv]); "
             "give the operation a waiver to go on without the check"
         )
 
-    found = _find_driver(module, info, net, fail)
-    _check_width(module, info, net, value, fail)
+
+def _rewire(
+    module: Module,
+    op: str,
+    info: ModuleInfo,
+    net: str,
+    keep_name: str,
+    port: PortInfo | None,
+    decls: list[DeclInfo],
+    found: _Found,
+    lines: list[str],
+    fail: _Fail,
+) -> tuple[list[tuple[int, int, bytes]], list[tuple[str, str, str]], str]:
+    """The splices that declare `keep`, make the driver drive it and write `lines` after the driver.
+
+    Also the expectations of the structure comparison, and the type text of `keep`.
+    """
+    v, mod = module.vet, module.name
+    v._refuse_disabled(op, mod, info, net)
     data = v.session.text(info.path)
     eol = _eol(data)
     splices: list[tuple[int, int, bytes]] = []
@@ -220,7 +296,7 @@ def _run(
         raise fail(f"the declaration of {net!r} is on the last line of the file")
     splices.append((at, at, indent + f"{type_text} {keep_name};".encode() + eol))
 
-    # The driver drives the kept signal, and the mux follows the driver.
+    # The driver drives the kept signal, and the new statement follows the driver.
     expects: list[tuple[str, str, str]] = []
     if found.kind == "assign":
         if data[found.left : found.left + len(net)] != net.encode():
@@ -228,31 +304,15 @@ def _run(
         splices.append((found.left, found.left + len(net), keep_name.encode()))
     else:
         splices.append(_pin_splice(data, found, net, keep_name, fail))
-        expects = [("connection-changed", f"{base}.{_segment(found.instance)}", found.port) for base in paths]
+        expects = [("connection-changed", f"{base}.{_segment(found.instance)}", found.port) for base in module.paths]
     at, indent = _after_line(data, found.stmt_start, found.stmt_end, info)
     if at < 0:
         raise fail("the driver of the net is on the last line of the file")
-    splices.append((at, at, indent + f"assign {net} = {wanted};".encode() + eol))
-
-    plan = _Plan(
-        _OP,
-        target,
-        path=info.path,
-        splices=sorted(splices, key=lambda s: (s[0], s[1])),
-        mark=("decls", mod),
-        added=(mod, keep_name, ("decl", _norm(type_text))),
-        expects=expects,
-        check=_Check(("override_net", mod, net), _OP, (mod, net, enable, value, keep_name, waiver)),
-    )
-    # Every refusal comes before the commit: `_retarget` only decides here and moves the checks after it.
-    moves = _retarget(module, net, keep_name, found)
-    v._commit_all(_OP, [plan])
-    if found.kind == "instance":
-        v._mark("conns", mod, found.instance)
-    v._checks = [moves.get(id(c), c) for c in v._checks]  # cannot refuse
+    splices.append((at, at, b"".join(indent + line.encode() + eol for line in lines)))
+    return sorted(splices, key=lambda s: (s[0], s[1])), expects, type_text
 
 
-def _retarget(module: Module, net: str, keep: str, found: _Found) -> dict[int, _Check]:
+def _retarget(module: Module, net: str, keep: str, found: _Found, op: str) -> dict[int, _Check]:
     """The driver now drives `keep`: the post-condition that named `net` for the same driver names `keep`.
 
     This is the check of an earlier `add_assign` of `net`, or of an earlier `connect` of the output pin.
@@ -268,7 +328,7 @@ def _retarget(module: Module, net: str, keep: str, found: _Found) -> dict[int, _
             # checks under one key. `save` accepts that and `restore` refuses it as damaged.
             if any(other.key == moved for other in v._checks if other is not c):
                 raise VetError(
-                    f"{_OP} {mod}: the keep name {keep!r} already has a post-condition from an "
+                    f"{op} {mod}: the keep name {keep!r} already has a post-condition from an "
                     f"earlier operation of this run; choose a name this run has not touched"
                 )
             out[id(c)] = _Check(moved, c.kind, (mod, keep, *c.args[2:]))
@@ -308,34 +368,38 @@ def _refuse_inout(module: Module, info: ModuleInfo, net: str, fail: _Fail) -> No
                 raise fail(f"{net!r} is connected to the inout pin {name!r} of {inst.name!r}, which is not supported")
 
 
-def _check_width(module: Module, info: ModuleInfo, net: str, value: str, fail: _Fail) -> None:
-    """The value has the width of the net. The adapter binds `$bits(value)` and `$bits(net)` in the module.
-
-    The two probes are added to the module for the moment the design is loaded, and taken back.
-    A fill literal (`'0`, `'1`, `'x`, `'z`) takes the width of the net.
-    """
+def _check_width(module: Module, info: ModuleInfo, net: str, value: str, fail: _Fail, op: str) -> None:
+    """The value has the width of the net. A fill literal (`'0`, `'1`, `'x`, `'z`) takes the width of the net."""
     if _FILL.fullmatch(value):
         return
-    v, mod = module.vet, module.name
-    data = v.session.text(info.path)
-    start = _line_start(data, info.body_end)
-    at = start if not data[start : info.body_end].strip() else info.body_end
-    probe = f"localparam int __vet_n = $bits({net}); localparam int __vet_w = $bits(( {value} ));".encode()
-    state = v._begin(f"{_OP} {mod}")
-    try:
-        v._queue(info.path, [(at, at, probe + _eol(data))])
-        v.session.refresh()
-        sizes = v.session.loaded.parameter_values(mod, ["__vet_n", "__vet_w"])
-    except AdapterError as e:
-        raise fail(f"the width of the value {value!r} cannot be found: {e}") from e
-    finally:
-        v._rollback(state)
-    for found in sizes:
-        have, want = found["__vet_w"], found["__vet_n"]
+    for have, want in _widths(module, info, [value, net], fail, op):
         if have is None or want is None:
             raise fail(f"the width of the value {value!r} cannot be found: it is not an expression of the module")
         if have != want:
             raise fail(f"the value {value!r} has a width of {have} bits, and {net!r} has {want}: they must be equal")
+
+
+def _widths(module: Module, info: ModuleInfo, exprs: list[str], fail: _Fail, op: str) -> list[list[int | None]]:
+    """`$bits` of each expression in the module, for each elaboration of it (None: not found).
+
+    The adapter binds the probes in the module. They are added for the moment the design is loaded, and taken back.
+    """
+    v, mod = module.vet, module.name
+    data = v.session.text(info.path)
+    start = _line_start(data, info.body_end)
+    at = start if not data[start : info.body_end].strip() else info.body_end
+    names = [f"__vet_{i}" for i in range(len(exprs))]
+    probe = " ".join(f"localparam int {n} = $bits(( {e} ));" for n, e in zip(names, exprs, strict=True))
+    state = v._begin(f"{op} {mod}")
+    try:
+        v._queue(info.path, [(at, at, probe.encode() + _eol(data))])
+        v.session.refresh()
+        sizes = v.session.loaded.parameter_values(mod, names)
+    except AdapterError as e:
+        raise fail(f"the width of {exprs[0]!r} cannot be found: {e}") from e
+    finally:
+        v._rollback(state)
+    return [[found[n] for n in names] for found in sizes]
 
 
 def _check_enable(fail: _Fail, ports: dict[str, PortInfo], enable: str) -> None:
@@ -385,7 +449,7 @@ def _after_line(data: bytes, start: int, end: int, info: ModuleInfo) -> tuple[in
     return (nl + 1 if nl >= 0 else -1), indent
 
 
-def _find_driver(module: Module, info: ModuleInfo, net: str, fail: _Fail) -> _Found:
+def _find_driver(module: Module, info: ModuleInfo, net: str, fail: _Fail, op: str) -> _Found:
     """The one driver of the whole net, as text of the module; VetError for every other case."""
     v, mod = module.vet, module.name
     try:
@@ -411,7 +475,7 @@ def _find_driver(module: Module, info: ModuleInfo, net: str, fail: _Fail) -> _Fo
         raise fail(f"the driver of {net!r} is not the same in every elaboration of the module")
     if kinds == {"assign"}:
         return _find_assign(info, net, fail)
-    return _find_pin(module, info, net, fail)
+    return _find_pin(module, info, net, fail, op)
 
 
 def _find_assign(info: ModuleInfo, net: str, fail: _Fail) -> _Found:
@@ -429,7 +493,7 @@ def _find_assign(info: ModuleInfo, net: str, fail: _Fail) -> _Found:
     return _Found("assign", assign.stmt_start, assign.stmt_end, assign.start)
 
 
-def _find_pin(module: Module, info: ModuleInfo, net: str, fail: _Fail) -> _Found:
+def _find_pin(module: Module, info: ModuleInfo, net: str, fail: _Fail, op: str) -> _Found:
     v = module.vet
     cands = []
     for inst in info.instances:
@@ -455,7 +519,7 @@ def _find_pin(module: Module, info: ModuleInfo, net: str, fail: _Fail) -> _Found
     inst, conn, name = cands[0]
     if inst.from_macro or inst.path != info.path:
         raise fail(f"the instance {inst.name!r} comes from a macro or an include")
-    _refuse_directive(f"{_OP} {module.name}", "connection", inst.conn_directive)
+    _refuse_directive(f"{op} {module.name}", "connection", inst.conn_directive)
     return _Found("instance", inst.stmt_start, inst.stmt_end, -1, conn, str(name), inst.name)
 
 

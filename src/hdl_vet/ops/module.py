@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING, Any
 
 from hdl_vet.listedit import edit_list, line_rule, remove_all
 from hdl_vet.ops import args
 from hdl_vet.ops.common import DriftError, VetError, _Check, _Plan
+from hdl_vet.ops.insert_cell import insert_cell_on_net as _insert_cell_on_net
 from hdl_vet.ops.instance import Instance
 from hdl_vet.ops.override import override_net as _override_net
 from hdl_vet.ops.raw import _check_waiver
@@ -205,6 +207,32 @@ class Module:
         (a text) says why it is not needed. Without Yosys the call needs a waiver.
         """
         _override_net(self, net, value, enable, keep, waiver)
+
+    def insert_cell_on_net(
+        self,
+        net: str,
+        cell: str,
+        *,
+        name: str,
+        data_in: str,
+        data_out: str,
+        enable_pin: str,
+        enable: str,
+        connect: dict[str, object] | None = None,
+        unconnected: Iterable[str] = (),
+        params: dict[str, object] | None = None,
+        keep: str | None = None,
+        waiver: str | None = None,
+    ) -> None:
+        """Put an instance `name` of the module `cell` between the driver of `net` and its readers.
+
+        The old driver drives `keep` (default `<net>_pre`), `data_in` of the cell reads it, and `data_out` drives
+        `net`. `enable_pin` is connected to `enable`, a one bit input port of the module. The sign-off proves the
+        module equal when `enable` is 0, or `waiver` (a text) says why it is not needed.
+        """
+        _insert_cell_on_net(
+            self, net, cell, name, data_in, data_out, enable_pin, enable, connect, unconnected, params, keep, waiver
+        )
 
     # --- removals (checked operations)
 

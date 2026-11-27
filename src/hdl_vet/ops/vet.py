@@ -251,9 +251,14 @@ class Vet(_RawOps, _ScopeOps, _PlanOps, _HierOps):
     def _proof(self) -> Callable[[Session, Design], Proof] | None:
         """The equivalence check of the logic operations registered so far, as `Session.finish` takes it."""
         ops = [
-            LogicOp(c.args[0] or "", c.args[1] or "", c.args[2] or "", c.args[5])
+            LogicOp(
+                c.args[0] or "",
+                c.args[1] or "",
+                c.args[2] or "",
+                *((c.args[5],) if c.kind == "override_net" else (c.args[3], c.kind)),
+            )
             for c in self._checks
-            if c.kind == "override_net"
+            if c.kind in ("override_net", "insert_cell_on_net")
         ]
         ops += [
             LogicOp(m.target, "", "", m.waiver, m.kind, m.label)

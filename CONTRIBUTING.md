@@ -29,6 +29,7 @@ The package `ops` has one module for each group:
 | `module.py` | the class `Module`: ports, parameters, wires, assigns, removals |
 | `args.py` | the checks of the arguments that are not names |
 | `override.py` | `override_net`, the operation that changes logic |
+| `insert_cell.py` | `insert_cell_on_net`, a cell on a net; it shares the code of `override.py` |
 | `instance.py` | the class `Instance`: connections, parameter values, `replace_module` |
 | `hier.py` | `punch_port` and `propagate_param` |
 | `scope.py` | the declared scope |

@@ -91,6 +91,7 @@ Operation & Edits the text of & \code{was} & Second run \\
 \apiname{Module.add_wire} & the module & none & skipped \\
 \apiname{Module.add_assign} & the module & none & skipped \\
 \apiname{Module.override_net} & the module & none & skipped, or drift \\
+\apiname{Module.insert_cell_on_net} & the module & none & skipped, or drift \\
 \apiname{Instance.connect} & the module that holds the instance & the expression now there. Without it, a different expression is drift & skipped \\
 \apiname{Instance.disconnect} & the module that holds the instance & the expression now there, optional check & skipped \\
 \apiname{Instance.set_param} & the module that holds the instance & the override now there. Without it, a different override is drift & skipped \\
@@ -408,6 +409,98 @@ The first command shows the diff and the line of the check. The second command s
 second run. The third command shows a waiver. The fourth command shows a refusal. The fifth
 command shows a failed check. The sixth command shows two levels, and the seventh command
 shows an enable that is not off.
+
+\begin{entry}{\sig{Module.insert_cell_on_net}}
+\item[Writes] The operation puts an instance of a cell on a net, for example a buffer with a
+  bypass, an isolation cell or a scan cell. The net keeps its name and its readers. A new
+  signal, \code{keep}, holds the value that the driver gives. The default name of \code{keep}
+  is the name of the net with \code{_pre} at the end. The operation makes three changes in
+  the text of the module:
+  \begin{itemize}
+  \item It declares \code{keep} with the type and the width of the net, where
+    \apiname{Module.override_net} declares it.
+  \item It makes the driver of the net drive \code{keep}. The driver is an \code{assign}
+    statement, or the connection of an output pin of an instance.
+  \item It writes an instance of \code{cell} on new lines below the driver. The instance
+    has the name \code{name} and named connections only. \code{params} gives parameter
+    overrides of the instance, for example \code{#(.W(8))}.
+  \end{itemize}
+  The pins of the instance connect as follows:
+  \begin{itemize}
+  \item \code{data_in} to \code{keep}
+  \item \code{data_out} to the net
+  \item \code{enable_pin} to \code{enable}
+  \item each pin of \code{connect} to its expression. An expression is over the nets and
+    the parameters of the module.
+  \item each pin of \code{unconnected} to nothing, as in \code{.pin()}
+  \end{itemize}
+  The script names the three pins of the cell. hdl-vet guesses nothing. \code{cell} is a
+  module of the design. Bring it in first with \apiname{Vet.add_file} when it is not there.
+  \code{enable} is the name of an input port of the module, one bit wide and new, as for
+  \apiname{Module.override_net}.
+
+  Every input pin of the cell must be \code{data_in}, \code{enable_pin} or a pin of
+  \code{connect}. Every output pin must be \code{data_out} or a pin of \code{unconnected}.
+\item[Refused] hdl-vet refuses what \apiname{Module.override_net} refuses for the net, the
+  enable and \code{keep}. It also refuses the operation in these cases:
+  \begin{itemize}
+  \item a \code{cell} that the design does not have, or the module itself
+  \item a \code{cell} with an interface port, a non-ANSI port list or a port list that comes
+    from a macro
+  \item a \code{name} that is not a plain identifier, or that the module uses already
+  \item a \code{data_in}, \code{data_out} or \code{enable_pin} that is not a port of the
+    cell, or has the wrong direction
+  \item two of the three pins that name the same pin of the cell, or an \code{enable_pin}
+    that is wider than one bit
+  \item a \code{data_in} or \code{data_out} with another width than the net. The message says
+    \emph{width}.
+  \item a pin in \code{connect} that the cell does not have, that is an output, or that is
+    one of the three pins
+  \item a pin in \code{unconnected} that is not an output, or that is \code{data_out}
+  \item an input pin or an output pin that no argument names
+  \item a name in \code{params} that is not a value parameter of the cell
+  \item a value in \code{params} or an expression in \code{connect} that is not one
+    expression on one line
+  \item an expression in \code{connect} that reads the net, or a name that the net drives
+    inside the module. The message says \emph{loop}.
+  \item an expression in \code{connect} that reads a name that hdl-vet cannot follow, such
+    as a function call or a hierarchical name. The message says \emph{cannot follow}.
+  \item a net that another cell or an override of this run changed already. The message names
+    that operation.
+  \item a \code{name} that another instance of the module has, when this operation did not
+    write it
+  \item a call without a waiver when Yosys is not installed. The message names
+    \code{hdl-vet[equiv]}.
+  \end{itemize}
+  The operation checks all this when you call it. It queues nothing for a call that it
+  refuses.
+\item[Sign-off requires] An \code{instance-added} of the new instance at every path of the
+  module. When an instance pin drives the net, also a \code{connection-changed} of that pin.
+  hdl-vet allows the instances that the cell holds. The sign-off proves the module equal to
+  the input design with the enable tied to 0. The report says \code{insert_cell_on_net},
+  the module and the net. 
+
+  A check of the operation fails the sign-off in three cases. The
+  instance is not in the final design, or one of its connections is not, or the
+  declaration of \code{keep} is not.
+\item[Waiver] As for \apiname{Module.override_net}. The check still runs when Yosys is
+  there, and only the waiver decides.
+\item[The way of the enable] As for \apiname{Module.override_net} (section~\ref{sec:enable}).
+\item[was] The operation has no \code{was}.
+\item[Again] hdl-vet skips the operation when the module has the instance \code{name} of
+  \code{cell} with these connections and these \code{params}. If the instance has another
+  cell, other connections or other \code{params}, the operation stops with a drift error.
+\item[Example] \file{insert_cell.py} brings in the cell \code{tech_iso} with
+  \apiname{Vet.add_file}. It adds the input \code{iso_en_i} to \code{soc_top}. It puts the
+  cell on the reset net \code{rst_sync_n}. The pins are \code{A} (data in), \code{Z} (data
+  out) and \code{ISO} (enable pin). The cell passes \code{A} to \code{Z} when \code{ISO} is
+  0, so the sign-off says \code{equivalence proved}.
+\end{entry}
+
+\lstinputlisting[style=source]{examples/cells/tech_iso.sv}
+\lstinputlisting[style=script]{examples/scripts/insert_cell.py}
+
+\lstinputlisting[style=console]{examples/console/insert_cell.txt}
 
 \section{Through the hierarchy}
 

@@ -1,13 +1,13 @@
 """The equivalence check at sign-off: what a logic operation changed, proved with `hdl_vet.equiv`.
 
-A logic operation (`Module.override_net`) leaves a record that names the module, the net, the enable and the
-waiver. A raw splice (`Vet.splice`) inside a module is one too, of the kind "splice": it has no net and no enable,
-and its label is `splice <module>`. A logic call is one of the kind "logic", with the label `add_assign`, `connect`,
-`set_param` or `replace_module` and the name of the module. `prove` makes one comparison for each module that such
-an operation edited and for each set of parameter values the module is elaborated with. The gold side is the module
-of the input design, the gate side is the edited design. The engine reads files, so both sides are written to a
-temporary folder that keeps the layout of the real tree (an `include` resolves as in the real tree), and the folder
-is removed after.
+A logic operation (`Module.override_net`, `Module.insert_cell_on_net`) leaves a record that names the module, the net,
+the enable and the waiver. A raw splice (`Vet.splice`) inside a module is one too, of the kind "splice": it has no net
+and no enable, and its label is `splice <module>`. A logic call is one of the kind "logic", with the label
+`add_assign`, `connect`, `set_param` or `replace_module` and the name of the module. `prove` makes one comparison for
+each module that such an operation edited and for each set of parameter values the module is elaborated with. The gold
+side is the module of the input design, the gate side is the edited design. The engine reads files, so both sides are
+written to a temporary folder that keeps the layout of the real tree (an `include` resolves as in the real tree), and
+the folder is removed after.
 
 The tie: every enable of an override in the module, and every enable that it carries up from a child, is tied
 to 0. The `same` list holds the children of the module whose own text, and the text of every module below them,
@@ -40,6 +40,7 @@ if TYPE_CHECKING:
 __all__ = ["LogicOp", "Outside", "Proof", "Record", "prove"]
 
 _STATUSES = ("proved", "refuted", "error")
+_ENABLED = ("override_net", "insert_cell_on_net")  # the kinds of operation that have an enable
 
 
 @dataclass(frozen=True)
@@ -50,7 +51,7 @@ class LogicOp:
     net: str
     enable: str
     waiver: str | None = None
-    kind: str = "override_net"  # "override_net" | "splice" | "logic"
+    kind: str = "override_net"  # "override_net" | "insert_cell_on_net" | "splice" | "logic"
     name: str = ""  # the label of a "logic" call, for example `set_param core.u_sync.STAGES`
 
     @property
@@ -59,7 +60,7 @@ class LogicOp:
             return self.name
         if self.kind == "splice":
             return f"splice {self.module}"
-        return f"override_net {self.module}.{self.net}"
+        return f"{self.kind} {self.module}.{self.net}"
 
 
 @dataclass(frozen=True)
@@ -164,7 +165,7 @@ def prove(session: Session, design: Design, ops: Sequence[LogicOp], outside: Seq
     by_module: dict[str, list[LogicOp]] = {}
     for op in ops:
         by_module.setdefault(op.module, []).append(op)
-    ways = follow(session, design, [op for op in ops if op.kind == "override_net"])
+    ways = follow(session, design, [op for op in ops if op.kind in _ENABLED])
     logic = set(by_module) | _moved_modules(session, design)
     below = {module: _below(design, module) for module in by_module}
     reads = _read_from_outside(session, design, list(by_module))
@@ -175,7 +176,7 @@ def prove(session: Session, design: Design, ops: Sequence[LogicOp], outside: Seq
         trees = _Trees(session, Path(folder))
         memo: dict[str, bool] = {}
         for module in order:
-            own = list(dict.fromkeys(op.enable for op in by_module[module] if op.kind == "override_net"))
+            own = list(dict.fromkeys(op.enable for op in by_module[module] if op.kind in _ENABLED))
             ties = list(dict.fromkeys([*own, *ways.carried.get(module, [])]))
             use = {name: pins for name, pins in inert.items() if name in below[module]}
             moved = _moved_params(session, design, module)
