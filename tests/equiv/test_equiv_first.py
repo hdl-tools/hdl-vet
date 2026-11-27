@@ -38,15 +38,19 @@ I6  When the first step cannot be run for another reason (a cell that it has no 
 STATED LIMITS
 
 - The first step is one step. A gate that differs from the gold only in a later step, from a
-  state that the induction does not ask about, can still be a wrong "proved". No such pair is
-  known: the one that was tried (the last test of this file) is refuted by the induction.
+  state that the induction does not ask about, is still a wrong "proved". The review found such
+  pairs: see test_equiv_first_review.py. The pair of the last test of this file is refuted by
+  the induction.
 - An undefined value does not cancel in the first step. `a ^ a` with a flop `a` that has no reset
   is 0 in hardware and undefined in the model. A gate `(a ^ a) | d` against the gold `d` is
   "refuted", and that is wrong. Write the edit without the flop, or give a waiver.
 - I6 is not shown by a test. No construct was found that passes every check before the proof,
   is "proved" by the induction, and has a cell with no model other than the two of I5.
-- The first step costs time: about 4 seconds on the large generated design, under 0.1 second
-  on a small module. The times are from one Windows machine.
+- The first step costs time: about 4 seconds on the large generated design, measured before
+  the review on one Windows machine. Wide arithmetic can cost much more: see the review file.
+- The specify cells are `$specify2`, `$specify3` and `$specrule`. They and `$print` are taken
+  out before the induction too, because its solver has no model for them either. A pair with
+  such a cell that the induction could not decide was an "error" and gets its answer now.
 - A design with a memory was not measured.
 """
 
