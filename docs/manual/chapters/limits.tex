@@ -423,6 +423,9 @@ or with a raw splice.
   \code{signal}. It does punch a plain new port into a module that has an interface port.
   \apiname{Instance.replace_module} refuses a module that has one. There is no operation
   that adds an interface port.
+\item a module that is named \code{\_\_hdlvet\_probe}. The tool uses that name to ask the
+  compiler for the ports of a module. \apiname{Instance.replace_module} refuses such a module
+  as the old or the new one.
 \item a replacement (\apiname{Instance.replace_module}) by a module whose port has another
   direction, width or type than the port that it replaces. The comparison is on the type
   that the port resolves to. A typedef or a type parameter that resolves to the same type

@@ -434,7 +434,12 @@ class Instance:
         for mi in (old_info, new_info):
             if mi.port_list_kind == "nonansi":
                 raise VetError(f"{op} {target}: module {mi.name!r} has a non-ANSI port list")
-            odd = [p.name for p in mi.ports if p.direction not in _DIRECTIONS]
+            # `ifc i` has no keyword: the module information calls it an input. The compiler knows the kind.
+            try:
+                ifcs = v.session.loaded.interface_ports(mi.name)
+            except AdapterError as e:
+                raise VetError(f"{op} {target}: {e}") from e
+            odd = [p.name for p in mi.ports if p.direction not in _DIRECTIONS or p.name in ifcs]
             if odd:
                 raise VetError(
                     f"{op} {target}: module {mi.name!r} has an interface or ref port "

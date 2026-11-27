@@ -20,6 +20,7 @@ class _DesignHost:
         _diags: list[Diag] | None
         _engine: Any
         _gate_snap: dict[str, InstanceSnap] | None
+        _ifc_ports: dict[str, frozenset[str]]
         _instance_cache: tuple[Any, ...] | None
         _modules: dict[str, ModuleInfo]
         _sm: Any
