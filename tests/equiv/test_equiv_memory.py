@@ -27,6 +27,10 @@ Y3  A memory that is written with data is compared as before.
 
 STATED LIMITS
 
+- A memory with an `initial` block that is also written is an "error" now, by the rule for
+  initial values. It was "proved" against its constant while the memory was folded away.
+- An undefined value does not cancel in the first step, for a word of a memory as for a flop:
+  `mem[0] ^ mem[0]` is "refuted" against 0, and that is wrong. It was "proved" before.
 - The time of a proof on a wide memory was not measured again. The tests on a memory with a
   reset and on the time limit of a large memory (tests/equiv/test_equiv_review.py) passed in the
   same time.
@@ -112,3 +116,23 @@ def test_a_memory_written_with_data_is_compared_as_before(tmp_path):
     assert answer(tmp_path, text, text).status == "proved"
     result = answer(tmp_path, text, module(DATA.format(value="~d")))
     assert result.status in ("refuted", "error"), result
+
+
+# --- the stated limits ------------------------------------------------------------------------------
+
+BODY = "  logic mem [0:1];\n{init}  always_ff @(posedge clk) if (d) mem[rst_n] <= 1'b0;\n  assign q = {read};\n"
+
+
+@needs_yosys
+def test_a_written_memory_with_an_initial_block_is_an_error(tmp_path):
+    gate = module(BODY.format(init="  initial begin mem[0] = 1'b0; mem[1] = 1'b0; end\n", read="mem[0]"))
+    result = answer(tmp_path, constant("0"), gate)
+    assert result.status == "error", result
+    assert "initial value" in result.detail, result
+
+
+@needs_yosys
+def test_a_word_that_cancels_is_refuted_although_it_is_right(tmp_path):
+    result = answer(tmp_path, constant("0"), module(BODY.format(init="", read="mem[0] ^ mem[0]")))
+    assert result.status == "refuted", result
+    assert "first state" in result.detail, result
