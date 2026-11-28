@@ -94,6 +94,7 @@ class AssignInfo:
     stmt_start: int = -1  # the whole `assign ...;` statement; -1 when it cannot be edited as text
     stmt_end: int = -1
     stmt_count: int = 1  # assignments the statement holds
+    directive: str | None = None  # a conditional directive inside the statement, up to its semicolon
 
 
 @dataclass(frozen=True)

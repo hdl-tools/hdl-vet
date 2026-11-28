@@ -482,6 +482,7 @@ class _ModelOps(_DesignHost):
                             s0,
                             s1,
                             len(items),
+                            _conditional_directive(mem),
                         )
                     )
             elif mem.kind == sk.ParameterDeclarationStatement:

@@ -30,6 +30,7 @@ The package `ops` has one module for each group:
 | `args.py` | the checks of the arguments that are not names |
 | `override.py` | `override_net`, the operation that changes logic |
 | `insert_cell.py` | `insert_cell_on_net`, a cell on a net; it shares the code of `override.py` |
+| `replace_expr.py` | `replace_expr`, another expression for a continuous assign; it uses the loop guard of `override.py` |
 | `instance.py` | the class `Instance`: connections, parameter values, `replace_module` |
 | `hier.py` | `punch_port` and `propagate_param` |
 | `scope.py` | the declared scope |

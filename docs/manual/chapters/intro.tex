@@ -120,8 +120,9 @@ Each word has one meaning in this manual.
 \item The one exception is a change of logic inside a module. The sign-off proves that
   \apiname{Module.override_net} has no effect when its enable is 0. It proves that a raw
   splice with \apiname{Vet.splice} inside a module leaves the module equal. It does the same
-  for a logic call of \apiname{Module.add_assign}, \apiname{Instance.connect},
-  \apiname{Instance.set_param} or \apiname{Instance.replace_module}.
+  for a logic call of \apiname{Module.add_assign}, \apiname{Module.replace_expr},
+  \apiname{Instance.connect}, \apiname{Instance.set_param} or
+  \apiname{Instance.replace_module}.
   A change that is not proved needs a waiver (section~\ref{sec:equiv}). A raw splice outside
   the modules is never compared, and it needs a waiver.
 \item It does not edit instances in generate blocks, instance arrays, or

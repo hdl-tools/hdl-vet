@@ -40,9 +40,9 @@ This is an early version. These parts work today:
 - scopes that limit an operation to one part of the design
 - one operation that changes logic, `Module.override_net`, which puts a multiplexer on a net, for example a bypass of a reset synchroniser
 - an equivalence check in the sign-off, which proves that such a change has no effect when its enable is 0
-- the same check for a raw edit inside a module, and for `Module.add_assign` and `Instance.connect` with logic, `Instance.set_param` and `Instance.replace_module`: the module must stay equal
+- the same check for a raw edit inside a module, `Module.add_assign` and `Instance.connect` with logic, `Module.replace_expr`, `Instance.set_param` and `Instance.replace_module`: the module must stay equal
 
-`Module.override_net`, a raw edit with `Vet.splice`, `Module.add_assign` and `Instance.connect` with logic, `Instance.set_param` and `Instance.replace_module` can change logic. The sign-off proves the edited module with Yosys. The proof needs the extra `hdl-vet[equiv]`. Without it, the call is refused unless it has a waiver. A waiver is a text that says why the proof is not needed.
+`Module.override_net`, a raw edit with `Vet.splice`, `Module.add_assign` and `Instance.connect` with logic, `Module.replace_expr`, `Instance.set_param` and `Instance.replace_module` can change logic. The sign-off proves the edited module with Yosys. The proof needs the extra `hdl-vet[equiv]`. Without it, the call is refused unless it has a waiver. A waiver is a text that says why the proof is not needed.
 
 A raw splice that changes only blanks and comments needs nothing. A raw splice outside every module, for example in a package or a macro, is never compared. It needs a waiver.
 
@@ -83,7 +83,7 @@ cd hdl-vet
 
 To install hdl-vet from the clone, run `pip install .` in it.
 
-To use `Module.override_net` with the proof, install the extra. Without Yosys, a raw `Vet.splice` inside a module, `Module.add_assign` and `Instance.connect` with a logic expression, and every `Instance.set_param` and `Instance.replace_module` need `waiver=`. Run `pip install "hdl-vet[equiv]"`, or `pip install ".[equiv]"` in the clone.
+To use `Module.override_net` with the proof, install the extra. Without Yosys, a raw `Vet.splice` inside a module, `Module.add_assign` and `Instance.connect` with a logic expression, and every `Module.replace_expr`, `Instance.set_param` and `Instance.replace_module` need `waiver=`. Run `pip install "hdl-vet[equiv]"`, or `pip install ".[equiv]"` in the clone.
 
 ## A first run
 

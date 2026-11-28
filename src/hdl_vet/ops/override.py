@@ -86,21 +86,26 @@ def override_net(module: Module, net: str, value: object, enable: str, keep: str
     if keep is not None and (not isinstance(keep, str) or not is_simple_identifier(keep)):
         raise VetError(f"{_OP} {mod}: {keep!r} is not a simple identifier (or is a SystemVerilog keyword)")
     module._confirm_instances(_OP)
-    if bad := v.session.loaded.unfollowable_heads(mod, value_head_identifiers(text)):
+    refuse_loop(module, _OP, net, text)
+    v._checked(_OP, f"{mod}.{net}", lambda: _run(module, net, text, enable, keep, waiver))
+
+
+def refuse_loop(module: Module, op: str, net: str, text: str) -> None:
+    """Refuse `text` when it reads what cannot be followed, or a net that `net` drives inside the module (a loop)."""
+    if bad := module.vet.session.loaded.unfollowable_heads(module.name, value_head_identifiers(text)):
         raise VetError(
-            f"{_OP} {mod}: the value {text!r} reads {bad[0]!r}, which hdl-vet cannot follow: "
+            f"{op} {module.name}: the value {text!r} reads {bad[0]!r}, which hdl-vet cannot follow: "
             "give a value over the nets and the parameters of the module"
         )
     try:
-        closure = v.session.loaded.combinational_closure(mod, net)
+        closure = module.vet.session.loaded.combinational_closure(module.name, net)
     except AdapterError:
         closure = frozenset()  # a missing net is refused by the run with its own message
     if hit := min(closure & value_head_identifiers(text), default=None):
         raise VetError(
-            f"{_OP} {mod}: the value {text!r} reads {hit!r}, which {net!r} drives inside "
+            f"{op} {module.name}: the value {text!r} reads {hit!r}, which {net!r} drives inside "
             "the module, so it would make a loop"
         )
-    v._checked(_OP, f"{mod}.{net}", lambda: _run(module, net, text, enable, keep, waiver))
 
 
 def _run(module: Module, net: str, value: str, enable: str, keep: str | None, waiver: str | None) -> None:
