@@ -71,7 +71,8 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   the time limit when an edit rewrites arithmetic in front of a wide multiplier; the detail then says
   "timed out" (the whole run is stopped, so that detail has no "the first state could not be checked: "
   prefix). A design with a memory was not
-  measured.
+  measured. The memory passes of the read step run without `opt_mem`, because it makes a bit that is
+  only written with a constant that constant (#159).
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct port or of the
   order of the ports is "proved": the module computes the same, but a parent that connects by
@@ -557,6 +558,19 @@ class _Seen:
 # --- the Yosys scripts (pure text, built from checked names) ---------------------------------------
 
 
+# `memory -nomap` of Yosys 0.71 without `opt_mem` (it makes a bit only written with a constant that constant, #159)
+# and without `memory_bmux2rom` and `opt_mem_widen` (not needed, left out in doubt).
+_MEMORY_PASSES = (
+    "opt_mem_priority",
+    "opt_mem_feedback",
+    "memory_dff",
+    "opt_clean",
+    "memory_share",
+    "opt_clean",
+    "memory_collect",
+)
+
+
 def _read_lines(
     listing: str, module: str, params: Mapping[str, str], same: Sequence[str], hierarchy_json: str
 ) -> list[str]:
@@ -583,7 +597,7 @@ def _read_lines(
         ]
     # An unpacked array is a memory for the reader. Mapped to flops it is compared like any logic.
     # A memory that this cannot map stays a `$mem` cell, which the clock check refuses.
-    lines += ["memory -nomap", "memory_map", "opt_clean"]
+    lines += [*_MEMORY_PASSES, "memory_map", "opt_clean"]
     if not same:
         lines.append(f"write_json {listing.split('.')[0]}_w.json")
     return lines
