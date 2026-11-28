@@ -49,11 +49,15 @@ def replace_expr(module: Module, target: str, expr: object, was: object | None, 
     v._refuse_disabled(_OP, mod, info, target)
     refuse_loop(module, _OP, target, text)
     data = v.session.text(info.path)
-    # shortcut: a comment between `=` and the expression is refused, not kept
+    if assign.directive is not None:
+        raise VetError(f"{label}: the assign to {target!r} contains a {assign.directive} conditional directive")
     eq = _TO_EQUALS.match(data, assign.start + len(target), assign.end)
     if eq is None or _norm(data[eq.end() : assign.end].decode("utf-8", "replace")) != _norm(assign.right):
         raise VetError(f"{label}: cannot find the expression of the assign to {target!r} in the text")
-    start = eq.end() + len(data[eq.end() : assign.end]) - len(data[eq.end() : assign.end].lstrip())
+    rest = data[eq.end() : assign.end]
+    start = assign.end - len(rest.lstrip())
+    if rest.lstrip().startswith((b"/*", b"//")):
+        raise VetError(f"{label}: a comment stands between '=' and the expression of {target!r}; it would be lost")
     end = assign.end
     plan = _Plan(
         _OP,

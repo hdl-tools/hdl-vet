@@ -312,6 +312,10 @@ Operation & Edits the text of & \code{was} & Second run \\
   \item a statement that holds several assignments, comes from a macro or an include, or
     is in a generate block
   \item an expression that reads the target, also through other nets of the module
+  \item an expression that calls a function of the design or names a \code{let}: hdl-vet
+    cannot follow what it reads
+  \item a comment between the \code{=} and the expression
+  \item a conditional directive inside the statement
   \end{itemize}
 \item[was] The right-hand side that you expect. A different one is a drift error.
   Without \code{was}, the operation does not check.
