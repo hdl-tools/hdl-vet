@@ -17,7 +17,7 @@ The package has these parts:
 | `cli.py`, `project.py` | the command line and the project file |
 | `filelist.py`, `splice.py`, `listedit.py`, `paths.py` | the file list, the edits of text, small helpers |
 | `session.py`, `signoff.py`, `output.py`, `archive.py` | the session, the sign-off, the output tree, saved sessions |
-| `equiv.py`, `equiv_inert.py`, `prove.py`, `enables.py` | the equivalence check with Yosys, its checks of a child that stays a black box, the proof of the logic operations at the sign-off, and the way of each enable up to the top |
+| `equiv.py`, `equiv_inert.py`, `equiv_first.py`, `prove.py`, `enables.py` | the equivalence check with Yosys, its checks of a child that stays a black box, the constraints of the first state of the flops, the proof of the logic operations at the sign-off, and the way of each enable up to the top |
 | `ops/` | the scripting interface |
 | `slang_adapter/` | all that reads the design with pyslang |
 

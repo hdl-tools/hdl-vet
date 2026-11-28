@@ -16,14 +16,17 @@ I8  Before the comparison of the first step, logic that is the same on both side
     same nets is shared. A pair with wide arithmetic that the edit does not touch costs about as
     much as before the first step existed. The holes of I2 are still "refuted".
 
-STATED LIMITS (the first two are shown by a test)
+A LIMIT THAT IS GONE
 
-- One step does not see a gate that differs only from the second step on. A gate `q = g ^ a`
-  against the gold `q = g`, with a flop `g` and a flop `a <= a` that has no reset, is a wrong
-  "proved": in the first step the gold is undefined, so the gate may have any value, and the
-  induction never asks about a state in which the two differ at every step. It was "proved"
-  before the first step existed too. Two steps refute it (measured by hand, not built: the owner
-  decided for one step by its cost).
+- With every flop undefined in the first step, a gate `q = g ^ a` against the gold `q = g`, with a
+  flop `g` and a flop `a <= a` that has no reset, was a wrong "proved": the gold was undefined in
+  the first step, so the gate could have any value, and the induction never asks about a state in
+  which the two differ at every step. Since rule I9 (test_equiv_first_shared.py) the flop `g`
+  starts with one shared value, and the pair is "refuted". The three pairs that pinned the limit
+  here assert that now.
+
+STATED LIMITS (the first is shown by a test)
+
 - An undefined value does not cancel in the first step, also in a mux written with gates:
   `(s & d) | (~s & d)` with a flop `s` is "refuted" against `d`, and that is wrong.
 - I8 shares only what is the same. A pair with flops, whose edit rewrites arithmetic that feeds
@@ -144,15 +147,16 @@ LATER = {
 
 @needs_yosys
 @pytest.mark.parametrize("flop", LATER)
-def test_a_gate_that_differs_from_the_second_step_on_is_proved_although_it_differs(tmp_path, flop):
-    """Stated limit, a wrong "proved". When this test fails because the pair is refuted, the limit is gone."""
+def test_a_gate_that_differs_from_the_second_step_on_is_refuted(tmp_path, flop):
+    """This was a stated limit, a wrong "proved", until rule I9."""
     shared = "  logic g;\n" + LATER[flop]
     gold = f"module m ({PORTS});\n{shared}  assign q = g;\nendmodule\n"
     gate = (
         f"module m ({PORTS});\n{shared}  logic a;\n  always_ff @(posedge clk) a <= a;\n  assign q = g ^ a;\nendmodule\n"
     )
     result = run(tmp_path, (gold,), (gate,), "m")
-    assert result.status == "proved", result
+    assert result.status == "refuted", result
+    assert "first state" in result.detail, result
 
 
 @needs_yosys

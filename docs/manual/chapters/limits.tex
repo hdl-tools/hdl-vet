@@ -247,18 +247,20 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   slower. A memory of 16 words of 8 bits takes about 10 seconds, and one of 64 words about
   two minutes. A larger one can reach the time limit, and the answer is then \code{error}.
 \item \textbf{The first state.} After a proof, the check compares one more step. In that
-  step every flop of both sides starts with an undefined value. A gate that differs only
-  before its first clock edge or its first reset is \code{refuted}. The check is one step.
-\item \textbf{A difference from the second step on.} The first step does not see a gate
-  that differs only from the second step on. Take a flop that holds its value and has no
-  reset. A gate that adds it by an exclusive or to an output of the gold that comes from a
-  flop is \code{proved} although it differs. In the first step the gold is undefined there,
-  so the gate can have any value.
+  step a flop that both sides have under the same name starts with one shared value. A flop
+  that only one side has starts with an undefined value. A gate that differs only before
+  its first clock edge or its first reset is \code{refuted}. So is a gate that adds a flop
+  of its own to an output.
+\item \textbf{Flops are matched by name.} A flop that is renamed between the two sides is
+  not shared in the first step, and the gold is undefined where it shows. An edit that
+  renames a flop and also adds a flop of its own to the same output is not seen by the
+  first step. A flop with an asynchronous reset is shared only when both sides reset it
+  to the same value.
 \item \textbf{An undefined value that cancels.} In the first step an undefined value does
-  not cancel. Take a flop with no reset and the exclusive or of that flop with itself. In
-  hardware it is 0, and in the first step it is undefined. A gate that adds such a term to
-  an output is \code{refuted} although it computes the same. Write the edit without the flop,
-  or give a waiver.
+  not cancel. Take a flop with no reset that only the gate has, and the exclusive or of that
+  flop with itself. In hardware it is 0, and in the first step it is undefined. A gate that
+  adds such a term to an output is \code{refuted} although it computes the same. Write the
+  edit without the flop, or give a waiver.
 \item \textbf{The cost of the first step.} The first step leaves out a specify block and a
   \code{\$display}, because they are no logic. If it meets another cell that it cannot
   model, the answer is \code{error}. The step takes about 4 seconds on a large design. It

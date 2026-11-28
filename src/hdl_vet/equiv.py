@@ -56,23 +56,32 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   step before the edge, where the clock still has its old value. Such a module gives "error" for every edit.
 - A memory with an asynchronous reset makes the proof slower: 16 words of 8 bits take about 10 seconds,
   64 words about two minutes, and more can reach the time limit ("error").
-- The first state of a flop is compared in one step, after a proof that is "proved" (`first_script`):
-  every flop of both sides starts undefined, every input is defined, and the outputs must agree by the
-  rule for undefined values. A difference there is "refuted" ("first state" in the detail). The cells
-  `$specify2`, `$specify3`, `$specrule` and `$print` are taken out first; a run that fails,
-  except by the time limit, is an "error" that starts with "the first state could not be checked: ".
-  The step is one step, so a gate
-  that differs only in a later step from a state the induction does not ask about is still a wrong
-  "proved", for example `q = g ^ a` where the gate differs from the gold only from the second step on
-  (a wrong "proved"). An undefined value does not cancel there (`a ^ a` of a flop `a` with no reset is
-  "refuted" against 0). I7: the step is skipped when neither side has a cell that keeps state (a flop, a
-  latch, a memory or another state primitive); an instance of a black box does not count. I8: `opt_merge`
-  runs before `sat`, so that two equal copies of the same logic are one cell. The step can still reach
-  the time limit when an edit rewrites arithmetic in front of a wide multiplier; the detail then says
-  "timed out" (the whole run is stopped, so that detail has no "the first state could not be checked: "
-  prefix). A design with a memory was not
-  measured. The memory passes of the read step run without `opt_mem`, because it makes a bit that is
-  only written with a constant that constant (#159).
+- The first state of a flop is compared in one step, after a proof that is "proved" (`first_script`,
+  `hdl_vet.equiv_first`): every input is defined, and the outputs must agree by the rule for undefined
+  values. A flop that both sides have, found by a net of the same name and width that is made of state
+  outputs on both sides (also in a flattened child, a generate block, a word of a memory), starts with one
+  shared, defined value, any value. That holds only when each bit has on both sides the same kind: no
+  asynchronous reset, or the same reset polarity and reset value (the reader writes a reset as an
+  asynchronous load of a constant, and that counts as a reset), or a load of a net with the same polarity.
+  A flop that only one side has, or that is not shared for that reason, starts undefined when it has no
+  reset. A flop with a reset that is not shared, a latch, a memory, and a state bit that no public net
+  names, are left free (defined or undefined): that gives more answers of "refuted", never fewer. The
+  names of the same bits are one flop; two nets that share only some of their bits are an "error". A flop
+  that is renamed between the two sides is not shared, and a gate that renames a flop and adds a flop of
+  its own to the same output in one edit is not seen by this step. A difference is "refuted" ("first
+  state" in the detail). Before the proof a `sat` with the same constraints and no goal must report a
+  model: else the answer is "error" (constraints that cannot be met would pass every proof with nothing
+  checked). That guard cannot see two constraints on the same bits, since the last one wins, so no bit is
+  told twice. The cells `$specify2`, `$specify3`, `$specrule` and `$print` are taken out first; a run that
+  fails, except by the time limit, is an "error" that starts with "the first state could not be checked:
+  ". The step is one step. An undefined value does not cancel there (`a ^ a` of a flop `a` that only the
+  gate has is "refuted" against `d`). I7: the step is skipped when neither side has a cell that keeps
+  state (a flop, a latch, a memory or another state primitive); an instance of a black box does not count.
+  I8: `opt_merge` runs before `sat`, so that two equal copies of the same logic are one cell. The step can
+  still reach the time limit when an edit rewrites arithmetic in front of a wide multiplier; the detail
+  then says "timed out" (the whole run is stopped, so that detail has no "the first state could not be
+  checked: " prefix). The memory passes of the read step run without `opt_mem`, because it makes a bit
+  that is only written with a constant that constant (#159).
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct port or of the
   order of the ports is "proved": the module computes the same, but a parent that connects by
@@ -130,7 +139,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-from hdl_vet import equiv_inert
+from hdl_vet import equiv_first, equiv_inert
 
 __all__ = ["Result", "Source", "available", "check"]
 
@@ -668,36 +677,48 @@ def proof_script() -> str:
     return "\n".join(lines) + "\n"
 
 
-def first_script() -> str:
-    """The first step (#139): every flop starts undefined, every input is defined, one step, outputs compared.
+def first_script(renames: Sequence[str], options: str) -> str:
+    """The first step (#139): shared first values (`equiv_first`), every input defined, one step, outputs compared.
 
     The specify cells and `$print` are already out (`_NO_LOGIC`, in the prepare step). Any other cell that
-    `sat` has no model for is an "error" of the run.
+    `sat` has no model for is an "error" of the run. The first `sat` has no goal: it shows that the first
+    state exists (rule I13). The second is the proof.
     """
+    base = "-seq 1 -set-def-inputs -enable_undef " + options
     lines = [
         "read_rtlil prepared.il",
         "clk2fflogic",
         "miter -equiv -ignore_gold_x -flatten -make_outputs gold gate miter",
         "hierarchy -top miter",
         "opt_merge",
-        "sat -verify -prove trigger 0 -seq 1 -set-init-undef -set-def-inputs -enable_undef miter",
+        *renames,
+        f"sat {base} miter",
+        f"sat -verify -prove trigger 0 {base} miter",
     ]
     return "\n".join(lines) + "\n"
 
 
 _FIRST_OK = "SAT proof finished - no model found: SUCCESS!"
 _FIRST_FAIL = "SAT proof finished - model found: FAIL!"
+_FIRST_NOT = "the first state could not be checked: "
 
 
-def _first_state() -> tuple[str, str] | None:
+def _first_state(gold: Mapping[str, Any] | None, gate: Mapping[str, Any] | None) -> tuple[str, str] | None:
     """None when the first step proves the outputs equal; else the "error" or "refuted" answer."""
-    code, log = _run_yosys(first_script(), "first")
-    # shortcut: only the two Yosys sentences decide; a log with both, or neither, is an error.
+    if gold is None or gate is None:
+        return "error", _FIRST_NOT + "the netlists are not readable"
+    plan = equiv_first.constraints(gold, gate, _keeps_state)
+    if isinstance(plan, str):
+        return "error", _FIRST_NOT + plan
+    code, log = _run_yosys(first_script(*plan), "first")
+    # shortcut: only the Yosys sentences decide; a log with both, or neither, is an error.
     if _FIRST_FAIL in log and _FIRST_OK not in log:
-        return "refuted", "differs in the first state of a flop (every flop starts undefined)"
+        return "refuted", "differs in the first state of a flop (flops of one name start alike)"
     if code == 0 and _FIRST_OK in log and _FIRST_FAIL not in log:
-        return None
-    return "error", "the first state could not be checked: " + _problem(log)
+        if equiv_first.GUARD_OK in log and "SAT solving finished - no model found" not in log:
+            return None
+        return "error", _FIRST_NOT + "no first state meets the shared values"
+    return "error", _FIRST_NOT + _problem(log)
 
 
 def undefined_script(module: str) -> str:
@@ -1277,7 +1298,7 @@ def _decide(spec: Mapping[str, Any]) -> tuple[str, str]:
         None in before_clean
         or any(_keeps_state(str(c["type"])) for side in before_clean if side for c in side["cells"].values())
     ):
-        first = _first_state()
+        first = _first_state(*before_clean)
         if first is not None:
             return first
     if status == "proved" and (_has_undefined(gold_side) or _undefined_sources(gold_side)):
