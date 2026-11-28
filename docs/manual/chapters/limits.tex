@@ -256,6 +256,11 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   renames a flop and also adds a flop of its own to the same output is not seen by the
   first step. A flop with an asynchronous reset is shared only when both sides reset it
   to the same value.
+\item \textbf{Flops that cannot be shared.} A flop with an asynchronous load of a net is
+  not shared. Neither is a flop whose asynchronous reset comes from another flop, as
+  behind a reset synchroniser. With such a flop on either side, the first step starts every
+  flop with an undefined value. A gate that adds a flop of its own to an output that the
+  gold takes from a flop is then \code{proved} although it differs.
 \item \textbf{An undefined value that cancels.} In the first step an undefined value does
   not cancel. Take a flop with no reset that only the gate has, and the exclusive or of that
   flop with itself. In hardware it is 0, and in the first step it is undefined. A gate that

@@ -58,30 +58,35 @@ Stated limits (each gives "error" or "refuted", except those that say "proved" o
   64 words about two minutes, and more can reach the time limit ("error").
 - The first state of a flop is compared in one step, after a proof that is "proved" (`first_script`,
   `hdl_vet.equiv_first`): every input is defined, and the outputs must agree by the rule for undefined
-  values. A flop that both sides have, found by a net of the same name and width that is made of state
-  outputs on both sides (also in a flattened child, a generate block, a word of a memory), starts with one
-  shared, defined value, any value. That holds only when each bit has on both sides the same kind: no
-  asynchronous reset, or the same reset polarity and reset value (the reader writes a reset as an
-  asynchronous load of a constant, and that counts as a reset), or a load of a net with the same polarity.
-  A flop that only one side has, or that is not shared for that reason, starts undefined when it has no
-  reset. A flop with a reset that is not shared, a latch, a memory, and a state bit that no public net
-  names, are left free (defined or undefined): that gives more answers of "refuted", never fewer. The
-  names of the same bits are one flop; two nets that share only some of their bits are an "error". A flop
-  that is renamed between the two sides is not shared, and a gate that renames a flop and adds a flop of
-  its own to the same output in one edit is not seen by this step. A difference is "refuted" ("first
-  state" in the detail). Before the proof a `sat` with the same constraints and no goal must report a
-  model: else the answer is "error" (constraints that cannot be met would pass every proof with nothing
-  checked). That guard cannot see two constraints on the same bits, since the last one wins, so no bit is
-  told twice. The cells `$specify2`, `$specify3`, `$specrule` and `$print` are taken out first; a run that
-  fails, except by the time limit, is an "error" that starts with "the first state could not be checked:
-  ". The step is one step. An undefined value does not cancel there (`a ^ a` of a flop `a` that only the
-  gate has is "refuted" against `d`). I7: the step is skipped when neither side has a cell that keeps
-  state (a flop, a latch, a memory or another state primitive); an instance of a black box does not count.
-  I8: `opt_merge` runs before `sat`, so that two equal copies of the same logic are one cell. The step can
-  still reach the time limit when an edit rewrites arithmetic in front of a wide multiplier; the detail
-  then says "timed out" (the whole run is stopped, so that detail has no "the first state could not be
-  checked: " prefix). The memory passes of the read step run without `opt_mem`, because it makes a bit
-  that is only written with a constant that constant (#159).
+  values. A flop is one state cell, named by the public nets that are exactly its output (also in a
+  flattened child, a generate block, a word of a memory); a net of bits of several flops names nothing and
+  is ignored. A flop that both sides have, by the same name, starts with one shared, defined value, any
+  value, when it has no asynchronous pin on either side, or an asynchronous reset to the same constant
+  with the same polarity whose control is a function of the inputs alone. Its net then depends on nothing
+  but its own state and the inputs, so the constraint cannot rule out a value of another flop. A flop that
+  only one side has, or that is not shared, starts undefined when it has no asynchronous pin; a flop with
+  an asynchronous reset to a constant that is not shared is left free (defined or undefined, which holds
+  the undefined start), because its net is forced by the reset while it is active. Fallback: when either
+  side has any other state (a load of a net, a state cell of another kind, a flop with no name that can be
+  given, a shared reset that comes from a flop), the pair runs as before the shared value: every flop
+  undefined, nothing shared. In a fallback pair a gate that adds a flop of its own to an output that the
+  gold takes from a flop is a wrong "proved", and a module with a flop that loads a net asynchronously is
+  such a pair for every edit. A flop that is renamed between the two sides is not shared, and a gate that
+  renames a flop and adds a flop of its own to the same output in one edit is not seen by this step. A
+  difference is "refuted" ("first state" in the detail). In the shared mode a `sat` with the same
+  constraints and no goal must report a model before the proof, else the answer is "error" (constraints
+  that cannot be met would pass every proof with nothing checked); it cannot see two constraints on the
+  same bits, since the last one wins, so no bit is told twice. The cells `$specify2`, `$specify3`,
+  `$specrule` and `$print` are taken out first; a run that fails, except by the time limit, is an "error"
+  that starts with "the first state could not be checked: ". The step is one step. An undefined value does
+  not cancel there (`a ^ a` of a flop `a` that only the gate has is "refuted" against `d`). I7: the step
+  is skipped when neither side has a cell that keeps state (a flop, a latch, a memory or another state
+  primitive); an instance of a black box does not count. I8: `opt_merge` runs before `sat`, so that two
+  equal copies of the same logic are one cell. The step can still reach the time limit when an edit
+  rewrites arithmetic in front of a wide multiplier; the detail then says "timed out" (the whole run is
+  stopped, so that detail has no "the first state could not be checked: " prefix). The memory passes of
+  the read step run without `opt_mem`, because it makes a bit that is only written with a constant that
+  constant (#159).
 - A wide multiplier written another way can reach the timeout.
 - A change of the signedness of a port, of the order of the fields of a struct port or of the
   order of the ports is "proved": the module computes the same, but a parent that connects by
@@ -677,23 +682,31 @@ def proof_script() -> str:
     return "\n".join(lines) + "\n"
 
 
-def first_script(renames: Sequence[str], options: str) -> str:
-    """The first step (#139): shared first values (`equiv_first`), every input defined, one step, outputs compared.
+def first_script(plan: tuple[Sequence[str], Sequence[str], str] | None) -> str:
+    """The first step (#139): first values from `equiv_first`, every input defined, one step, outputs compared.
 
     The specify cells and `$print` are already out (`_NO_LOGIC`, in the prepare step). Any other cell that
-    `sat` has no model for is an "error" of the run. The first `sat` has no goal: it shows that the first
-    state exists (rule I13). The second is the proof.
+    `sat` has no model for is an "error" of the run. `plan` is None for the fallback (rule I17): every flop
+    starts undefined and nothing else is said. Else the first `sat` has no goal and shows that the first
+    state exists (rule I13), and the second is the proof.
     """
-    base = "-seq 1 -set-def-inputs -enable_undef " + options
+    if plan is None:
+        sats = ["sat -verify -prove trigger 0 -seq 1 -set-init-undef -set-def-inputs -enable_undef miter"]
+        before: Sequence[str] = []
+        after: Sequence[str] = []
+    else:
+        before, after, options = plan
+        base = "-seq 1 -set-def-inputs -enable_undef " + options
+        sats = [f"sat {base} miter", f"sat -verify -prove trigger 0 {base} miter"]
     lines = [
         "read_rtlil prepared.il",
+        *before,
         "clk2fflogic",
         "miter -equiv -ignore_gold_x -flatten -make_outputs gold gate miter",
         "hierarchy -top miter",
         "opt_merge",
-        *renames,
-        f"sat {base} miter",
-        f"sat -verify -prove trigger 0 {base} miter",
+        *after,
+        *sats,
     ]
     return "\n".join(lines) + "\n"
 
@@ -708,14 +721,12 @@ def _first_state(gold: Mapping[str, Any] | None, gate: Mapping[str, Any] | None)
     if gold is None or gate is None:
         return "error", _FIRST_NOT + "the netlists are not readable"
     plan = equiv_first.constraints(gold, gate, _keeps_state)
-    if isinstance(plan, str):
-        return "error", _FIRST_NOT + plan
-    code, log = _run_yosys(first_script(*plan), "first")
+    code, log = _run_yosys(first_script(plan), "first")
     # shortcut: only the Yosys sentences decide; a log with both, or neither, is an error.
     if _FIRST_FAIL in log and _FIRST_OK not in log:
-        return "refuted", "differs in the first state of a flop (flops of one name start alike)"
+        return "refuted", "differs in the first state of a flop"
     if code == 0 and _FIRST_OK in log and _FIRST_FAIL not in log:
-        if equiv_first.GUARD_OK in log and "SAT solving finished - no model found" not in log:
+        if plan is None or (equiv_first.GUARD_OK in log and "SAT solving finished - no model found" not in log):
             return None
         return "error", _FIRST_NOT + "no first state meets the shared values"
     return "error", _FIRST_NOT + _problem(log)
