@@ -13,6 +13,7 @@ from hdl_vet.ops.insert_cell import insert_cell_on_net as _insert_cell_on_net
 from hdl_vet.ops.instance import Instance
 from hdl_vet.ops.override import override_net as _override_net
 from hdl_vet.ops.raw import _check_waiver
+from hdl_vet.ops.replace_expr import replace_expr as _replace_expr
 from hdl_vet.ops.text import (
     _DIRECTIONS,
     _IDENT,
@@ -28,7 +29,15 @@ from hdl_vet.ops.text import (
     _same,
     _segment,
 )
-from hdl_vet.slang_adapter import ModuleInfo, check_expression, driven_bases, is_simple_identifier, is_wiring, tokens
+from hdl_vet.slang_adapter import (
+    AssignInfo,
+    ModuleInfo,
+    check_expression,
+    driven_bases,
+    is_simple_identifier,
+    is_wiring,
+    tokens,
+)
 
 if TYPE_CHECKING:
     from hdl_vet.ops.vet import Vet
@@ -362,6 +371,36 @@ class Module:
 
         v._checked(op, mod, run)
 
+    def _one_assign(self, op: str, info: ModuleInfo, target: str, was: object | None) -> AssignInfo | None:
+        """The one plain-text assign to `target` (None when there is none); VetError or DriftError for the rest."""
+        mod = self._name
+        found = [a for a in info.assigns if a.left == target]
+        if not found:
+            if any(b in info.generate_assigned for b in driven_bases(target)):
+                raise VetError(f"{op} {mod}: {target!r} is assigned inside a generate block, which is not supported")
+            return None
+        if len(found) > 1:
+            raise VetError(f"{op} {mod}: {len(found)} assignments to {target!r}; edit them by hand")
+        assign = found[0]
+        if was is not None and not _same(was, assign.right):
+            raise DriftError(f"{op} {mod}: {target!r} is assigned {assign.right!r}, not {str(was)!r}")
+        if assign.stmt_start < 0:
+            raise VetError(f"{op} {mod}: the assignment to {target!r} comes from a macro or an include")
+        if assign.stmt_count > 1:
+            raise VetError(
+                f"{op} {mod}: the statement assigning {target!r} holds {assign.stmt_count} assignments; "
+                f"edit it by hand or with a raw splice"
+            )
+        return assign
+
+    def replace_expr(self, target: str, expr: object, *, was: object | None = None, waiver: str | None = None) -> None:
+        """Another expression for the one `assign target = ...;`.
+
+        The sign-off proves the module equal, or `waiver` says why not. `was`, when given, must be the
+        expression the assign has now. Without Yosys the call needs a waiver.
+        """
+        _replace_expr(self, target, expr, was, waiver)
+
     def remove_assign(self, target: str, was: object | None = None) -> None:
         v, mod, op = self.vet, self._name, "remove_assign"
         v._refuse_scope(op, mod)
@@ -376,26 +415,10 @@ class Module:
 
         def run() -> None:
             info = self._fresh()
-            found = [a for a in info.assigns if a.left == target]
-            if not found:
-                if any(b in info.generate_assigned for b in driven_bases(target)):
-                    raise VetError(
-                        f"{op} {mod}: {target!r} is assigned inside a generate block, which is not supported"
-                    )
+            assign = self._one_assign(op, info, target, was)
+            if assign is None:
                 v._record(op, mod, "skipped")
                 return
-            if len(found) > 1:
-                raise VetError(f"{op} {mod}: {len(found)} assignments to {target!r}; edit them by hand")
-            assign = found[0]
-            if was is not None and not _same(was, assign.right):
-                raise DriftError(f"{op} {mod}: {target!r} is assigned {assign.right!r}, not {str(was)!r}")
-            if assign.stmt_start < 0:
-                raise VetError(f"{op} {mod}: the assignment to {target!r} comes from a macro or an include")
-            if assign.stmt_count > 1:
-                raise VetError(
-                    f"{op} {mod}: the statement assigning {target!r} holds {assign.stmt_count} assignments; "
-                    f"edit it by hand or with a raw splice"
-                )
             data = v.session.text(info.path)
             a, b = line_rule(data, assign.stmt_start, assign.stmt_end)
             v._drove.extend((mod, base) for base in driven_bases(assign.left))

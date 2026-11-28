@@ -105,6 +105,16 @@ def _ev_add_assign(session: Session, a: tuple[Any, ...], design: Design) -> str 
     return None
 
 
+def _ev_replace_expr(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
+    mod, target, expr = a
+    m = _module_of(design, mod)
+    if m is None:
+        return _MISSING.format(f"replace_expr {mod} {target}")
+    if not any(x.left == target and _same(x.right, expr) for x in m.assigns):
+        return f"replace_expr {mod} {target}: the assignment 'assign {target} = {expr};' is missing"
+    return None
+
+
 def _ev_override_net(session: Session, a: tuple[Any, ...], design: Design) -> str | None:
     mod, net, enable, _value, keep, _waiver = a
     m = _module_of(design, mod)
@@ -253,6 +263,7 @@ _EVALUATORS: dict[str, tuple[Callable[[Session, tuple[Any, ...], Design], str | 
     "add_param": (_ev_add_param, 4),
     "add_wire": (_ev_add_wire, 4),
     "add_assign": (_ev_add_assign, 3),
+    "replace_expr": (_ev_replace_expr, 3),
     "override_net": (_ev_override_net, 6),
     "insert_cell_on_net": (_ev_insert_cell_on_net, 10),
     "propagate_param": (_ev_propagate_param, 3),

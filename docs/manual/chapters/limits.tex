@@ -15,10 +15,11 @@ Items that say so were not checked by a test.
   into \code{count_o + 2'd2} in \code{timer}, and the sign-off says that the module is
   not equivalent.
 
-  Use the operations where you can. Most of them never write such an edit. Four write
-  logic, and they need a proof or a waiver too: \apiname{Module.add_assign} and
-  \apiname{Instance.connect} with an expression that is logic, \apiname{Instance.set_param}
-  and \apiname{Instance.replace_module} (section~\ref{sec:logicops}). These limits hold for
+  Use the operations where you can. Most of them never write such an edit. Five write
+  logic, and they need a proof or a waiver too (section~\ref{sec:logicops}). Two do so
+  only with an expression that is logic: \apiname{Module.add_assign} and
+  \apiname{Instance.connect}. Three always do: \apiname{Module.replace_expr},
+  \apiname{Instance.set_param} and \apiname{Instance.replace_module}. These limits hold for
   them and for a raw splice:
   \begin{itemize}
   \item A module with a raw splice is judged as a whole. A structural operation in the same

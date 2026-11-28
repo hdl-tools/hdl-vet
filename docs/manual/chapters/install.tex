@@ -76,8 +76,8 @@ brackets. Quote the argument, so that your shell does not read the brackets:
 Without the extra, every call that needs a proof needs a waiver. Other calls work as
 before. Without Yosys, \apiname{Module.override_net} refuses the call unless it has a waiver. A raw
 \apiname{Vet.splice} inside a module is refused in the same way. So is a logic call of
-\apiname{Module.add_assign}, \apiname{Instance.connect}, \apiname{Instance.set_param} or
-\apiname{Instance.replace_module}.
+\apiname{Module.add_assign}, \apiname{Module.replace_expr}, \apiname{Instance.connect},
+\apiname{Instance.set_param} or \apiname{Instance.replace_module}.
 
 A raw splice outside the modules needs a waiver with or
 without Yosys. Its message does not name the extra.

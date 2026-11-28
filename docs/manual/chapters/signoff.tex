@@ -422,10 +422,11 @@ is raw like any other.
 \subsection*{Logic calls}
 \label{sec:logicops}
 
-Four operations can write logic. A call that changes the text needs a proof or a waiver, by
+Five operations can write logic. A call that changes the text needs a proof or a waiver, by
 the rule for a raw splice:
 
 \begin{itemize}
+\item \apiname{Module.replace_expr}, whatever the two expressions are
 \item \apiname{Module.add_assign} and \apiname{Instance.connect}, when the expression is
   logic
 \item \apiname{Instance.set_param}, whatever the value
@@ -447,13 +448,15 @@ sort. Wiring is not compared.
 
 
 
-A logic call marks the module whose text it changes: the module of
-\apiname{Module.add_assign}, and the module that holds the instance for the other three. The
+A logic call marks the module whose text it changes. That is the module of
+\apiname{Module.add_assign} and of \apiname{Module.replace_expr}, and the module that holds
+the instance for the other three. The
 sign-off compares each marked module with the module of the input design, as for a raw
 splice. The label of the call in the record is one of these:
 
 \begin{itemize}
 \item \code{add_assign MODULE.TARGET}
+\item \code{replace_expr MODULE.TARGET}
 \item \code{connect MODULE.INSTANCE.PORT}
 \item \code{set_param MODULE.INSTANCE.NAME}
 \item \code{replace_module MODULE.INSTANCE}

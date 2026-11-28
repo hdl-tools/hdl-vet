@@ -172,6 +172,7 @@ OPERATIONS = {
         "add_param",
         "add_wire",
         "add_assign",
+        "replace_expr",
         "override_net",
         "remove_instance",
         "remove_wire",

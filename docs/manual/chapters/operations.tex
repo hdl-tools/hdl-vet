@@ -53,9 +53,9 @@ change. Each entry has the same points:
   suggestions, in the form ``did you mean \ldots?''
 \item An operation inserts text with the line ending of the file that the text goes
   into. hdl-vet never reformats text that it does not edit.
-\item Four operations can write logic: \apiname{Module.add_assign},
-  \apiname{Instance.connect}, \apiname{Instance.set_param} and
-  \apiname{Instance.replace_module}. A call that changes the text needs a proof or a
+\item Five operations can write logic: \apiname{Module.add_assign},
+  \apiname{Module.replace_expr}, \apiname{Instance.connect}, \apiname{Instance.set_param}
+  and \apiname{Instance.replace_module}. A call that changes the text needs a proof or a
   \code{waiver=} (section~\ref{sec:logicops}). \apiname{Module.add_assign} and
   \apiname{Instance.connect} need it only when the expression is logic. Logic is an
   operator, a conditional, a call, a cast, or a select with an index that is a signal. A name, a
@@ -91,6 +91,7 @@ Operation & Edits the text of & \code{was} & Second run \\
 \apiname{Module.add_param} & the module & none & skipped \\
 \apiname{Module.add_wire} & the module & none & skipped \\
 \apiname{Module.add_assign} & the module & none & skipped \\
+\apiname{Module.replace_expr} & the module & the right-hand side now there, optional check & skipped \\
 \apiname{Module.override_net} & the module & none & skipped, or drift \\
 \apiname{Module.insert_cell_on_net} & the module & none & skipped, or drift \\
 \apiname{Instance.connect} & the module that holds the instance & the expression now there. Without it, a different expression is drift & skipped \\
@@ -298,6 +299,34 @@ Operation & Edits the text of & \code{was} & Second run \\
   count. Give the call a waiver that names the check that covers it.
 \item[Example] \file{ports.py}.
 \end{entry}
+
+\begin{entry}{\sig{Module.replace_expr}}
+\item[Writes] The operation writes \code{expr} in the place of the right-hand side of the
+  one continuous assignment to \code{target}. The rest of the statement stays as it is,
+  with a comment behind it.
+\item[Refused] hdl-vet refuses the operation in these cases:
+  \begin{itemize}
+  \item a target that is not a plain identifier
+  \item a target with no continuous assignment: the message says what drives the name
+  \item several assignments to the target, or assignments to selects of it
+  \item a statement that holds several assignments, comes from a macro or an include, or
+    is in a generate block
+  \item an expression that reads the target, also through other nets of the module
+  \end{itemize}
+\item[was] The right-hand side that you expect. A different one is a drift error.
+  Without \code{was}, the operation does not check.
+\item[Again] hdl-vet skips the operation when the assignment has that expression already.
+\item[Waiver] Every call that changes the text needs a proof or \code{waiver=}
+  (section~\ref{sec:logicops}), also when a name takes the place of a name. An expression
+  with the same function is proved. For another function, give the call a waiver that
+  names the check that covers it.
+\item[Example] \file{rewrite_irq.py} writes the reduction of \code{irq} as an
+  \code{or} of its two bits. The module is proved equal.
+\end{entry}
+
+\lstinputlisting[style=script]{examples/scripts/rewrite_irq.py}
+
+\lstinputlisting[style=console]{examples/console/replace_expr.txt}
 
 \section{Logic}
 \label{sec:logic}
