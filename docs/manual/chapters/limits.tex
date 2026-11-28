@@ -516,6 +516,10 @@ or with a raw splice.
   whose path ends at that instance or passes through it. The path is resolved against the
   original design, and the instance has another module now. The refusal also holds after a
   replacement back. Do such operations before the replacement, or in another run.
+\item \textbf{The count after a replacement.} The argument \code{instances} of
+  \apiname{Vet.module} counts the instances of the design at the start of the run. After
+  \apiname{Instance.replace_module} the count that a script must give is still that one,
+  for the old module and for the new one.
 \item \textbf{Scopes and shared modules.} hdl-vet refuses \apiname{Vet.punch_port} and
   \apiname{Vet.propagate_param} in a scope whose module the design instantiates more than
   once. The scope takes the name of a module, not an instance path. The check for

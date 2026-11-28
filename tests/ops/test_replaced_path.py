@@ -150,3 +150,15 @@ def test_the_refusal_holds_in_a_restored_session(vet, tmp_path, op):
     vet.save(tmp_path / "saved.vet")
     again = Vet.restore(tmp_path / "saved.vet")
     refused(again, op, "top.u_mid.u_leaf", "u_leaf", "mid")
+
+
+# --- the stated limit on the count -------------------------------------------------------------------
+
+
+def test_the_count_of_instances_is_the_one_of_the_start_of_the_run(vet):
+    """Stated limit. After the replacement the design has no instance of `leaf` and two of `leaf3`."""
+    vet.module("mid").instance("u_leaf").replace_module("leaf3", waiver=WHY)
+    vet.module("leaf", instances=1)
+    vet.module("leaf3", instances=1)
+    with pytest.raises(VetError, match="not 2"):
+        vet.module("leaf3", instances=2)
