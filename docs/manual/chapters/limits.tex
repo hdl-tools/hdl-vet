@@ -264,6 +264,20 @@ undefined values. A waiver is the way to go on when the check cannot judge.
   model, the answer is \code{error}. The step takes about 4 seconds on a large design. It
   can reach the time limit when an edit rewrites arithmetic in front of a wide multiplier,
   and the answer is then \code{error}.
+\item \textbf{A combinational loop.} Before the proof the check looks for a combinational
+  loop in each side. A loop on either side gives \code{error}, also when both sides have
+  the same loop. A module that has such a loop on purpose cannot be proved, and every edit
+  of it needs a waiver.
+\item \textbf{What the loop check does not see.} A loop through a child that is a black box
+  is not seen. It shows when the parent is compared with the child flattened. A loop that
+  nothing reads is not reported.
+\item \textbf{A loop that is none.} Through an adder, a comparison or a shift the loop
+  check takes every output bit as made from every input bit. A vector that feeds its own
+  lower bits into such a cell gives \code{error} although it has no loop.
+\item \textbf{A flop that loads its own output.} A flop with an asynchronous load passes
+  its load value to its output while the load is active. If the load value depends on the
+  output of the same flop, the loop check reports a loop. It does not ask whether the load
+  can be active. Such a module gives \code{error} for every edit.
 \item \textbf{A child that is not proved.} A module can have an override, and a child can
   have one too. If every comparison of the child is \code{proved}, the child is a black box
   in the comparison of the module. If the child is waived, refuted or not checked, hdl-vet
